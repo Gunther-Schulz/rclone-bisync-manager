@@ -228,17 +228,17 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
         0: "completed successfully",
         1: "Non-critical error. A rerun may be successful.",
         2: "Critically aborted, please check the logs for more information.",
-        3: "Directory not found.",
-        4: "File not found.",
+        3: "Directory not found, please check the logs for more information.",
+        4: "File not found, please check the logs for more information.",
         5: "Temporary error. More retries might fix this issue.",
-        6: "Less serious errors.",
-        7: "Fatal error. Retries will not fix this issue.",
-        8: "Transfer limit exceeded.",
+        6: "Less serious errors, please check the logs for more information.",
+        7: "Fatal error, please check the logs for more information.",
+        8: "Transfer limit exceeded, please check the logs for more information.",
         9: "successful but no files were transferred.",
-        10: "Duration limit exceeded."
+        10: "Duration limit exceeded, please check the logs for more information."
     }
     message = messages.get(
-        result_code, f"failed with an unknown error code {result_code}")
+        result_code, f"failed with an unknown error code {result_code}, please check the logs for more information.")
     if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
         return "COMPLETED"
@@ -258,7 +258,7 @@ def bisync(remote_path, local_path):
         '--low-level-retries', '10',
         '--exclude', '*.tmp',
         '--exclude', '*.log',
-        # '--exclude', r'._.*',
+        '--exclude', r'._.*',
         '--exclude', '.DS_Store',
         '--exclude', '.Spotlight-V100/**',
         '--exclude', '.Trashes/**',
@@ -325,7 +325,7 @@ def resync(remote_path, local_path):
         '--error-on-no-transfer',
         '--exclude', '*.tmp',
         '--exclude', '*.log',
-        # '--exclude', r'._.*',
+        '--exclude', r'._.*',
         '--exclude', '.DS_Store',
         '--exclude', '.Spotlight-V100/**',
         '--exclude', '.Trashes/**',
