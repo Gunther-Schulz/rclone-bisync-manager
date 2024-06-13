@@ -28,6 +28,11 @@ pid_file = os.path.join(base_dir, 'rclone_bisync.pid')
 config_file = os.path.join(base_dir, 'rclone_bisync.yaml')
 resync_status_file_name = ".resync_status"
 sync_status_file_name = ".bisync_status"
+sync_log_file_name = "sync.log"
+sync_error_log_file_name = "sync_error.log"
+rclone_test_file_name = "RCLONE_TEST"
+opt_max_lock = "15m"
+opt_compare = "size,modtime,checksum"
 
 # Global counter for CTRL-C presses
 ctrl_c_presses = 0
@@ -108,6 +113,22 @@ def remove_pid_file():
         # log_message("PID file removed.")
 
 
+# Load the configuration file
+def load_config():
+    # Add log_dir to globals
+    global sync_base_dir, filter_file, max_delete, sync_dirs, log_dir
+    if not os.path.exists(config_file):
+        print("Configuration file not found. Please ensure it exists at:", config_file)
+        sys.exit(1)
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+    sync_base_dir = config['sync_base_dir']
+    filter_file = config['filter_file']
+    max_delete = config['max_delete']
+    sync_dirs = config['sync_dirs']
+    log_dir = config['log_dir']
+
+
 # Parse command line arguments
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -117,14 +138,37 @@ def parse_args():
                         help='Perform a dry run without making any changes.')
     parser.add_argument('--resync', action='store_true',
                         help='Force a resynchronization, ignoring previous sync status.')
+    parser.add_argument('--force-bisync', action='store_true',
+                        help='Force the operation without confirmation, only applicable if a specific folder is specified.')
     parser.add_argument('--console-log', action='store_true',
                         help='Print log messages to the console in addition to the log files.')
     args, unknown = parser.parse_known_args()
-    global dry_run, force_resync, console_log, specific_folder
+    global dry_run, force_resync, console_log, specific_folder, force_operation
     dry_run = args.dry_run
     force_resync = args.resync
     console_log = args.console_log
     specific_folder = args.folder
+    force_operation = args.force_bisync
+
+    if specific_folder:
+        if specific_folder not in sync_dirs:
+            print(f"ERROR: The specified folder '{
+                  specific_folder}' is not configured in the sync directories. Please check the configuration file at {config_file}.")
+            sys.exit(1)
+
+    if force_operation and specific_folder:
+        local_path = os.path.join(
+            sync_base_dir, sync_dirs[specific_folder]['local'])
+        remote_path = f"{specific_folder}:{
+            sync_dirs[specific_folder]['remote']}"
+        confirmation = input(f"WARNING: You are about to force a bisync on '{
+                             local_path}' and '{remote_path}'. Are you sure? (yes/no): ")
+        if confirmation.lower() != 'yes':
+            print("Operation aborted by the user.")
+            sys.exit(0)
+    elif force_operation and not specific_folder:
+        print("ERROR: --force-bisync can only be used when a specific folder is specified.")
+        sys.exit(1)
 
 
 # Check if the required tools are installed
@@ -145,28 +189,12 @@ def ensure_rclone_dir():
         os.chmod(rclone_dir, 0o777)
 
 
-# Load the configuration file
-def load_config():
-    # Add log_dir to globals
-    global sync_base_dir, filter_file, max_delete, sync_dirs, log_dir
-    if not os.path.exists(config_file):
-        print("Configuration file not found. Please ensure it exists at:", config_file)
-        sys.exit(1)
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
-    sync_base_dir = config['sync_base_dir']
-    filter_file = config['filter_file']
-    max_delete = config['max_delete']
-    sync_dirs = config['sync_dirs']
-    log_dir = config['log_dir']
-
-
 # Ensure log directory exists
 def ensure_log_directory():
     os.makedirs(log_dir, exist_ok=True)
     global log_file_path, error_log_file_path
-    log_file_path = os.path.join(log_dir, "bisync.log")
-    error_log_file_path = os.path.join(log_dir, "bisync_error.log")
+    log_file_path = os.path.join(log_dir, sync_log_file_name)
+    error_log_file_path = os.path.join(log_dir, sync_error_log_file_name)
 
 
 # Calculate the MD5 of a file
@@ -195,22 +223,23 @@ def handle_filter_changes():
 
 
 # Handle the exit code of rclone
-def handle_rclone_exit_code(return_code, local_path, sync_type):
+def handle_rclone_exit_code(result_code, local_path, sync_type):
     messages = {
-        0: "completed successfully. Exit code 0",
-        1: "Non-critical error. A rerun may be successful. Exit code 1",
-        2: "Critically aborted. Did you add a 'RCLONE_TEST' file to both local and remote? You can add those files using the command 'touch RCLONE_TEST' in both the local and remote target directories. For example to add to remote: rclone touch remote_profile:/MyStuff/RCLONE_TEST and to local: rclone touch /home/user/sync_folders/MyStuff/RCLONE_TEST",
-        3: "Directory not found. Exit code 3",
-        4: "File not found. Exit code 4",
-        5: "Temporary error. More retries might fix this issue. Exit code 5",
-        6: "Less serious errors. Exit code 6",
-        7: "Fatal error. Retries will not fix this issue. Exit code 7",
-        8: "Transfer limit exceeded. Exit code 8",
-        9: "successful but no files were transferred. Exit code 9",
-        10: "Duration limit exceeded. Exit code 10"
+        0: "completed successfully",
+        1: "Non-critical error. A rerun may be successful.",
+        2: "Critically aborted, please check the logs for more information.",
+        3: "Directory not found.",
+        4: "File not found.",
+        5: "Temporary error. More retries might fix this issue.",
+        6: "Less serious errors.",
+        7: "Fatal error. Retries will not fix this issue.",
+        8: "Transfer limit exceeded.",
+        9: "successful but no files were transferred.",
+        10: "Duration limit exceeded."
     }
-    message = messages.get(return_code, "failed with an unknown error code")
-    if return_code == 0 or return_code == 9:
+    message = messages.get(
+        result_code, f"failed with an unknown error code {result_code}")
+    if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
         return "COMPLETED"
     else:
@@ -229,9 +258,16 @@ def bisync(remote_path, local_path):
         '--low-level-retries', '10',
         '--exclude', '*.tmp',
         '--exclude', '*.log',
+        # '--exclude', r'._.*',
+        '--exclude', '.DS_Store',
+        '--exclude', '.Spotlight-V100/**',
+        '--exclude', '.Trashes/**',
+        '--exclude', '.fseventsd/**',
+        '--exclude', '.AppleDouble/**',
+        '--exclude', '.VolumeIcon.icns',
         '--exclude', resync_status_file_name,
         '--exclude', sync_status_file_name,
-        '--log-file', os.path.join(log_dir, 'sync.log'),
+        '--log-file', os.path.join(log_dir, sync_log_file_name),
         '--log-level', 'INFO' if dry_run else 'ERROR',
         '--conflict-resolve', 'newer',
         '--conflict-loser', 'num',
@@ -239,8 +275,8 @@ def bisync(remote_path, local_path):
         '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
-        '--max-lock', '15m',
-        '--compare', 'size,modtime,checksum',
+        '--max-lock', opt_max_lock,
+        '--compare', opt_compare,
         '--create-empty-src-dirs',
         '--track-renames',
         '--check-access'
@@ -249,6 +285,8 @@ def bisync(remote_path, local_path):
         rclone_args.extend(['--exclude-from', filter_file])
     if dry_run:
         rclone_args.append('--dry-run')
+    if force_operation:
+        rclone_args.append('--force')
 
     result = subprocess.run(rclone_args, capture_output=True, text=True)
     sync_result = handle_rclone_exit_code(
@@ -280,20 +318,27 @@ def resync(remote_path, local_path):
     rclone_args = [
         'rclone', 'bisync', remote_path, local_path,
         '--resync',
-        '--log-file', os.path.join(log_dir, 'sync.log'),
+        '--log-file', os.path.join(log_dir, sync_log_file_name),
         '--log-level', 'INFO' if dry_run else 'ERROR',
         '--retries', '3',
         '--low-level-retries', '10',
         '--error-on-no-transfer',
         '--exclude', '*.tmp',
         '--exclude', '*.log',
+        # '--exclude', r'._.*',
+        '--exclude', '.DS_Store',
+        '--exclude', '.Spotlight-V100/**',
+        '--exclude', '.Trashes/**',
+        '--exclude', '.fseventsd/**',
+        '--exclude', '.AppleDouble/**',
+        '--exclude', '.VolumeIcon.icns',
         '--exclude', resync_status_file_name,
         '--exclude', sync_status_file_name,
         '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
-        '--max-lock', '15m',
-        '--compare', 'size,modtime,checksum',
+        '--max-lock', opt_max_lock,
+        '--compare', opt_compare,
         '--create-empty-src-dirs',
         '--check-access'
     ]
@@ -343,6 +388,28 @@ def ensure_local_directory(local_path):
         log_message(f"Local directory {local_path} created.")
 
 
+def check_local_rclone_test(local_path):
+    # use rclone lsf to check if the file exists
+    result = subprocess.run(['rclone', 'lsf', local_path],
+                            capture_output=True, text=True)
+    if not rclone_test_file_name in result.stdout:
+        log_message(f"{rclone_test_file_name} file not found in {
+                    local_path}. To add it run 'rclone touch \"{local_path}/{rclone_test_file_name}\"'")
+        return False
+    return True
+
+
+def check_remote_rclone_test(remote_path):
+    # use rclone lsf to check if the file exists
+    result = subprocess.run(['rclone', 'lsf', remote_path],
+                            capture_output=True, text=True)
+    if not rclone_test_file_name in result.stdout:
+        log_message(f"{rclone_test_file_name} file not found in {
+                    remote_path}. To add it run 'rclone touch \"{remote_path}/{rclone_test_file_name}\"'")
+        return False
+    return True
+
+
 # Perform the sync operations
 def perform_sync_operations():
     if specific_folder and specific_folder not in sync_dirs:
@@ -355,6 +422,10 @@ def perform_sync_operations():
             continue  # Skip folders not specified by the user
         local_path = os.path.join(sync_base_dir, value['local'])
         remote_path = f"{value['rclone_remote']}:{value['remote']}"
+
+        if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
+            return
+
         ensure_local_directory(local_path)
         if resync(remote_path, local_path) == "COMPLETED":
             bisync(remote_path, local_path)
@@ -362,10 +433,10 @@ def perform_sync_operations():
 
 def main():
     check_pid()
+    load_config()
     parse_args()
     check_tools()
     ensure_rclone_dir()
-    load_config()
     ensure_log_directory()  # Ensure the log directory exists after loading the configuration
     handle_filter_changes()
     perform_sync_operations()

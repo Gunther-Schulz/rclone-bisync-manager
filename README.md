@@ -76,7 +76,8 @@ python rclone_bisync.py [options]
 - **folder**: Specify a particular folder to sync (optional).
 - **-d, --dry-run**: Perform a dry run.
 - **--resync**: Force a resynchronization.
-- **--console-log**: Enable logging to the console.
+- **--force-bisync**: Force a bisync. This option is only applicable if a specific folder is specified.
+- **--console-log**: Enable logging to the console. Only wrapper messages are logged to the console, not the detailed log messages from rclone.
 
 ## Logs
 
@@ -84,7 +85,7 @@ Logs are stored in the `logs` directory within the base directory specified in t
 
 ## Handling Errors
 
-If the script encounters critical errors, it logs them and may require manual intervention. Check the error log file `bisync_error.log` for concise information and the main logfile `bisync.log` for detailed information.
+If the script encounters critical errors, it logs them and may require manual intervention. Check the error log file `sync_error.log` for concise information and the main logfile `sync.log` for detailed information.
 
 ## Automating Synchronization with Cron (Example)
 
@@ -113,6 +114,54 @@ crontab -e
 
 4. **Check that the cron job is set**:
    To list all your cron jobs, you can type:
+
+### Handling Missed Cron Jobs with Anacron
+
+For systems that are not running 24/7, such as laptops or desktops, you might miss scheduled tasks if the system is off. To handle this, you can use `anacron`, which runs missed tasks as soon as the system is back online.
+
+1. **Install Anacron** (if not already installed):
+
+Instruction for Debian based systems:
+
+```bash
+sudo apt-get install anacron
+```
+
+Instruction for Arch based systems:
+
+```bash
+sudo pacman -S anacron
+```
+
+2. **Configure Anacron**:
+   Edit the `anacrontab` file to add your job:
+
+```bash
+sudo nano /etc/anacrontab
+```
+
+Add the following line to schedule your synchronization script:
+
+```bash
+1 5 rclone_sync /usr/bin/python /home/user/rclone_bisync.py
+```
+
+- `1` - Run once a day.
+- `5` - Delay in minutes after startup before the task is run.
+- `rclone_sync` - A unique identifier for the job.
+- The command is the full path to your script.
+
+3. **Save and Exit**:
+   After adding the job, save your changes and close the editor. Anacron will automatically handle running this job daily, including after a delay if the system was off at the scheduled time.
+
+4. **Verify Anacron Jobs**:
+   To see the list of anacron jobs, you can view the `anacrontab` file:
+
+```bash
+cat /etc/anacrontab
+```
+
+This setup ensures that your synchronization tasks are executed at least once every day, even if the computer is turned off at the scheduled time.
 
 ## Contributing
 
