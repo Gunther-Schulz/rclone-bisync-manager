@@ -27,12 +27,24 @@ sync_base_dir = base_dir.rstrip('/')
 pid_file = os.path.join(base_dir, 'rclone_bisync.pid')
 config_file = os.path.join(base_dir, 'rclone_bisync.yaml')
 resync_status_file_name = ".resync_status"
-sync_status_file_name = ".bisync_status"
+bisync_status_file_name = ".bisync_status"
 sync_log_file_name = "sync.log"
 sync_error_log_file_name = "sync_error.log"
 rclone_test_file_name = "RCLONE_TEST"
 opt_max_lock = "15m"
 opt_compare = "size,modtime,checksum"
+
+exclude_patterns = [
+    '*.tmp',
+    '*.log',
+    r'._.*',
+    '.DS_Store',
+    '.Spotlight-V100/**',
+    '.Trashes/**',
+    '.fseventsd/**',
+    '.AppleDouble/**',
+    '.VolumeIcon.icns'
+]
 
 # Global counter for CTRL-C presses
 ctrl_c_presses = 0
@@ -256,17 +268,8 @@ def bisync(remote_path, local_path):
         'rclone', 'bisync', remote_path, local_path,
         '--retries', '3',
         '--low-level-retries', '10',
-        '--exclude', '*.tmp',
-        '--exclude', '*.log',
-        '--exclude', r'._.*',
-        '--exclude', '.DS_Store',
-        '--exclude', '.Spotlight-V100/**',
-        '--exclude', '.Trashes/**',
-        '--exclude', '.fseventsd/**',
-        '--exclude', '.AppleDouble/**',
-        '--exclude', '.VolumeIcon.icns',
         '--exclude', resync_status_file_name,
-        '--exclude', sync_status_file_name,
+        '--exclude', bisync_status_file_name,
         '--log-file', os.path.join(log_dir, sync_log_file_name),
         '--log-level', 'INFO' if dry_run else 'ERROR',
         '--conflict-resolve', 'newer',
@@ -279,8 +282,11 @@ def bisync(remote_path, local_path):
         '--compare', opt_compare,
         '--create-empty-src-dirs',
         '--track-renames',
-        '--check-access'
+        '--check-access',
     ]
+
+    for pattern in exclude_patterns:
+        rclone_args.extend(['--exclude', pattern])
     if os.path.exists(filter_file):
         rclone_args.extend(['--exclude-from', filter_file])
     if dry_run:
@@ -323,17 +329,8 @@ def resync(remote_path, local_path):
         '--retries', '3',
         '--low-level-retries', '10',
         '--error-on-no-transfer',
-        '--exclude', '*.tmp',
-        '--exclude', '*.log',
-        '--exclude', r'._.*',
-        '--exclude', '.DS_Store',
-        '--exclude', '.Spotlight-V100/**',
-        '--exclude', '.Trashes/**',
-        '--exclude', '.fseventsd/**',
-        '--exclude', '.AppleDouble/**',
-        '--exclude', '.VolumeIcon.icns',
         '--exclude', resync_status_file_name,
-        '--exclude', sync_status_file_name,
+        '--exclude', bisync_status_file_name,
         '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
@@ -342,6 +339,9 @@ def resync(remote_path, local_path):
         '--create-empty-src-dirs',
         '--check-access'
     ]
+
+    for pattern in exclude_patterns:
+        rclone_args.extend(['--exclude', pattern])
     if os.path.exists(filter_file):
         rclone_args.extend(['--exclude-from', filter_file])
     if dry_run:
@@ -358,7 +358,7 @@ def resync(remote_path, local_path):
 
 # Write the sync status
 def write_sync_status(local_path, sync_status):
-    sync_status_file = os.path.join(local_path, sync_status_file_name)
+    sync_status_file = os.path.join(local_path, bisync_status_file_name)
     if not dry_run:
         with open(sync_status_file, 'w') as f:
             f.write(sync_status)
@@ -437,7 +437,7 @@ def main():
     parse_args()
     check_tools()
     ensure_rclone_dir()
-    ensure_log_directory()  # Ensure the log directory exists after loading the configuration
+    ensure_log_directory()
     handle_filter_changes()
     perform_sync_operations()
 
