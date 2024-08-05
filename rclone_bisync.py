@@ -127,8 +127,7 @@ def remove_pid_file():
 
 # Load the configuration file
 def load_config():
-    # Add log_dir to globals
-    global sync_base_dir, filter_file, max_delete, sync_dirs, log_dir
+    global sync_base_dir, filter_file, max_delete, sync_dirs, log_dir, cpu_limit, log_level
     if not os.path.exists(config_file):
         print("Configuration file not found. Please ensure it exists at:", config_file)
         sys.exit(1)
@@ -139,6 +138,9 @@ def load_config():
     max_delete = config['max_delete']
     sync_dirs = config['sync_dirs']
     log_dir = config['log_dir']
+    cpu_limit = config.get('cpu_limit', 20)  # Default to 20 if not specified
+    # Default to ERROR if not specified
+    log_level = config.get('log_level', 'ERROR')
 
 
 # Parse command line arguments
@@ -179,7 +181,8 @@ def parse_args():
             print("Operation aborted by the user.")
             sys.exit(0)
     elif force_operation and not specific_folder:
-        print("ERROR: --force-bisync can only be used when a specific folder is specified.")
+        print(
+            "ERROR: --force-bisync can only be used when a specific sync_dir is specified.")
         sys.exit(1)
 
 
@@ -271,7 +274,7 @@ def bisync(remote_path, local_path):
         '--exclude', resync_status_file_name,
         '--exclude', bisync_status_file_name,
         '--log-file', os.path.join(log_dir, sync_log_file_name),
-        '--log-level', 'INFO' if dry_run else 'ERROR',
+        '--log-level', log_level if not dry_run else 'INFO',
         '--conflict-resolve', 'newer',
         '--conflict-loser', 'num',
         '--conflict-suffix', 'rc-conflict',
@@ -294,7 +297,12 @@ def bisync(remote_path, local_path):
     if force_operation:
         rclone_args.append('--force')
 
-    result = subprocess.run(rclone_args, capture_output=True, text=True)
+    # Wrap the rclone command with cpulimit
+    # Limiting CPU usage to the specified limit
+    cpulimit_command = ['cpulimit', '--limit=' + str(cpu_limit), '--']
+    cpulimit_command.extend(rclone_args)
+
+    result = subprocess.run(cpulimit_command, capture_output=True, text=True)
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Bisync")
     log_message(f"Bisync status for {local_path}: {sync_result}")
@@ -325,7 +333,7 @@ def resync(remote_path, local_path):
         'rclone', 'bisync', remote_path, local_path,
         '--resync',
         '--log-file', os.path.join(log_dir, sync_log_file_name),
-        '--log-level', 'INFO' if dry_run else 'ERROR',
+        '--log-level', log_level if not dry_run else 'INFO',
         '--retries', '3',
         '--low-level-retries', '10',
         '--error-on-no-transfer',
@@ -347,7 +355,11 @@ def resync(remote_path, local_path):
     if dry_run:
         rclone_args.append('--dry-run')
 
-    result = subprocess.run(rclone_args, capture_output=True, text=True)
+    # Limiting CPU usage to the specified limit
+    cpulimit_command = ['cpulimit', '--limit=' + str(cpu_limit), '--']
+    cpulimit_command.extend(rclone_args)
+
+    result = subprocess.run(cpulimit_command, capture_output=True, text=True)
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Resync")
     log_message(f"Resync status for {local_path}: {sync_result}")
