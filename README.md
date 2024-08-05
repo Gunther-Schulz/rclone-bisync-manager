@@ -24,9 +24,15 @@ Ensure you have `rclone` installed on your system along with other required tool
 chmod +x rclone_bisync.py
 ```
 
+3. Create the configuration directory:
+
+```bash
+mkdir -p ~/.config/rclone_bisync
+```
+
 ## Configuration
 
-Before running the script, you must set up the configuration file (`rclone_bisync.yaml`). This file contains all necessary settings for the synchronization process.
+Before running the script, you must set up the configuration file (`~/.config/rclone_bisync/config.yaml`). This file contains all necessary settings for the synchronization process.
 
 ### Configuration File Structure
 
@@ -87,81 +93,83 @@ Logs are stored in the `logs` directory within the base directory specified in t
 
 If the script encounters critical errors, it logs them and may require manual intervention. Check the error log file `sync_error.log` for concise information and the main logfile `sync.log` for detailed information.
 
-## Automating Synchronization with Cron (Example)
+## Automating Synchronization with Systemd
 
-To run the RClone BiSync script periodically, you can use a cron job on Unix-like systems. Here's how you can set it up:
+To run the RClone BiSync script periodically using systemd, follow these steps:
 
-1. **Open the crontab for editing**:
-   Open your terminal and type the following command to edit the crontab file:
+1. **Create a service file**:
+   Create a new file `/etc/systemd/system/rclone-bisync.service` with the following content:
 
-```bash
-crontab -e
-```
+   ```ini
+   [Unit]
+   Description=Rclone Bisync Service
+   After=network-online.target
+   Wants=network-online.target
 
-2. **Add a cron job**:
-   In the crontab file, add a line that specifies how often you want the script to run. For example, to run the synchronization every day at 3 AM, you would add:
+   [Service]
+   Type=oneshot
+   ExecStart=/usr/bin/rclone-bisync
+   User=your_username
 
-```bash
-0 3 /usr/bin/python /home/user/rclone_bisync.py 2>&1
-```
+   [Install]
+   WantedBy=multi-user.target
+   ```
 
-- `0 * * * *` - Cron schedule expression that means "at the start of every hour".
-- `/usr/bin/python` - Path to your Python executable. This might be different like `/usr/local/bin/python3` depending on your installation.
-- `/home/user/rclone_bisync.py` - Full path to your script.
+   Replace `your_username` with the user you want the script to run as.
 
-3. **Save and close the crontab**:
-   Save the changes and exit the editor. The cron service will automatically pick up the new job and run it at the scheduled times.
+2. **Create a timer file**:
+   Create a new file `/etc/systemd/system/rclone-bisync.timer` with the following content:
 
-4. **Check that the cron job is set**:
-   To list all your cron jobs, you can type:
+   ```ini
+   [Unit]
+   Description=Run Rclone Bisync periodically
 
-### Handling Missed Cron Jobs with Anacron
+   [Timer]
+   OnBootSec=${RCLONE_BISYNC_ONBOOTSEC:-15min}
+   OnUnitActiveSec=${RCLONE_BISYNC_ONUNITACTIVESEC:-1h}
+   Persistent=true
 
-For systems that are not running 24/7, such as laptops or desktops, you might miss scheduled tasks if the system is off. To handle this, you can use `anacron`, which runs missed tasks as soon as the system is back online.
+   [Install]
+   WantedBy=timers.target
+   ```
 
-1. **Install Anacron** (if not already installed):
+   This timer will use values from the configuration file, defaulting to 15 minutes after boot and then every hour if not specified.
 
-Instruction for Debian based systems:
+3. **Configure the timer settings**:
+   Edit the configuration file located at `/etc/rclone-bisync/timer.conf`:
 
-```bash
-sudo apt-get install anacron
-```
+   ```ini
+   RCLONE_BISYNC_ONBOOTSEC=15min
+   RCLONE_BISYNC_ONUNITACTIVESEC=1h
+   ```
 
-Instruction for Arch based systems:
+   Adjust these values as needed.
 
-```bash
-sudo pacman -S anacron
-```
+4. **Enable and start the timer**:
+   Run the following commands to enable and start the timer:
 
-2. **Configure Anacron**:
-   Edit the `anacrontab` file to add your job:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable rclone-bisync.timer
+   sudo systemctl start rclone-bisync.timer
+   ```
 
-```bash
-sudo nano /etc/anacrontab
-```
+5. **Check the status of the timer**:
+   You can check the status of your timer with:
 
-Add the following line to schedule your synchronization script:
+   ```bash
+   sudo systemctl status rclone-bisync.timer
+   ```
 
-```bash
-1 5 rclone_sync /usr/bin/python /home/user/rclone_bisync.py
-```
+6. **Apply configuration changes**:
+   If you modify the `/etc/rclone-bisync/timer.conf` file, reload the systemd daemon and restart the timer:
 
-- `1` - Run once a day.
-- `5` - Delay in minutes after startup before the task is run.
-- `rclone_sync` - A unique identifier for the job.
-- The command is the full path to your script.
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl restart rclone-bisync.timer
+   ```
 
-3. **Save and Exit**:
-   After adding the job, save your changes and close the editor. Anacron will automatically handle running this job daily, including after a delay if the system was off at the scheduled time.
-
-4. **Verify Anacron Jobs**:
-   To see the list of anacron jobs, you can view the `anacrontab` file:
-
-```bash
-cat /etc/anacrontab
-```
-
-This setup ensures that your synchronization tasks are executed at least once every day, even if the computer is turned off at the scheduled time.
+This setup will run your rclone bisync script periodically using systemd. The use of a separate configuration file allows you to easily adjust the timing without directly editing systemd files.
 
 ## Contributing
 

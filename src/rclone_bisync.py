@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import signal
 import atexit
+import logging
 
 # TODO: Add option for which side to prefer when doing a resync
 # TODO: Maybe try one of the speed-up options for bisync for gunther
@@ -22,10 +23,9 @@ console_log = False
 specific_folder = None
 
 # Initialize variables
-base_dir = os.path.join(os.environ['HOME'], '.rclone_bisync')
-sync_base_dir = base_dir.rstrip('/')
+base_dir = os.path.join(os.environ['HOME'], '.config', 'rclone_bisync')
 pid_file = os.path.join(base_dir, 'rclone_bisync.pid')
-config_file = os.path.join(base_dir, 'rclone_bisync.yaml')
+config_file = os.path.join(base_dir, 'config.yaml')
 resync_status_file_name = ".resync_status"
 bisync_status_file_name = ".bisync_status"
 sync_log_file_name = "sync.log"
@@ -127,20 +127,22 @@ def remove_pid_file():
 
 # Load the configuration file
 def load_config():
-    global sync_base_dir, filter_file, max_delete, sync_dirs, log_dir, cpu_limit, log_level
+    global local_base_path, exclusion_rules_file, max_delete_percentage, sync_paths, log_directory, max_cpu_usage_percent, log_level
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir, exist_ok=True)
     if not os.path.exists(config_file):
-        print("Configuration file not found. Please ensure it exists at:", config_file)
+        print(f"Configuration file not found. Please ensure it exists at: {
+              config_file}")
         sys.exit(1)
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
-    sync_base_dir = config['sync_base_dir']
-    filter_file = config['filter_file']
-    max_delete = config['max_delete']
-    sync_dirs = config['sync_dirs']
-    log_dir = config['log_dir']
-    cpu_limit = config.get('cpu_limit', 20)  # Default to 20 if not specified
-    # Default to ERROR if not specified
-    log_level = config.get('log_level', 'ERROR')
+    local_base_path = config.get('local_base_path')
+    exclusion_rules_file = config.get('exclusion_rules_file')
+    max_delete_percentage = config.get('max_delete_percentage', 5)
+    sync_paths = config.get('sync_paths', {})
+    log_directory = config.get('log_directory')
+    max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
+    log_level = config.get('log_level', 'INFO')
 
 
 # Parse command line arguments
@@ -165,16 +167,16 @@ def parse_args():
     force_operation = args.force_bisync
 
     if specific_folder:
-        if specific_folder not in sync_dirs:
+        if specific_folder not in sync_paths:
             print(f"ERROR: The specified folder '{
                   specific_folder}' is not configured in the sync directories. Please check the configuration file at {config_file}.")
             sys.exit(1)
 
     if force_operation and specific_folder:
         local_path = os.path.join(
-            sync_base_dir, sync_dirs[specific_folder]['local'])
-        remote_path = f"{specific_folder}:{
-            sync_dirs[specific_folder]['remote']}"
+            local_base_path, sync_paths[specific_folder]['local'])
+        remote_path = f"{sync_paths[specific_folder]['rclone_remote']}:{
+            sync_paths[specific_folder]['remote']}"
         confirmation = input(f"WARNING: You are about to force a bisync on '{
                              local_path}' and '{remote_path}'. Are you sure? (yes/no): ")
         if confirmation.lower() != 'yes':
@@ -206,10 +208,10 @@ def ensure_rclone_dir():
 
 # Ensure log directory exists
 def ensure_log_directory():
-    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(log_directory, exist_ok=True)
     global log_file_path, error_log_file_path
-    log_file_path = os.path.join(log_dir, sync_log_file_name)
-    error_log_file_path = os.path.join(log_dir, sync_error_log_file_name)
+    log_file_path = os.path.join(log_directory, sync_log_file_name)
+    error_log_file_path = os.path.join(log_directory, sync_error_log_file_name)
 
 
 # Calculate the MD5 of a file
@@ -222,8 +224,8 @@ def calculate_md5(file_path):
 # Handle filter changes
 def handle_filter_changes():
     stored_md5_file = os.path.join(base_dir, '.filter_md5')
-    if os.path.exists(filter_file):
-        current_md5 = calculate_md5(filter_file)
+    if os.path.exists(exclusion_rules_file):
+        current_md5 = calculate_md5(exclusion_rules_file)
         if os.path.exists(stored_md5_file):
             with open(stored_md5_file, 'r') as f:
                 stored_md5 = f.read().strip()
@@ -273,12 +275,12 @@ def bisync(remote_path, local_path):
         '--low-level-retries', '10',
         '--exclude', resync_status_file_name,
         '--exclude', bisync_status_file_name,
-        '--log-file', os.path.join(log_dir, sync_log_file_name),
+        '--log-file', os.path.join(log_directory, sync_log_file_name),
         '--log-level', log_level if not dry_run else 'INFO',
         '--conflict-resolve', 'newer',
         '--conflict-loser', 'num',
         '--conflict-suffix', 'rc-conflict',
-        '--max-delete', str(max_delete),
+        '--max-delete', str(max_delete_percentage),
         '--recover',
         '--resilient',
         '--max-lock', opt_max_lock,
@@ -290,8 +292,8 @@ def bisync(remote_path, local_path):
 
     for pattern in exclude_patterns:
         rclone_args.extend(['--exclude', pattern])
-    if os.path.exists(filter_file):
-        rclone_args.extend(['--exclude-from', filter_file])
+    if os.path.exists(exclusion_rules_file):
+        rclone_args.extend(['--exclude-from', exclusion_rules_file])
     if dry_run:
         rclone_args.append('--dry-run')
     if force_operation:
@@ -299,7 +301,8 @@ def bisync(remote_path, local_path):
 
     # Wrap the rclone command with cpulimit
     # Limiting CPU usage to the specified limit
-    cpulimit_command = ['cpulimit', '--limit=' + str(cpu_limit), '--']
+    cpulimit_command = ['cpulimit', '--limit=' +
+                        str(max_cpu_usage_percent), '--']
     cpulimit_command.extend(rclone_args)
 
     result = subprocess.run(cpulimit_command, capture_output=True, text=True)
@@ -332,14 +335,14 @@ def resync(remote_path, local_path):
     rclone_args = [
         'rclone', 'bisync', remote_path, local_path,
         '--resync',
-        '--log-file', os.path.join(log_dir, sync_log_file_name),
+        '--log-file', os.path.join(log_directory, sync_log_file_name),
         '--log-level', log_level if not dry_run else 'INFO',
         '--retries', '3',
         '--low-level-retries', '10',
         '--error-on-no-transfer',
         '--exclude', resync_status_file_name,
         '--exclude', bisync_status_file_name,
-        '--max-delete', str(max_delete),
+        '--max-delete', str(max_delete_percentage),
         '--recover',
         '--resilient',
         '--max-lock', opt_max_lock,
@@ -350,13 +353,14 @@ def resync(remote_path, local_path):
 
     for pattern in exclude_patterns:
         rclone_args.extend(['--exclude', pattern])
-    if os.path.exists(filter_file):
-        rclone_args.extend(['--exclude-from', filter_file])
+    if os.path.exists(exclusion_rules_file):
+        rclone_args.extend(['--exclude-from', exclusion_rules_file])
     if dry_run:
         rclone_args.append('--dry-run')
 
     # Limiting CPU usage to the specified limit
-    cpulimit_command = ['cpulimit', '--limit=' + str(cpu_limit), '--']
+    cpulimit_command = ['cpulimit', '--limit=' +
+                        str(max_cpu_usage_percent), '--']
     cpulimit_command.extend(rclone_args)
 
     result = subprocess.run(cpulimit_command, capture_output=True, text=True)
@@ -424,15 +428,15 @@ def check_remote_rclone_test(remote_path):
 
 # Perform the sync operations
 def perform_sync_operations():
-    if specific_folder and specific_folder not in sync_dirs:
+    if specific_folder and specific_folder not in sync_paths:
         log_error(f"Folder '{
                   specific_folder}' is not configured in sync directories. Make sure it is in the list of sync_dirs in the configuration file at {config_file}.")
-        return  # Exit the function if the specified folder is not in the configuration
+        return
 
-    for key, value in sync_dirs.items():
+    for key, value in sync_paths.items():
         if specific_folder and specific_folder != key:
             continue  # Skip folders not specified by the user
-        local_path = os.path.join(sync_base_dir, value['local'])
+        local_path = os.path.join(local_base_path, value['local'])
         remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
         if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
