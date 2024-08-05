@@ -11,6 +11,22 @@ This Python script provides a robust solution for bidirectional synchronization 
 - **Configurable**: Configuration through a YAML file.
 - **Signal Handling**: Graceful shutdown on SIGINT (CTRL-C).
 
+## Opinionated Settings
+
+To keep the script simple and robust, this script uses some opinionated settings for the `rclone bisync` command that are not exposed in the configuration file. These settings are chosen to provide a robust and safe synchronization process that should work for most use cases:
+
+- `--conflict-resolve newer`: Resolves conflicts by keeping the newer file.
+- `--conflict-loser num`: Renames the losing file in a conflict by appending a number.
+- `--conflict-suffix rc-conflict`: Appends 'rc-conflict' to the filename of the losing file in a conflict.
+- `--recover`: Attempts to recover from a failed sync.
+- `--resilient`: Continues the sync even if some files can't be transferred.
+- `--create-empty-src-dirs`: Creates empty directories on the destination if they exist in the source.
+- `--track-renames`: Tracks file renames to optimize sync performance.
+- `--check-access`: Checks that rclone has proper access to the remote storage before starting the sync.
+- `--compare size,modtime,checksum`: Compares files using size, modification time, and checksum to determine if they're different.
+
+These settings are designed to handle conflicts gracefully, improve reliability, and optimize the synchronization process. The comparison method ensures a thorough check of file differences. These options are not configurable to ensure consistent behavior across all synchronization operations.
+
 ## Prerequisites
 
 Ensure you have `rclone` installed on your system along with other required tools like `mkdir`, `grep`, `awk`, `find`, and `md5sum`. These tools are necessary for the script to function correctly.
@@ -38,19 +54,26 @@ Before running the script, you must set up the configuration file (`~/.config/rc
 
 Here is a detailed explanation of the configuration file:
 
-- **sync_base_dir**: The base directory on your local machine where synchronization folders are located.
-- **filter_file**: Path to a file containing patterns to exclude from synchronization.
-- **max_delete**: Maximum percentage of files that can be deleted in one sync operation (to prevent massive accidental deletions).
-- **sync_dirs**: A dictionary of synchronization pairs with details for local and remote directories.
+- **max_delete_percentage**: Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss.
+- **local_base_path**: The base directory on your local machine where synchronization folders are located.
+- **exclusion_rules_file**: Path to a file containing patterns to exclude from synchronization.
+- **log_directory**: Directory where log files will be stored.
+- **max_cpu_usage_percent**: CPU usage limit as a percentage.
+- **max_lock**: Maximum time to hold the sync lock, preventing concurrent syncs.
+- **log_level**: Default log level (can be DEBUG, INFO, NOTICE, ERROR, or FATAL).
+- **sync_paths**: A dictionary of synchronization pairs with details for local and remote directories.
 
 #### Example Configuration
 
 ```yaml
-sync_base_dir: "/path/to/local/sync/directory"
-filter_file: "/path/to/filter/file"
-max_delete: 50 # Allows up to 50% of files to be deleted
-log_dir: "/path/to/log/directory"
-sync_dirs:
+max_delete_percentage: 5
+local_base_path: /home/g/hidrive
+exclusion_rules_file: /home/g/hidrive/filter.txt
+log_directory: /home/g/hidrive/logs
+max_cpu_usage_percent: 100
+max_lock: 15m
+log_level: INFO
+sync_paths:
   documents:
     local: "Docs"
     rclone_remote: "remoteName"

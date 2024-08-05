@@ -1,0 +1,33 @@
+# Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss
+max_delete_percentage: 5
+
+# Base path for local files to be synced
+local_base_path: /path/to/your/local/base/directory
+
+# File containing rules for excluding certain files/directories from sync
+exclusion_rules_file: /path/to/your/filter.txt
+
+# Directory where log files will be stored
+log_directory: /path/to/your/log/directory
+
+# CPU usage limit as a percentage
+max_cpu_usage_percent: 100
+
+# Maximum time to hold the sync lock, preventing concurrent syncs
+max_lock: 15m
+
+# Default log level (can be DEBUG, INFO, NOTICE, ERROR, or FATAL)
+log_level: INFO
+
+# Define the paths to be synchronized
+sync_paths:
+  example_sync:
+    local: example_folder # Local directory name (relative to local_base_path)
+    rclone_remote: your_remote # Name of the rclone remote to use
+    remote: path/on/remote/storage # Path on the remote storage
+
+  # You can add more sync paths as needed:
+  # another_sync:
+  #   local: another_folder
+  #   rclone_remote: another_remote
+  #   remote: another/path/on/remote

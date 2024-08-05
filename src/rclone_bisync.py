@@ -127,7 +127,7 @@ def remove_pid_file():
 
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, max_delete_percentage, sync_paths, log_directory, max_cpu_usage_percent, log_level
+    global local_base_path, exclusion_rules_file, max_delete_percentage, sync_paths, log_directory, max_cpu_usage_percent, log_level, max_lock
     if not os.path.exists(base_dir):
         os.makedirs(base_dir, exist_ok=True)
     if not os.path.exists(config_file):
@@ -143,6 +143,7 @@ def load_config():
     log_directory = config.get('log_directory')
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
     log_level = config.get('log_level', 'INFO')
+    max_lock = config.get('max_lock', '15m')
 
 
 # Parse command line arguments
@@ -283,7 +284,7 @@ def bisync(remote_path, local_path):
         '--max-delete', str(max_delete_percentage),
         '--recover',
         '--resilient',
-        '--max-lock', opt_max_lock,
+        '--max-lock', max_lock,
         '--compare', opt_compare,
         '--create-empty-src-dirs',
         '--track-renames',
@@ -345,7 +346,7 @@ def resync(remote_path, local_path):
         '--max-delete', str(max_delete_percentage),
         '--recover',
         '--resilient',
-        '--max-lock', opt_max_lock,
+        '--max-lock', max_lock,
         '--compare', opt_compare,
         '--create-empty-src-dirs',
         '--check-access'
