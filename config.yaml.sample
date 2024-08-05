@@ -1,6 +1,3 @@
-# Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss
-max_delete_percentage: 5
-
 # Base path for local files to be synced
 local_base_path: /path/to/your/local/base/directory
 
@@ -9,6 +6,9 @@ exclusion_rules_file: /path/to/your/filter.txt
 
 # Directory where log files will be stored
 log_directory: /path/to/your/log/directory
+
+# Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss
+max_delete_percentage: 5
 
 # CPU usage limit as a percentage
 max_cpu_usage_percent: 100

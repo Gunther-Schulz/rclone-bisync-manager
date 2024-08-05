@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import yaml
 import os
 import sys
@@ -6,10 +8,6 @@ import argparse
 from datetime import datetime
 import signal
 import atexit
-import logging
-
-# TODO: Add option for which side to prefer when doing a resync
-# TODO: Maybe try one of the speed-up options for bisync for gunther
 
 # Note: Send a SIGINT twice to force exit
 
