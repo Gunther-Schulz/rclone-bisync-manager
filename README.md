@@ -66,13 +66,13 @@ Here is a detailed explanation of the configuration file:
 #### Example Configuration
 
 ```yaml
-max_delete_percentage: 5
 local_base_path: /home/g/hidrive
 exclusion_rules_file: /home/g/hidrive/filter.txt
 log_directory: /home/g/hidrive/logs
-max_cpu_usage_percent: 100
+max_delete: 5
 max_lock: 15m
 log_level: INFO
+max_cpu_usage_percent: 100
 sync_paths:
   documents:
     local: "Docs"

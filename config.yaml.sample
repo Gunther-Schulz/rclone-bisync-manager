@@ -8,7 +8,7 @@ exclusion_rules_file: /path/to/your/filter.txt
 log_directory: /path/to/your/log/directory
 
 # Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss
-max_delete_percentage: 5
+max_delete: 5
 
 # Maximum time to hold the sync lock, preventing concurrent syncs
 max_lock: 15m

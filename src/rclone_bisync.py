@@ -125,7 +125,7 @@ def remove_pid_file():
 
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, max_delete_percentage, sync_paths, log_directory, max_cpu_usage_percent, log_level, max_lock
+    global local_base_path, exclusion_rules_file, max_delete, sync_paths, log_directory, max_cpu_usage_percent, log_level, max_lock
     if not os.path.exists(base_dir):
         os.makedirs(base_dir, exist_ok=True)
     if not os.path.exists(config_file):
@@ -136,7 +136,7 @@ def load_config():
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
     exclusion_rules_file = config.get('exclusion_rules_file')
-    max_delete_percentage = config.get('max_delete_percentage', 5)
+    max_delete = config.get('max_delete', 5)
     sync_paths = config.get('sync_paths', {})
     log_directory = config.get('log_directory')
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
@@ -284,7 +284,7 @@ def bisync(remote_path, local_path):
         '--conflict-resolve', 'newer',
         '--conflict-loser', 'num',
         '--conflict-suffix', 'rc-conflict',
-        '--max-delete', str(max_delete_percentage),
+        '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
         '--max-lock', max_lock,
@@ -349,7 +349,7 @@ def resync(remote_path, local_path):
         '--error-on-no-transfer',
         '--exclude', resync_status_file_name,
         '--exclude', bisync_status_file_name,
-        '--max-delete', str(max_delete_percentage),
+        '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
         '--max-lock', max_lock,
