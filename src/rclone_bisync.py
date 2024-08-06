@@ -30,18 +30,6 @@ sync_log_file_name = "rclone-bisync.log"
 sync_error_log_file_name = "rclone-bisync-error.log"
 rclone_test_file_name = "RCLONE_TEST"
 
-exclude_patterns = [
-    '*.tmp',
-    '*.log',
-    r'._.*',
-    '.DS_Store',
-    '.Spotlight-V100/**',
-    '.Trashes/**',
-    '.fseventsd/**',
-    '.AppleDouble/**',
-    '.VolumeIcon.icns'
-]
-
 # Global counter for CTRL-C presses
 ctrl_c_presses = 0
 
@@ -149,6 +137,13 @@ def load_config():
 
     # Load all rclone options from config
     rclone_options = config.get('rclone_options', {})
+
+    # Ensure exclude patterns are in the correct format
+    if 'exclude' in rclone_options and isinstance(rclone_options['exclude'], list):
+        rclone_options['exclude'] = [str(pattern)
+                                     for pattern in rclone_options['exclude']]
+    else:
+        rclone_options['exclude'] = []
 
     # Load bisync-specific options
     bisync_options = config.get('bisync_options', {})
@@ -510,7 +505,8 @@ def perform_sync_operations():
         'rclone', 'bisync', remote_path, local_path,
     ]
 
-    for pattern in exclude_patterns:
+    # Use exclude patterns from rclone_options
+    for pattern in rclone_options.get('exclude', []):
         rclone_args.extend(['--exclude', pattern])
     if exclusion_rules_file and os.path.exists(exclusion_rules_file):
         rclone_args.extend(['--exclude-from', exclusion_rules_file])

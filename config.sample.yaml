@@ -31,6 +31,16 @@ rclone_options:
   track_renames: null
   # size_only: null
   # fast_list: null
+  exclude:
+    - "*.tmp"
+    - "*.log"
+    - "._*"
+    - ".DS_Store"
+    - ".Spotlight-V100/**"
+    - ".Trashes/**"
+    - ".fseventsd/**"
+    - ".AppleDouble/**"
+    - ".VolumeIcon.icns"
 
 # Bisync-specific options
 bisync_options:
