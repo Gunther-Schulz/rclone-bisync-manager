@@ -21,8 +21,8 @@ console_log = False
 specific_folder = None
 
 # Initialize variables
-base_dir = os.path.join(os.environ['HOME'], '.config', 'rclone_bisync')
-pid_file = os.path.join(base_dir, 'rclone_bisync.pid')
+base_dir = os.path.join(os.environ['HOME'], '.config', 'rclone-bisync')
+pid_file = os.path.join(base_dir, 'rclone-bisync.pid')
 config_file = os.path.join(base_dir, 'config.yaml')
 resync_status_file_name = ".resync_status"
 bisync_status_file_name = ".bisync_status"
