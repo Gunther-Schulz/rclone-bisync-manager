@@ -522,6 +522,17 @@ def main():
     ensure_rclone_dir()
     ensure_log_directory()
     handle_filter_changes()
+
+    # Log base_dir and pid_file
+    log_message(f"Base directory: {base_dir}")
+    log_message(f"PID file: {pid_file}")
+    # Log home directory
+    home_dir = os.environ.get('HOME')
+    if home_dir:
+        log_message(f"Home directory: {home_dir}")
+    else:
+        log_error("Unable to determine home directory")
+
     perform_sync_operations()
 
 

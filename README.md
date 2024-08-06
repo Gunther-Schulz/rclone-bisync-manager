@@ -152,7 +152,6 @@ To run the RClone BiSync script periodically using systemd, follow these steps:
 1. Copy the systemd service and timer files to the appropriate directory:
 
    ```bash
-   sudo cp systemd/rclone-bisync.service /etc/systemd/system/
    sudo cp systemd/rclone-bisync@.service /etc/systemd/system/
    sudo cp systemd/rclone-bisync@.timer /etc/systemd/system/
    ```
@@ -164,47 +163,113 @@ To run the RClone BiSync script periodically using systemd, follow these steps:
    sudo cp systemd/rclone-bisync.conf /etc/rclone-bisync/
    ```
 
-3. Edit the `/etc/rclone-bisync/rclone-bisync.conf` file to set the desired intervals for each sync path.
+3. Edit the `/etc/rclone-bisync/rclone-bisync.conf` file to set the desired user, paths, and other settings. For example:
 
-   This configuration file allows you to customize the synchronization settings:
-
-   - `RCLONE_BISYNC_USER`: Specify the user who will run the rclone-bisync service.
-   - `RCLONE_BISYNC_PATHS`: A comma-separated list of paths/remotes to synchronize. Leave empty to sync all paths.
-   - `RCLONE_BISYNC_DEFAULT_ONBOOTSEC`: Default time to wait after boot before the first sync.
-   - `RCLONE_BISYNC_DEFAULT_ONUNITACTIVESEC`: Default time between subsequent syncs.
-
-   You can also set specific intervals for each path by uncommenting and modifying the path-specific settings:
-
-   ```
-   RCLONE_BISYNC_<path>_ONBOOTSEC: Time to wait after boot for this specific path.
-   RCLONE_BISYNC_<path>_ONUNITACTIVESEC: Time between syncs for this specific path.
+   ```bash
+   RCLONE_BISYNC_EXTRA_OPTIONS=--dry-run
+   RCLONE_BISYNC_PATHS_sync_all=
+   RCLONE_BISYNC_PATHS_sync_photos=photos
    ```
 
-   These path-specific settings will override the default intervals if set.
+   In this example, RCLONE_BISYNC_PATHS_sync_all is empty, so all paths will be synced.
 
-4. Enable and start the timers for each sync path:
+4. Edit the `systemd/rclone-bisync@.service` file to set your username and environment variables:
+
+   ```ini
+   [Service]
+   User=your_username
+   Environment=XDG_RUNTIME_DIR=/run/user/your_user_id
+   Environment=XDG_CONFIG_HOME=/home/your_username/.config
+   ```
+
+   **Note**: The script relies on `XDG_RUNTIME_DIR` and `XDG_CONFIG_HOME` in the user context, but systemd unit files cannot access them by default. Therefore, we need to explicitly set them.
+
+   You can get your user id with the following command:
+
+   ```bash
+   id -u
+   ```
+
+   Make sure they match the actual values on your system of the user you are running the script as. You can check the values with the following commands:
+
+   ```bash
+   echo $XDG_RUNTIME_DIR
+   echo $XDG_CONFIG_HOME
+   ```
+
+5. To start the timer for all configured paths:
 
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable --now rclone-bisync@documents.timer
+   sudo systemctl enable --now rclone-bisync@sync_all.timer
+   ```
+
+   This will start a timer that runs the sync for all paths defined in `RCLONE_BISYNC_PATHS_sync_all`.
+
+6. To enable timers for specific sync paths:
+
+   ```bash
    sudo systemctl enable --now rclone-bisync@photos.timer
-   sudo systemctl enable --now rclone-bisync@music.timer
    ```
 
-5. Check the status of the timers:
+   This will use the paths defined in `RCLONE_BISYNC_PATHS_sync_photos`.
+
+7. Check the status of a timer:
 
    ```bash
-   sudo systemctl status rclone-bisync@documents.timer
+   sudo systemctl status rclone-bisync@sync_all.timer
    ```
 
-6. If you modify the timer configuration, reload the systemd daemon and restart the timers:
+   Or for a specific path:
+
+   ```bash
+   sudo systemctl status rclone-bisync@photos.timer
+   ```
+
+8. If you modify the timer configuration, reload the systemd daemon and restart the timer:
 
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl restart rclone-bisync@documents.timer
+   sudo systemctl restart rclone-bisync@sync_all.timer
    ```
 
-This setup will run your rclone bisync script periodically for each sync path entry using systemd, with customizable intervals for each entry.
+   Or for a specific path:
+
+   ```bash
+   sudo systemctl restart rclone-bisync@photos.timer
+   ```
+
+This setup allows you to run your rclone bisync script periodically using systemd, either for all configured paths at once or for individual paths. The system ensures that only one instance of rclone-bisync runs at a time, preventing overlaps and potential conflicts.
+
+You can customize the timer intervals by editing the `rclone-bisync@.timer` file. The default configuration runs the sync 15 minutes after boot and then every hour.
+
+### Running the Service with Different Intervals
+
+To run the same service with a different interval, you can create a new timer unit file with the desired interval. Use the existing `rclone-bisync@.timer` as a template and modify the `OnBootSec` and `OnUnitActiveSec` values.
+
+For example, create a new timer file `rclone-bisync-different-interval@.timer`:
+
+```ini
+[Unit]
+Description=Run Rclone Bisync for %i periodically with a different interval
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and start the new timer with the instance name:
+
+```bash
+sudo systemctl enable rclone-bisync-different-interval@example.timer
+sudo systemctl start rclone-bisync-different-interval@example.timer
+```
+
+In this case, `example` is the instance name. The timer `rclone-bisync-different-interval@example.timer` will trigger the service `rclone-bisync@example.service`.
 
 ## Contributing
 
