@@ -6,26 +6,16 @@ This Python script provides a robust solution for bidirectional synchronization 
 
 - **Bidirectional Synchronization**: Synchronize files between local and remote directories.
 - **Dry Run Option**: Test synchronization without making actual changes.
-- **Forced Resynchronization**: Ignore previous sync statuses and force a new sync.
 - **Detailed Logging**: Log all operations, with separate logs for errors.
 - **Configurable**: Configuration through a YAML file.
 - **Signal Handling**: Graceful shutdown on SIGINT (CTRL-C).
 
 ## Opinionated Settings
 
-To keep the script simple and robust, this script uses some opinionated settings for the `rclone bisync` command that are not exposed in the configuration file. These settings are chosen to provide a robust and safe synchronization process that should work for most use cases:
+To keep the script running as robustly as possible, this script uses always the following settings:
 
-- `--conflict-resolve newer`: Resolves conflicts by keeping the newer file.
-- `--conflict-loser num`: Renames the losing file in a conflict by appending a number.
-- `--conflict-suffix rc-conflict`: Appends 'rc-conflict' to the filename of the losing file in a conflict.
 - `--recover`: Attempts to recover from a failed sync.
 - `--resilient`: Continues the sync even if some files can't be transferred.
-- `--create-empty-src-dirs`: Creates empty directories on the destination if they exist in the source.
-- `--track-renames`: Tracks file renames to optimize sync performance.
-- `--check-access`: Checks that rclone has proper access to the remote storage before starting the sync.
-- `--compare size,modtime,checksum`: Compares files using size, modification time, and checksum to determine if they're different.
-
-These settings are designed to handle conflicts gracefully, improve reliability, and optimize the synchronization process. The comparison method ensures a thorough check of file differences. These options are not configurable to ensure consistent behavior across all synchronization operations.
 
 ## Prerequisites
 
@@ -56,14 +46,14 @@ Before running the script, you must set up the configuration file (`~/.config/rc
 
 Here is a detailed explanation of the configuration file:
 
-- **max_delete_percentage**: Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss.
 - **local_base_path**: The base directory on your local machine where synchronization folders are located.
-- **exclusion_rules_file**: Path to a file containing patterns to exclude from synchronization.
-- **log_directory**: Directory where log files will be stored.
-- **max_cpu_usage_percent**: CPU usage limit as a percentage. This setting is only used if the optional dependency `cpulimit` is installed. If `cpulimit` is not available, this setting will be ignored.
-- **max_lock**: Maximum time to hold the sync lock, preventing concurrent syncs.
-- **log_level**: Default log level (can be DEBUG, INFO, NOTICE, ERROR, or FATAL).
+- **exclusion_rules_file**: (Optional) Path to a file containing patterns to exclude from synchronization.
+- **log_directory**: (Optional) Directory where log files will be stored. If not specified, defaults to `~/.cache/rclone/bisync/logs`.
+- **max_cpu_usage_percent**: CPU usage limit as a percentage. This setting is only used if the optional dependency `cpulimit` is installed.
 - **sync_paths**: A dictionary of synchronization pairs with details for local and remote directories.
+- **rclone_options**: A dictionary of rclone options to be applied to all sync operations.
+- **bisync_options**: A dictionary of bisync-specific options.
+- **resync_options**: A dictionary of resync-specific options.
 
 #### Example Configuration
 
@@ -71,28 +61,52 @@ Here is a detailed explanation of the configuration file:
 local_base_path: /home/g/hidrive
 exclusion_rules_file: /home/g/hidrive/filter.txt
 log_directory: /home/g/hidrive/logs
-max_delete: 5
-max_lock: 15m
-log_level: INFO
 max_cpu_usage_percent: 100
 sync_paths:
   documents:
     local: "Docs"
     rclone_remote: "remoteName"
     remote: "RemoteDocs"
+rclone_options:
+  max_delete: 5
+  log_level: INFO
+  max_lock: 15m
+  retries: 3
+  low_level_retries: 10
+  compare: "size,modtime,checksum"
+  create_empty_src_dirs: null
+  check_access: null
+  track_renames: null
+bisync_options:
+  conflict_resolve: newer
+  conflict_loser: num
+  conflict_suffix: rc-conflict
+resync_options:
+  error_on_no_transfer: null
+  resync_mode: path1
 ```
 
 ### Important Notes
 
-- **sync_base_dir**: This should be an absolute path.
-- **filter_file**: This file should contain one pattern per line, which defines which files to exclude from sync. For me details refer to the rclone documenatation. Example:
+- **local_base_path**: This should be an absolute path.
+- **exclusion_rules_file**: This file should contain one pattern per line, which defines which files to exclude from sync. For more details refer to the rclone documenatation. Example:
 
 ```bash
 .*\.txt$
 .*\.doc$
 ```
 
-- **sync_dirs**: Each entry under this key represents a pair of directories to be synchronized. `local` is a subdirectory under `sync_base_dir`, and `remote` is the path on the remote storage.
+- **sync_paths**: Each entry under this key represents a pair of directories to be synchronized. `local` is a subdirectory under `local_base_path`, and `remote` is the path on the remote storage.
+- **rclone_options**, **bisync_options**, and **resync_options**: These allow you to customize various aspects of the sync operation. Refer to the rclone documentation for details on available options.
+- The `resync` option in `bisync_options` is ignored if set in the config file. Use the command-line argument `--resync` to trigger a resync operation.
+- Options that don't accept parameters (like `track_renames`, `create_empty_src_dirs`, etc.) should be set to `null` in the configuration file.
+
+The following settings are not configurable and are always used:
+
+- `resync`
+- `log-file`
+- `recover`
+- `resilient`
 
 ## Usage
 
@@ -104,11 +118,20 @@ python rclone_bisync.py [options]
 
 ### Command Line Options
 
-- **folder**: Specify a particular folder to sync (optional).
+- **folders**: Specify particular folders to sync as a comma-separated list (optional). If not provided, all sync paths will be synced.
+  Examples:
+  - To sync all folders: `python rclone_bisync.py`
+  - To sync specific folders: `python rclone_bisync.py documents,photos`
 - **-d, --dry-run**: Perform a dry run.
 - **--resync**: Force a resynchronization.
-- **--force-bisync**: Force a bisync. This option is only applicable if a specific folder is specified.
+- **--force-bisync**: Force a bisync. This option is only applicable if specific folders are specified.
 - **--console-log**: Enable logging to the console. Only wrapper messages are logged to the console, not the detailed log messages from rclone.
+
+Examples:
+
+- Dry run for all folders: `python rclone_bisync.py -d`
+- Resync specific folders: `python rclone_bisync.py documents,music --resync`
+- Force bisync with console logging: `python rclone_bisync.py photos --force-bisync --console-log`
 
 ## Logs
 
@@ -116,7 +139,7 @@ Logs are stored in the `logs` directory within the base directory specified in t
 
 ## Handling Errors
 
-If the script encounters critical errors, it logs them and may require manual intervention. Check the error log file `sync_error.log` for concise information and the main logfile `sync.log` for detailed information.
+If the script encounters critical errors, it logs them and may require manual intervention. Check the error log file `rclone-bisync-error.log` for concise information and the main logfile `rclone-bisync.log` for detailed information.
 
 ## Automating Synchronization with Systemd
 
@@ -125,6 +148,7 @@ To run the RClone BiSync script periodically using systemd, follow these steps:
 1. Copy the systemd service and timer files to the appropriate directory:
 
    ```bash
+   sudo cp systemd/rclone-bisync.service /etc/systemd/system/
    sudo cp systemd/rclone-bisync@.service /etc/systemd/system/
    sudo cp systemd/rclone-bisync@.timer /etc/systemd/system/
    ```
@@ -133,10 +157,26 @@ To run the RClone BiSync script periodically using systemd, follow these steps:
 
    ```bash
    sudo mkdir -p /etc/rclone-bisync
-   sudo cp systemd/timer.conf /etc/rclone-bisync/
+   sudo cp systemd/rclone-bisync.conf /etc/rclone-bisync/
    ```
 
-3. Edit the `/etc/rclone-bisync/timer.conf` file to set the desired intervals for each sync path.
+3. Edit the `/etc/rclone-bisync/rclone-bisync.conf` file to set the desired intervals for each sync path.
+
+   This configuration file allows you to customize the synchronization settings:
+
+   - `RCLONE_BISYNC_USER`: Specify the user who will run the rclone-bisync service.
+   - `RCLONE_BISYNC_PATHS`: A comma-separated list of paths/remotes to synchronize. Leave empty to sync all paths.
+   - `RCLONE_BISYNC_DEFAULT_ONBOOTSEC`: Default time to wait after boot before the first sync.
+   - `RCLONE_BISYNC_DEFAULT_ONUNITACTIVESEC`: Default time between subsequent syncs.
+
+   You can also set specific intervals for each path by uncommenting and modifying the path-specific settings:
+
+   ```
+   RCLONE_BISYNC_<path>_ONBOOTSEC: Time to wait after boot for this specific path.
+   RCLONE_BISYNC_<path>_ONUNITACTIVESEC: Time between syncs for this specific path.
+   ```
+
+   These path-specific settings will override the default intervals if set.
 
 4. Enable and start the timers for each sync path:
 

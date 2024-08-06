@@ -150,32 +150,11 @@ def load_config():
     # Load all rclone options from config
     rclone_options = config.get('rclone_options', {})
 
-    # Set default values for essential options if not provided
-    rclone_options.setdefault('max_delete', 5)
-    rclone_options.setdefault('log_level', 'INFO')
-    rclone_options.setdefault('max_lock', '15m')
-    rclone_options.setdefault('retries', 3)
-    rclone_options.setdefault('low_level_retries', 10)
-    rclone_options.setdefault('compare', 'size,modtime,checksum')
-    rclone_options.setdefault('create_empty_src_dirs', None)
-    rclone_options.setdefault('check_access', None)
-    rclone_options.setdefault('track_renames', None)
-    # rclone_options.setdefault('size_only', None)
-    # rclone_options.setdefault('fast_list', None)
-
     # Load bisync-specific options
     bisync_options = config.get('bisync_options', {})
-    bisync_options.setdefault('conflict_resolve', 'newer')
-    bisync_options.setdefault('conflict_loser', 'num')
-    bisync_options.setdefault('conflict_suffix', 'rc-conflict')
-    bisync_options.setdefault('track_renames', None)
-    bisync_options.setdefault('resync', None)
-    # bisync_options.setdefault('force', None)
 
     # Load resync-specific options
     resync_options = config.get('resync_options', {})
-    resync_options.setdefault('error_on_no_transfer', None)
-    resync_options.setdefault('resync_mode', 'path1')
 
 
 # Parse command line arguments
