@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/rclone-bisync/rclone-bisync.conf
-ExecStart=/usr/bin/rclone-bisync %i
+ExecStart=/usr/bin/rclone-bisync %i ${RCLONE_BISYNC_EXTRA_OPTIONS}
 User=${RCLONE_BISYNC_USER}
 LockPersonality=yes
 

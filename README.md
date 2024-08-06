@@ -110,6 +110,8 @@ The following settings are not configurable and are always used:
 
 ## Usage
 
+Before running any synchronization operations, it's strongly recommended to perform a dry run first to ensure everything is set up correctly and to preview the changes that would be made.
+
 Run the script using the following command:
 
 ```bash
@@ -119,19 +121,21 @@ python rclone_bisync.py [options]
 ### Command Line Options
 
 - **folders**: Specify particular folders to sync as a comma-separated list (optional). If not provided, all sync paths will be synced.
-  Examples:
-  - To sync all folders: `python rclone_bisync.py`
-  - To sync specific folders: `python rclone_bisync.py documents,photos`
-- **-d, --dry-run**: Perform a dry run.
+- **-d, --dry-run**: Perform a dry run. Use this option to safely test your configuration without making any actual changes.
 - **--resync**: Force a resynchronization.
 - **--force-bisync**: Force a bisync. This option is only applicable if specific folders are specified.
 - **--console-log**: Enable logging to the console. Only wrapper messages are logged to the console, not the detailed log messages from rclone.
 
 Examples:
 
-- Dry run for all folders: `python rclone_bisync.py -d`
+- Dry run for all folders (recommended for initial testing): `python rclone_bisync.py -d`
+- Dry run for specific folders: `python rclone_bisync.py documents,photos -d`
 - Resync specific folders: `python rclone_bisync.py documents,music --resync`
 - Force bisync with console logging: `python rclone_bisync.py photos --force-bisync --console-log`
+
+It's highly recommended to always start with a dry run, especially when setting up the script for the first time or making changes to your configuration. This allows you to review the proposed changes without risking any data loss or unintended modifications.
+
+Once you're confident that the dry run results are as expected, you can run the script without the `-d` or `--dry-run` option to perform the actual synchronization.
 
 ## Logs
 
