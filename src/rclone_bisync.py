@@ -285,6 +285,23 @@ def add_rclone_args(rclone_args, options):
             rclone_args.extend([f'--{key}', str(value)])
 
 
+def get_base_rclone_options():
+    return {
+        'retries': '3',
+        'low-level-retries': '10',
+        'exclude': [resync_status_file_name, bisync_status_file_name],
+        'log-file': os.path.join(log_directory, sync_log_file_name),
+        'log-level': log_level if not dry_run else 'INFO',
+        'max-delete': str(max_delete),
+        'recover': None,
+        'resilient': None,
+        'max-lock': max_lock,
+        'compare': opt_compare,
+        'create-empty-src-dirs': None,
+        'check-access': None,
+    }
+
+
 # Perform a bisync
 def bisync(remote_path, local_path):
     log_message(f"Bisync started for {local_path} at {
@@ -294,25 +311,14 @@ def bisync(remote_path, local_path):
         'rclone', 'bisync', remote_path, local_path,
     ]
 
-    # Add default options
-    default_options = {
-        'retries': '3',
-        'low-level-retries': '10',
-        'exclude': [resync_status_file_name, bisync_status_file_name],
-        'log-file': os.path.join(log_directory, sync_log_file_name),
-        'log-level': log_level if not dry_run else 'INFO',
+    # Get base options and add bisync-specific options
+    default_options = get_base_rclone_options()
+    default_options.update({
         'conflict-resolve': 'newer',
         'conflict-loser': 'num',
         'conflict-suffix': 'rc-conflict',
-        'max-delete': str(max_delete),
-        'recover': None,
-        'resilient': None,
-        'max-lock': max_lock,
-        'compare': opt_compare,
-        'create-empty-src-dirs': None,
         'track-renames': None,
-        'check-access': None,
-    }
+    })
 
     # Override default options with user-defined options
     combined_options = {**default_options, **rclone_options}
@@ -370,22 +376,11 @@ def resync(remote_path, local_path):
         '--resync',
     ]
 
-    # Add default options
-    default_options = {
-        'log-file': os.path.join(log_directory, sync_log_file_name),
-        'log-level': log_level if not dry_run else 'INFO',
-        'retries': '3',
-        'low-level-retries': '10',
+    # Get base options and add resync-specific options
+    default_options = get_base_rclone_options()
+    default_options.update({
         'error-on-no-transfer': None,
-        'exclude': [resync_status_file_name, bisync_status_file_name],
-        'max-delete': str(max_delete),
-        'recover': None,
-        'resilient': None,
-        'max-lock': max_lock,
-        'compare': opt_compare,
-        'create-empty-src-dirs': None,
-        'check-access': None,
-    }
+    })
 
     # Override default options with user-defined options
     combined_options = {**default_options, **rclone_options}
