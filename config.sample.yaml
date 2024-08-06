@@ -1,0 +1,47 @@
+# Base path for local files to be synced
+local_base_path: /path/to/your/local/base/directory
+
+# File containing rules for excluding certain files/directories from sync (optional)
+exclusion_rules_file: /path/to/your/filter.txt
+
+# Directory where log files will be stored
+log_directory: /path/to/your/log/directory
+
+# CPU usage limit as a percentage
+max_cpu_usage_percent: 100
+
+# Define the paths to be synchronized
+sync_paths:
+  example_sync:
+    local: example_folder
+    rclone_remote: your_remote
+    remote: path/on/remote/storage
+
+# Rclone options
+# Note: 'resync', 'log-file', 'recover', and 'resilient' options are set internally and cannot be overridden here
+rclone_options:
+  max_delete: 5
+  log_level: INFO
+  max_lock: 15m
+  retries: 3
+  low_level_retries: 10
+  compare: "size,modtime,checksum"
+  create_empty_src_dirs: null
+  check_access: null
+  track_renames: null
+  # size_only: null
+  # fast_list: null
+
+# Bisync-specific options
+bisync_options:
+  conflict_resolve: newer
+  conflict_loser: num
+  conflict_suffix: rc-conflict
+  track_renames: null
+  resync: null
+  force: null
+
+# Resync-specific options
+resync_options:
+  error_on_no_transfer: null
+  resync_mode: path1
