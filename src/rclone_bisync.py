@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import yaml
 import os
 import sys
@@ -6,10 +8,6 @@ import argparse
 from datetime import datetime
 import signal
 import atexit
-import logging
-
-# TODO: Add option for which side to prefer when doing a resync
-# TODO: Maybe try one of the speed-up options for bisync for gunther
 
 # Note: Send a SIGINT twice to force exit
 
@@ -127,7 +125,7 @@ def remove_pid_file():
 
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, max_delete_percentage, sync_paths, log_directory, max_cpu_usage_percent, log_level, max_lock
+    global local_base_path, exclusion_rules_file, max_delete, sync_paths, log_directory, max_cpu_usage_percent, log_level, max_lock
     if not os.path.exists(base_dir):
         os.makedirs(base_dir, exist_ok=True)
     if not os.path.exists(config_file):
@@ -138,7 +136,7 @@ def load_config():
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
     exclusion_rules_file = config.get('exclusion_rules_file')
-    max_delete_percentage = config.get('max_delete_percentage', 5)
+    max_delete = config.get('max_delete', 5)
     sync_paths = config.get('sync_paths', {})
     log_directory = config.get('log_directory')
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
@@ -197,6 +195,11 @@ def check_tools():
             print(f"{tool} could not be found, please install it.",
                   file=sys.stderr)
             sys.exit(1)
+
+
+# Add a new function to check if cpulimit is installed
+def is_cpulimit_installed():
+    return subprocess.call(['which', 'cpulimit'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
 # Ensure the rclone directory exists.
@@ -281,7 +284,7 @@ def bisync(remote_path, local_path):
         '--conflict-resolve', 'newer',
         '--conflict-loser', 'num',
         '--conflict-suffix', 'rc-conflict',
-        '--max-delete', str(max_delete_percentage),
+        '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
         '--max-lock', max_lock,
@@ -300,13 +303,16 @@ def bisync(remote_path, local_path):
     if force_operation:
         rclone_args.append('--force')
 
-    # Wrap the rclone command with cpulimit
-    # Limiting CPU usage to the specified limit
-    cpulimit_command = ['cpulimit', '--limit=' +
-                        str(max_cpu_usage_percent), '--']
-    cpulimit_command.extend(rclone_args)
+    # Only use cpulimit if it's installed
+    if is_cpulimit_installed():
+        cpulimit_command = ['cpulimit', '--limit=' +
+                            str(max_cpu_usage_percent), '--']
+        cpulimit_command.extend(rclone_args)
+        result = subprocess.run(
+            cpulimit_command, capture_output=True, text=True)
+    else:
+        result = subprocess.run(rclone_args, capture_output=True, text=True)
 
-    result = subprocess.run(cpulimit_command, capture_output=True, text=True)
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Bisync")
     log_message(f"Bisync status for {local_path}: {sync_result}")
@@ -343,7 +349,7 @@ def resync(remote_path, local_path):
         '--error-on-no-transfer',
         '--exclude', resync_status_file_name,
         '--exclude', bisync_status_file_name,
-        '--max-delete', str(max_delete_percentage),
+        '--max-delete', str(max_delete),
         '--recover',
         '--resilient',
         '--max-lock', max_lock,
@@ -359,12 +365,16 @@ def resync(remote_path, local_path):
     if dry_run:
         rclone_args.append('--dry-run')
 
-    # Limiting CPU usage to the specified limit
-    cpulimit_command = ['cpulimit', '--limit=' +
-                        str(max_cpu_usage_percent), '--']
-    cpulimit_command.extend(rclone_args)
+    # Only use cpulimit if it's installed
+    if is_cpulimit_installed():
+        cpulimit_command = ['cpulimit', '--limit=' +
+                            str(max_cpu_usage_percent), '--']
+        cpulimit_command.extend(rclone_args)
+        result = subprocess.run(
+            cpulimit_command, capture_output=True, text=True)
+    else:
+        result = subprocess.run(rclone_args, capture_output=True, text=True)
 
-    result = subprocess.run(cpulimit_command, capture_output=True, text=True)
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Resync")
     log_message(f"Resync status for {local_path}: {sync_result}")

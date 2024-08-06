@@ -1,0 +1,12 @@
+   [Unit]
+   Description=Rclone Bisync Service for %i
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=oneshot
+   ExecStart=/usr/bin/rclone-bisync %i
+   User=your_username
+
+   [Install]
+   WantedBy=multi-user.target

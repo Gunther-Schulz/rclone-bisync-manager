@@ -31,6 +31,8 @@ These settings are designed to handle conflicts gracefully, improve reliability,
 
 Ensure you have `rclone` installed on your system along with other required tools like `mkdir`, `grep`, `awk`, `find`, and `md5sum`. These tools are necessary for the script to function correctly.
 
+Optional: Install `cpulimit` if you want to use the CPU usage limiting feature. If `cpulimit` is not installed, the `max_cpu_usage_percent` setting in the configuration will be ignored.
+
 ## Installation
 
 1. Clone the repository or download the script to your local machine.
@@ -58,7 +60,7 @@ Here is a detailed explanation of the configuration file:
 - **local_base_path**: The base directory on your local machine where synchronization folders are located.
 - **exclusion_rules_file**: Path to a file containing patterns to exclude from synchronization.
 - **log_directory**: Directory where log files will be stored.
-- **max_cpu_usage_percent**: CPU usage limit as a percentage.
+- **max_cpu_usage_percent**: CPU usage limit as a percentage. This setting is only used if the optional dependency `cpulimit` is installed. If `cpulimit` is not available, this setting will be ignored.
 - **max_lock**: Maximum time to hold the sync lock, preventing concurrent syncs.
 - **log_level**: Default log level (can be DEBUG, INFO, NOTICE, ERROR, or FATAL).
 - **sync_paths**: A dictionary of synchronization pairs with details for local and remote directories.
@@ -66,13 +68,13 @@ Here is a detailed explanation of the configuration file:
 #### Example Configuration
 
 ```yaml
-max_delete_percentage: 5
 local_base_path: /home/g/hidrive
 exclusion_rules_file: /home/g/hidrive/filter.txt
 log_directory: /home/g/hidrive/logs
-max_cpu_usage_percent: 100
+max_delete: 5
 max_lock: 15m
 log_level: INFO
+max_cpu_usage_percent: 100
 sync_paths:
   documents:
     local: "Docs"
@@ -120,79 +122,45 @@ If the script encounters critical errors, it logs them and may require manual in
 
 To run the RClone BiSync script periodically using systemd, follow these steps:
 
-1. **Create a service file**:
-   Create a new file `/etc/systemd/system/rclone-bisync.service` with the following content:
+1. Copy the systemd service and timer files to the appropriate directory:
 
-   ```ini
-   [Unit]
-   Description=Rclone Bisync Service
-   After=network-online.target
-   Wants=network-online.target
-
-   [Service]
-   Type=oneshot
-   ExecStart=/usr/bin/rclone-bisync
-   User=your_username
-
-   [Install]
-   WantedBy=multi-user.target
+   ```bash
+   sudo cp systemd/rclone-bisync@.service /etc/systemd/system/
+   sudo cp systemd/rclone-bisync@.timer /etc/systemd/system/
    ```
 
-   Replace `your_username` with the user you want the script to run as.
+2. Create the configuration directory and copy the timer configuration file:
 
-2. **Create a timer file**:
-   Create a new file `/etc/systemd/system/rclone-bisync.timer` with the following content:
-
-   ```ini
-   [Unit]
-   Description=Run Rclone Bisync periodically
-
-   [Timer]
-   OnBootSec=${RCLONE_BISYNC_ONBOOTSEC:-15min}
-   OnUnitActiveSec=${RCLONE_BISYNC_ONUNITACTIVESEC:-1h}
-   Persistent=true
-
-   [Install]
-   WantedBy=timers.target
+   ```bash
+   sudo mkdir -p /etc/rclone-bisync
+   sudo cp systemd/timer.conf /etc/rclone-bisync/
    ```
 
-   This timer will use values from the configuration file, defaulting to 15 minutes after boot and then every hour if not specified.
+3. Edit the `/etc/rclone-bisync/timer.conf` file to set the desired intervals for each sync path.
 
-3. **Configure the timer settings**:
-   Edit the configuration file located at `/etc/rclone-bisync/timer.conf`:
-
-   ```ini
-   RCLONE_BISYNC_ONBOOTSEC=15min
-   RCLONE_BISYNC_ONUNITACTIVESEC=1h
-   ```
-
-   Adjust these values as needed.
-
-4. **Enable and start the timer**:
-   Run the following commands to enable and start the timer:
+4. Enable and start the timers for each sync path:
 
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable rclone-bisync.timer
-   sudo systemctl start rclone-bisync.timer
+   sudo systemctl enable --now rclone-bisync@documents.timer
+   sudo systemctl enable --now rclone-bisync@photos.timer
+   sudo systemctl enable --now rclone-bisync@music.timer
    ```
 
-5. **Check the status of the timer**:
-   You can check the status of your timer with:
+5. Check the status of the timers:
 
    ```bash
-   sudo systemctl status rclone-bisync.timer
+   sudo systemctl status rclone-bisync@documents.timer
    ```
 
-6. **Apply configuration changes**:
-   If you modify the `/etc/rclone-bisync/timer.conf` file, reload the systemd daemon and restart the timer:
+6. If you modify the timer configuration, reload the systemd daemon and restart the timers:
 
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl restart rclone-bisync.timer
+   sudo systemctl restart rclone-bisync@documents.timer
    ```
 
-This setup will run your rclone bisync script periodically using systemd. The use of a separate configuration file allows you to easily adjust the timing without directly editing systemd files.
+This setup will run your rclone bisync script periodically for each sync path entry using systemd, with customizable intervals for each entry.
 
 ## Contributing
 
