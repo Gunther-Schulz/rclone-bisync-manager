@@ -18,7 +18,7 @@ os.environ['LC_ALL'] = 'C.UTF-8'
 dry_run = False
 force_resync = False
 console_log = False
-specific_folder = None
+specific_folders = None
 
 # Initialize variables
 base_dir = os.path.join(os.environ['HOME'], '.config', 'rclone-bisync')
@@ -147,43 +147,46 @@ def load_config():
 # Parse command line arguments
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('folder', nargs='?', default=None,
-                        help='Specify a folder to sync (optional).')
+    parser.add_argument('folders', nargs='?', default=None,
+                        help='Specify folders to sync as a comma-separated list (optional).')
     parser.add_argument('-d', '--dry-run', action='store_true',
                         help='Perform a dry run without making any changes.')
     parser.add_argument('--resync', action='store_true',
                         help='Force a resynchronization, ignoring previous sync status.')
     parser.add_argument('--force-bisync', action='store_true',
-                        help='Force the operation without confirmation, only applicable if a specific folder is specified.')
+                        help='Force the operation without confirmation, only applicable if specific folders are specified.')
     parser.add_argument('--console-log', action='store_true',
                         help='Print log messages to the console in addition to the log files.')
     args, unknown = parser.parse_known_args()
-    global dry_run, force_resync, console_log, specific_folder, force_operation
+    global dry_run, force_resync, console_log, specific_folders, force_operation
     dry_run = args.dry_run
     force_resync = args.resync
     console_log = args.console_log
-    specific_folder = args.folder
+    specific_folders = args.folders.split(',') if args.folders else None
     force_operation = args.force_bisync
 
-    if specific_folder:
-        if specific_folder not in sync_paths:
-            print(f"ERROR: The specified folder '{
-                  specific_folder}' is not configured in the sync directories. Please check the configuration file at {config_file}.")
-            sys.exit(1)
+    if specific_folders:
+        for folder in specific_folders:
+            if folder not in sync_paths:
+                print(f"ERROR: The specified folder '{
+                      folder}' is not configured in the sync directories. Please check the configuration file at {config_file}.")
+                sys.exit(1)
 
-    if force_operation and specific_folder:
-        local_path = os.path.join(
-            local_base_path, sync_paths[specific_folder]['local'])
-        remote_path = f"{sync_paths[specific_folder]['rclone_remote']}:{
-            sync_paths[specific_folder]['remote']}"
-        confirmation = input(f"WARNING: You are about to force a bisync on '{
-                             local_path}' and '{remote_path}'. Are you sure? (yes/no): ")
+    if force_operation and specific_folders:
+        for folder in specific_folders:
+            local_path = os.path.join(
+                local_base_path, sync_paths[folder]['local'])
+            remote_path = f"{sync_paths[folder]['rclone_remote']}:{
+                sync_paths[folder]['remote']}"
+            print(f"WARNING: You are about to force a bisync on '{
+                  local_path}' and '{remote_path}'.")
+        confirmation = input("Are you sure you want to proceed? (yes/no): ")
         if confirmation.lower() != 'yes':
             print("Operation aborted by the user.")
             sys.exit(0)
-    elif force_operation and not specific_folder:
+    elif force_operation and not specific_folders:
         print(
-            "ERROR: --force-bisync can only be used when a specific sync_dir is specified.")
+            "ERROR: --force-bisync can only be used when specific sync_dirs are specified.")
         sys.exit(1)
 
 
@@ -439,19 +442,23 @@ def check_remote_rclone_test(remote_path):
 
 # Perform the sync operations
 def perform_sync_operations():
-    if specific_folder and specific_folder not in sync_paths:
-        log_error(f"Folder '{
-                  specific_folder}' is not configured in sync directories. Make sure it is in the list of sync_dirs in the configuration file at {config_file}.")
-        return
+    if specific_folders:
+        folders_to_sync = specific_folders
+    else:
+        folders_to_sync = sync_paths.keys()
 
-    for key, value in sync_paths.items():
-        if specific_folder and specific_folder != key:
-            continue  # Skip folders not specified by the user
+    for key in folders_to_sync:
+        if key not in sync_paths:
+            log_error(f"Folder '{
+                      key}' is not configured in sync directories. Make sure it is in the list of sync_dirs in the configuration file at {config_file}.")
+            continue
+
+        value = sync_paths[key]
         local_path = os.path.join(local_base_path, value['local'])
         remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
         if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
-            return
+            continue
 
         ensure_local_directory(local_path)
         if resync(remote_path, local_path) == "COMPLETED":

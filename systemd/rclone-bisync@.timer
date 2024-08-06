@@ -3,10 +3,8 @@ Description=Run Rclone Bisync for %i periodically
 
 [Timer]
 EnvironmentFile=/etc/rclone-bisync/rclone-bisync.conf
-OnBootSec=${RCLONE_BISYNC_DEFAULT_ONBOOTSEC}
-OnUnitActiveSec=${RCLONE_BISYNC_DEFAULT_ONUNITACTIVESEC}
-OnBootSec=${RCLONE_BISYNC_%i_ONBOOTSEC}
-OnUnitActiveSec=${RCLONE_BISYNC_%i_ONUNITACTIVESEC}
+OnBootSec=${RCLONE_BISYNC_%i_ONBOOTSEC:-${RCLONE_BISYNC_DEFAULT_ONBOOTSEC}}
+OnUnitActiveSec=${RCLONE_BISYNC_%i_ONUNITACTIVESEC:-${RCLONE_BISYNC_DEFAULT_ONUNITACTIVESEC}}
 Persistent=true
 
 [Install]
