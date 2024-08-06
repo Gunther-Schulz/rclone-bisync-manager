@@ -29,8 +29,6 @@ bisync_status_file_name = ".bisync_status"
 sync_log_file_name = "sync.log"
 sync_error_log_file_name = "sync_error.log"
 rclone_test_file_name = "RCLONE_TEST"
-opt_max_lock = "15m"
-opt_compare = "size,modtime,checksum"
 
 exclude_patterns = [
     '*.tmp',
@@ -125,7 +123,7 @@ def remove_pid_file():
 
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, max_delete, sync_paths, log_directory, max_cpu_usage_percent, log_level, max_lock, rclone_options
+    global local_base_path, exclusion_rules_file, sync_paths, log_directory, max_cpu_usage_percent, rclone_options, bisync_options, resync_options
     if not os.path.exists(base_dir):
         os.makedirs(base_dir, exist_ok=True)
     if not os.path.exists(config_file):
@@ -136,13 +134,33 @@ def load_config():
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
     exclusion_rules_file = config.get('exclusion_rules_file')
-    max_delete = config.get('max_delete', 5)
     sync_paths = config.get('sync_paths', {})
     log_directory = config.get('log_directory')
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
-    log_level = config.get('log_level', 'INFO')
-    max_lock = config.get('max_lock', '15m')
+
+    # Load all rclone options from config
     rclone_options = config.get('rclone_options', {})
+
+    # Set default values for essential options if not provided
+    rclone_options.setdefault('max_delete', 5)
+    rclone_options.setdefault('log_level', 'INFO')
+    rclone_options.setdefault('max_lock', '15m')
+    rclone_options.setdefault('retries', 3)
+    rclone_options.setdefault('low_level_retries', 10)
+    rclone_options.setdefault('compare', 'size,modtime,checksum')
+    rclone_options.setdefault('create_empty_src_dirs', False)
+    rclone_options.setdefault('check_access', False)
+
+    # Load bisync-specific options
+    bisync_options = config.get('bisync_options', {})
+    bisync_options.setdefault('conflict_resolve', 'newer')
+    bisync_options.setdefault('conflict_loser', 'num')
+    bisync_options.setdefault('conflict_suffix', 'rc-conflict')
+    bisync_options.setdefault('track_renames', True)
+
+    # Load resync-specific options
+    resync_options = config.get('resync_options', {})
+    resync_options.setdefault('error_on_no_transfer', True)
 
 
 # Parse command line arguments
@@ -274,32 +292,45 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
 
 def add_rclone_args(rclone_args, options):
     for key, value in options.items():
+        option_key = key.replace('_', '-')
         if value is None:
-            rclone_args.append(f'--{key}')
-        elif value is True:
-            rclone_args.append(f'--{key}')
+            rclone_args.append(f'--{option_key}')
+        elif isinstance(value, bool):
+            if value:
+                rclone_args.append(f'--{option_key}')
         elif isinstance(value, list):
             for item in value:
-                rclone_args.extend([f'--{key}', str(item)])
+                rclone_args.extend([f'--{option_key}', str(item)])
         else:
-            rclone_args.extend([f'--{key}', str(value)])
+            rclone_args.extend([f'--{option_key}', str(value)])
 
 
 def get_base_rclone_options():
-    return {
-        'retries': '3',
-        'low-level-retries': '10',
+    options = {
         'exclude': [resync_status_file_name, bisync_status_file_name],
         'log-file': os.path.join(log_directory, sync_log_file_name),
-        'log-level': log_level if not dry_run else 'INFO',
-        'max-delete': str(max_delete),
+        'log-level': rclone_options['log_level'] if not dry_run else 'INFO',
         'recover': None,
         'resilient': None,
-        'max-lock': max_lock,
-        'compare': opt_compare,
-        'create-empty-src-dirs': None,
-        'check-access': None,
     }
+
+    # Add all options from rclone_options
+    for key, value in rclone_options.items():
+        if key == 'log_level':
+            continue  # Already handled above
+
+        # Convert snake_case to kebab-case for rclone options
+        option_key = key.replace('_', '-')
+
+        if isinstance(value, bool):
+            if value:
+                # For boolean options, we just include the key if True
+                options[option_key] = None
+        elif value is not None:
+            # Convert all other values to strings
+            options[option_key] = str(value)
+
+    return options
 
 
 # Perform a bisync
@@ -313,12 +344,7 @@ def bisync(remote_path, local_path):
 
     # Get base options and add bisync-specific options
     default_options = get_base_rclone_options()
-    default_options.update({
-        'conflict-resolve': 'newer',
-        'conflict-loser': 'num',
-        'conflict-suffix': 'rc-conflict',
-        'track-renames': None,
-    })
+    default_options.update(bisync_options)
 
     # Override default options with user-defined options
     combined_options = {**default_options, **rclone_options}
@@ -378,9 +404,7 @@ def resync(remote_path, local_path):
 
     # Get base options and add resync-specific options
     default_options = get_base_rclone_options()
-    default_options.update({
-        'error-on-no-transfer': None,
-    })
+    default_options.update(resync_options)
 
     # Override default options with user-defined options
     combined_options = {**default_options, **rclone_options}

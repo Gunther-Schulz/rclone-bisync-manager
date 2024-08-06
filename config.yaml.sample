@@ -1,20 +1,11 @@
 # Base path for local files to be synced
 local_base_path: /path/to/your/local/base/directory
 
-# File containing rules for excluding certain files/directories from sync. This follows the format that rclone expects
+# File containing rules for excluding certain files/directories from sync. This follows the format that rclone expects. If this file is changed, the next run will be a resync operation
 exclusion_rules_file: /path/to/your/filter.txt
 
 # Directory where log files will be stored
 log_directory: /path/to/your/log/directory
-
-# Maximum percentage of files that can be deleted in a single sync operation. This is a safety measure to prevent data loss
-max_delete: 5
-
-# Maximum time to hold the sync lock, preventing concurrent syncs
-max_lock: 15m
-
-# Default log level (can be DEBUG, INFO, NOTICE, ERROR, or FATAL)
-log_level: INFO
 
 # Optional: CPU usage limit as a percentage. This will only have an effect if 'cpulimit' is installed
 max_cpu_usage_percent: 100
@@ -25,9 +16,37 @@ sync_paths:
     local: example_folder # Local directory name (relative to local_base_path)
     rclone_remote: your_remote # Name of the rclone remote to use
     remote: path/on/remote/storage # Path on the remote storage
-
   # You can add more sync paths as needed:
   # another_sync:
   #   local: another_folder
   #   rclone_remote: another_remote
   #   remote: another/path/on/remote
+
+# Rclone options
+rclone_options:
+  max_delete: 5
+  log_level: INFO
+  max_lock: 15m
+  retries: 3
+  low_level_retries: 10
+  compare: "size,modtime,checksum"
+  create_empty_src_dirs: false
+  check_access: false
+  track_renames: true
+  size_only: false
+  # Add any additional rclone options here
+
+# Bisync-specific options
+bisync_options:
+  conflict_resolve: newer
+  conflict_loser: num
+  conflict_suffix: rc-conflict
+  track_renames: true
+  # Add any additional bisync-specific options here
+  custom_bisync_option: value
+
+# Resync-specific options
+resync_options:
+  error_on_no_transfer: true
+  # Add any additional resync-specific options here
+  custom_resync_option: value
