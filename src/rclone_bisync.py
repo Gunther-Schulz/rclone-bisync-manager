@@ -719,6 +719,7 @@ def generate_status_report():
             "last_sync": last_sync,
             "dry_run": dry_run or value.get('dry_run', False),
             "is_active": value.get('active', True),
+            "is_currently_syncing": key == currently_syncing,
         }
 
     return json.dumps(status, indent=2)
