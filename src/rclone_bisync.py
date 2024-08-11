@@ -122,15 +122,18 @@ def load_config():
     # Set default log_file_path
     default_log_dir = os.path.join(os.path.expanduser(
         '~'), '.cache', 'rclone', 'bisync', 'logs')
-    log_file_path = config.get('log_file_path', os.path.join(
+
+    log_path = config.get('log_path', os.path.join(
         default_log_dir, sync_log_file_name))
 
     # Ensure log directory exists
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    os.makedirs(log_path, exist_ok=True)
+
+    log_file_path = os.path.join(log_path, sync_log_file_name)
 
     # Set error log file path
     error_log_file_path = os.path.join(
-        os.path.dirname(log_file_path), sync_error_log_file_name)
+        log_path, sync_error_log_file_name)
 
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
     rclone_options = config.get('rclone_options', {})
