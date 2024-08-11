@@ -1,0 +1,29 @@
+[Unit]
+Description=RClone BiSync Manager Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/rclone-bisync-manager.py daemon start
+ExecStop=/usr/bin/rclone-bisync-manager.py daemon stop
+Restart=on-failure
+StandardOutput=append:/path/to/your/rclone-bisync-manager.log
+StandardError=append:/path/to/your/rclone-bisync-manager-error.log
+
+[Install]
+WantedBy=default.target
+
+TODO for PKGBUILD:
+
+we actually cannot do the blow, beacsue we dont know where the user would like to write the log
+add to the service file:
+StandardOutput=append:/path/to/your/rclone-bisync-manager.log
+StandardError=append:/path/to/your/rclone-bisync-manager-error.log
+
+For system services (those in /etc/systemd/system/):
+Output goes to the systemd journal by default.
+You can view this output using journalctl -u service-name.service.
+For user services (those in ~/.config/systemd/user/):
+Output also goes to the systemd journal, but it's stored in the user's journal.
+You can view this output using journalctl --user-unit service-name.service.
+The systemd journal is a centralized logging system that collects and stores logging data. It's designed to be efficient and provide structured logging capabilities.
+If you want to see the output in real-time, you can use:

@@ -1,45 +1,52 @@
-# RClone BiSync Script
+# RClone BiSync Manager
 
-This Python script provides a robust solution for bidirectional synchronization of files between a local directory and a remote storage supported by RClone. It includes features such as dry runs, forced resynchronization, detailed logging, and daemon mode for periodic syncing.
+RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files between local directories and remote storage supported by RClone. This Python script runs in the background, providing continuous synchronization with features such as periodic syncing, detailed logging, and real-time status reporting.
 
-## Features
+## TODO
 
-- **Bidirectional Synchronization**: Synchronize files between local and remote directories.
-- **Dry Run Option**: Test synchronization without making actual changes.
-- **Detailed Logging**: Log all operations, with separate logs for errors.
-- **Configurable**: Configuration through a YAML file.
-- **Signal Handling**: Graceful shutdown on SIGINT (CTRL-C).
-- **Daemon Mode**: Run the script as a background process for periodic syncing.
-- **Periodic Sync**: Set individual sync intervals for each sync path.
+- Check if all config changes are reloaded on the fly
+- Check command line options if they still work
+
+## Key Features
+
+- **Daemon-based Operation**: Runs continuously in the background, managing synchronization tasks without user intervention.
+- **Periodic Synchronization**: Automatically syncs files at user-defined intervals for each sync path.
+- **Real-time Status Reporting**: Provides up-to-date information on sync operations and daemon status.
+- **Dynamic Configuration Reloading**: Automatically detects and applies configuration changes without restarting the daemon.
+- **Graceful Shutdown Handling**: Ensures clean termination of sync operations when stopping the daemon.
+
+Additional features include:
+
+- Bidirectional Synchronization between local and remote directories
+- Dry Run Option for testing without making actual changes
+- Detailed Logging with separate error logs
+- CPU Usage Limiting during sync operations (requires cpulimit)
+- Flexible RClone Options for customizing sync behavior
 
 ## Opinionated Settings
 
-To keep the script running as robustly as possible, this script always uses the following settings:
+To ensure robust operation, RClone BiSync Manager always uses the following RClone settings:
 
 - `--recover`: Attempts to recover from a failed sync.
 - `--resilient`: Continues the sync even if some files can't be transferred.
 
 ## Prerequisites
 
-Ensure you have `rclone` installed on your system along with other required tools like `mkdir`, `grep`, `awk`, `find`, and `md5sum`. These tools are necessary for the script to function correctly.
-
-Optional: Install `cpulimit` if you want to use the CPU usage limiting feature. If `cpulimit` is not installed, the `max_cpu_usage_percent` setting in the configuration will be ignored.
-
-For daemon mode, install the `python-daemon` package:
-
-```bash
-pip install python-daemon
-```
+- `rclone` (required)
+- `mkdir`, `grep`, `awk`, `find`, `md5sum` (required)
+- `cpulimit` (optional, for CPU usage limiting)
+- Python 3.6+
+- Required Python packages (install via `pip install -r requirements.txt`):
+  - pyyaml
+  - python-daemon
 
 ## Installation
-
-### From Git Repository
 
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/yourusername/rclone-bisync.git
-   cd rclone-bisync
+   git clone https://github.com/yourusername/rclone-bisync-manager.git
+   cd rclone-bisync-manager
    ```
 
 2. Install required Python packages:
@@ -48,105 +55,103 @@ pip install python-daemon
    pip install -r requirements.txt
    ```
 
-3. Make the script executable:
+3. Copy the example configuration:
 
    ```bash
-   chmod +x rclone_bisync.py
+   mkdir -p ~/.config/rclone_bisync_manager
+   cp config/config.yaml.example ~/.config/rclone_bisync_manager/config.yaml
    ```
 
-4. Create the configuration directory:
+4. Edit the configuration file to suit your needs:
 
    ```bash
-   mkdir -p ~/.config/rclone_bisync
+   nano ~/.config/rclone_bisync_manager/config.yaml
    ```
-
-5. Copy the example configuration:
-
-   ```bash
-   cp config/config.yaml.example ~/.config/rclone_bisync/config.yaml
-   ```
-
-6. Edit the configuration file to suit your needs:
-   ```bash
-   nano ~/.config/rclone_bisync/config.yaml
-   ```
-
-### From AUR (Arch User Repository)
-
-If you're using an Arch-based system, you can install rclone-bisync from the AUR:
-
-1. Use your preferred AUR helper. For example, with `yay`:
-
-   ```bash
-   yay -S rclone-bisync
-   ```
-
-2. After installation, copy the example configuration:
-
-   ```bash
-   mkdir -p ~/.config/rclone-bisync
-   cp /etc/rclone-bisync/config.yaml.example ~/.config/rclone-bisync/config.yaml
-   ```
-
-3. Edit the configuration file:
-   ```bash
-   nano ~/.config/rclone-bisync/config.yaml
-   ```
-
-## Configuration
-
-The configuration file (`~/.config/rclone_bisync/config.yaml`) contains all necessary settings for the synchronization process. Refer to the comments in the example configuration file for detailed explanations of each option.
 
 ## Usage
 
-### Manual Execution
+RClone BiSync Manager can operate in two modes: daemon mode and sync mode.
 
-Run the script using the following command:
+### Global Options
+
+These options can be used with any command:
+
+- **-d, --dry-run**: Perform a dry run without making actual changes.
+- **--console-log**: Enable logging to the console in addition to log files.
+
+### Daemon Mode
+
+To manage the RClone BiSync Manager daemon:
 
 ```bash
-./rclone_bisync.py [options]
+./rclone_bisync_manager.py daemon [start|stop|status]
 ```
-
-### Command Line Options
-
-- **folders**: Specify particular folders to sync as a comma-separated list (optional). If not provided, all sync paths will be synced.
-- **-d, --dry-run**: Perform a dry run. Use this option to safely test your configuration without making any actual changes.
-- **--resync**: Force a resynchronization.
-- **--force-bisync**: Force a bisync. This option is only applicable if specific folders are specified.
-- **--console-log**: Enable logging to the console. Only wrapper messages are logged to the console, not the detailed log messages from rclone.
-- **--daemon**: Run the script in daemon mode for periodic syncing.
-- **--stop**: Stop the daemon if it's running.
 
 Examples:
 
-- Dry run for all folders (recommended for initial testing): `./rclone_bisync.py -d`
-- Dry run for specific folders: `./rclone_bisync.py documents,photos -d`
-- Resync specific folders: `./rclone_bisync.py documents,music --resync`
-- Force bisync with console logging: `./rclone_bisync.py photos --force-bisync --console-log`
-- Run in daemon mode: `./rclone_bisync.py --daemon`
-- Stop the daemon: `./rclone_bisync.py --stop`
+- Start the daemon: `./rclone_bisync_manager.py daemon start`
+- Stop the daemon: `./rclone_bisync_manager.py daemon stop`
+- Get daemon status: `./rclone_bisync_manager.py daemon status`
+- Start daemon in dry-run mode: `./rclone_bisync_manager.py -d daemon start`
 
-It's highly recommended to always start with a dry run, especially when setting up the script for the first time or making changes to your configuration. This allows you to review the proposed changes without risking any data loss or unintended modifications.
+### Sync Mode
 
-Once you're confident that the dry run results are as expected, you can run the script without the `-d` or `--dry-run` option to perform the actual synchronization.
+In sync mode, the script performs a single sync operation and then exits:
+
+```bash
+./rclone_bisync_manager.py sync [folders] [options]
+```
+
+Options:
+
+- **folders**: Specify particular folders to sync (optional, syncs all if not specified).
+- **--resync**: Force a resynchronization of specified folders.
+- **--force-bisync**: Force a bisync operation.
+
+Examples:
+
+- Sync all folders: `./rclone_bisync_manager.py sync`
+- Sync specific folders: `./rclone_bisync_manager.py sync folder1 folder2`
+- Force resync of a folder: `./rclone_bisync_manager.py sync folder1 --resync`
+- Dry run for all folders: `./rclone_bisync_manager.py -d sync`
+- Force bisync with console logging: `./rclone_bisync_manager.py sync folder1 --force-bisync --console-log`
+
+## Configuration
+
+The configuration file (`~/.config/rclone_bisync_manager/config.yaml`) contains all necessary settings for the synchronization process. Key configuration options include:
+
+- `local_base_path`: Base path for local files to be synced
+- `exclusion_rules_file`: File containing rules for excluding files/directories from sync
+- `max_cpu_usage_percent`: CPU usage limit as a percentage
+- `sync_paths`: Define the paths to be synchronized
+- `rclone_options`: Customize rclone options
+- `bisync_options`: Customize bisync-specific options
+- `resync_options`: Customize resync-specific options
+
+Refer to the comments in the example configuration file for detailed explanations of each option.
 
 ## Logs
 
-Logs are stored in the directory specified in your configuration file. Check `rclone-bisync-error.log` for errors and `rclone-bisync.log` for detailed information.
+Logs are stored in the default log directory:
 
-## Handling Errors
+```
+~/.local/state/rclone-bisync-manager/logs/
+```
 
-If the script encounters critical errors, it logs them and may require manual intervention. Check the error log file `rclone-bisync-error.log` for concise information and the main logfile `rclone-bisync.log` for detailed information.
+This directory contains two main log files:
+
+- `rclone-bisync-manager.log`: Contains detailed information about sync operations.
+- `rclone-bisync-manager-error.log`: Contains error messages and warnings.
 
 ## Automating Synchronization with Systemd
 
-To run the RClone BiSync script as a systemd user service:
+To run the RClone BiSync Manager as a systemd user service:
 
 1. Copy the provided service file to your user systemd directory:
 
    ```bash
    mkdir -p ~/.config/systemd/user/
-   cp rclone-bisync.service ~/.config/systemd/user/
+   cp rclone-bisync-manager.service ~/.config/systemd/user/
    ```
 
 2. Reload the systemd daemon:
@@ -158,30 +163,31 @@ To run the RClone BiSync script as a systemd user service:
 3. Start the service:
 
    ```bash
-   systemctl --user start rclone-bisync.service
+   systemctl --user start rclone-bisync-manager.service
    ```
 
 4. Enable the service to start on login:
 
    ```bash
-   systemctl --user enable rclone-bisync.service
+   systemctl --user enable rclone-bisync-manager.service
    ```
 
 5. To stop the service:
 
    ```bash
-   systemctl --user stop rclone-bisync.service
+   systemctl --user stop rclone-bisync-manager.service
    ```
 
 6. To check the status:
 
    ```bash
-   systemctl --user status rclone-bisync.service
+   systemctl --user status rclone-bisync-manager.service
    ```
 
 7. To view logs:
+
    ```bash
-   journalctl --user -u rclone-bisync.service
+   journalctl --user -u rclone-bisync-manager.service
    ```
 
 Note: To run the service when not logged in, enable lingering:

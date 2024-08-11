@@ -7,74 +7,102 @@ import subprocess
 import argparse
 from datetime import datetime, timedelta
 import signal
-import atexit
 import time
 import daemon
-import lockfile
 import json
 import socket
 import threading
+import heapq
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+from queue import Queue
+from threading import Lock
 
 # Note: Send a SIGINT twice to force exit
 
 # Set the locale to UTF-8 to handle special characters correctly
 os.environ['LC_ALL'] = 'C.UTF-8'
 
-# Default arguments
+# Global variables for the command line options
 dry_run = False
 force_resync = False
 console_log = False
 specific_folders = None
 
-# Initialize variables
-
+# Default log directory
+default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
+    '~/.local/state')), 'rclone-bisync-manager', 'logs')
+# Log file path
+log_file_path = os.path.join(default_log_dir, 'rclone-bisync-manager.log')
+# Error log file path
+error_log_file_path = os.path.join(
+    default_log_dir, 'rclone-bisync-manager-error.log')
+# Global variables for the PID file
 pid_file = os.path.join(os.environ.get(
-    'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync.pid')
+    'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync-manager.pid')
+# Global variables for the config file
 config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
-    '~/.config')), 'rclone-bisync', 'config.yaml')
+    '~/.config')), 'rclone-bisync-manager', 'config.yaml')
+# Global variables for the cache directory
 cache_dir = os.path.join(os.environ.get(
-    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync')
+    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
+# Global variables for the resync status file
 resync_status_file_name = ".resync_status"
+# Global variables for the bisync status file
 bisync_status_file_name = ".bisync_status"
-sync_log_file_name = "rclone-bisync.log"
-sync_error_log_file_name = "rclone-bisync-error.log"
+# Global variables for the log files
+sync_log_file_name = "rclone-bisync-manager.log"
+# Global variables for the error log file
+sync_error_log_file_name = "rclone-bisync-manager-error.log"
+# Global variables for the rclone test file.
 rclone_test_file_name = "RCLONE_TEST"
-
 # Global counter for CTRL-C presses
 ctrl_c_presses = 0
-
 # Global list to keep track of subprocesses
 subprocesses = []
-
-# New global variables
+# Global variables for the daemon mode
 daemon_mode = False
+# Global variables for the sync intervals
 sync_intervals = {}
-last_sync_times = {}
-
-# Global variable to indicate whether the daemon should continue running
-running = True
-
+# Global variables for the last sync times
+last_sync_times: Dict[str, datetime] = {}
+# Global variable for the script start time
+script_start_time = datetime.now()
 # Global variable to track the last modification time of the config file
 last_config_mtime = 0
-
-# Handle CTRL-C
+# Global variable for the lock file
+lock_file = None
+# Global variables for the sync queue
+sync_queue = Queue()
+# Global variables for the sync queue
+queued_paths = set()
+# Global variables for the sync lock
+sync_lock = Lock()
+# Global variables for the currently syncing path
+currently_syncing = None
+# Global variables for the currently syncing path
+current_sync_start_time = None
+# Global variable to indicate whether the daemon should continue running
+running = True
+# Global variable to indicate whether the daemon is shutting down
+shutting_down = False
+# Global variable to indicate whether the daemon has completed shutting down
+shutdown_complete = False
 
 
 def signal_handler(signum, frame):
-    global ctrl_c_presses, running
+    global ctrl_c_presses, shutting_down
     ctrl_c_presses += 1
 
     if ctrl_c_presses > 1:
+        log_message('Multiple SIGINT detected. Forcing exit.')
         print('Multiple CTRL-C detected. Forcing exit.')
         os._exit(1)  # Force exit immediately
 
-    print('SIGINT or CTRL-C detected. Exiting gracefully.')
-    for proc in subprocesses:
-        if proc.poll() is None:  # Subprocess is still running
-            proc.send_signal(signal.SIGINT)
-        proc.wait()  # Wait indefinitely until subprocess terminates
-    remove_pid_file()
-    running = False
+    log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
+
+    # Set the shutting_down flag
+    shutting_down = True
 
 
 # Set the signal handler
@@ -103,37 +131,9 @@ def log_error(message):
         print(error_entry, end='')
 
 
-# Check if the script is already running
-def check_pid():
-    if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
-            pid = f.read().strip()
-        # Check if the process is still running
-        try:
-            os.kill(int(pid), 0)
-            # log_error(f"Script is already running with PID {pid}.")
-            sys.exit(1)
-        except OSError:
-            # log_message(f"Removing stale PID file {pid_file}.")
-            os.remove(pid_file)
-
-    with open(pid_file, 'w') as f:
-        f.write(str(os.getpid()))
-
-    # Register the cleanup function to remove the PID file at exit
-    atexit.register(remove_pid_file)
-
-
-# Remove the PID file
-def remove_pid_file():
-    if os.path.exists(pid_file):
-        os.remove(pid_file)
-        # log_message("PID file removed.")
-
-
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, sync_paths, log_directory, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals
+    global local_base_path, exclusion_rules_file, sync_paths, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals, last_sync_times
     if not os.path.exists(os.path.dirname(config_file)):
         os.makedirs(os.path.dirname(config_file), exist_ok=True)
     if not os.path.exists(config_file):
@@ -144,43 +144,22 @@ def load_config():
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
-    # This will be None if not specified
     exclusion_rules_file = config.get('exclusion_rules_file')
     sync_paths = config.get('sync_paths', {})
 
-    # Set default log_directory
-    default_log_dir = os.path.join(os.path.expanduser(
-        '~'), '.cache', 'rclone', 'bisync', 'logs')
-    log_directory = config.get('log_directory', default_log_dir)
-
-    # Ensure log directory exists
-    os.makedirs(log_directory, exist_ok=True)
+    # Ensure the log directory exists
+    os.makedirs(default_log_dir, exist_ok=True)
 
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
-
-    # Load all rclone options from config
     rclone_options = config.get('rclone_options', {})
-
-    # Ensure exclude patterns are in the correct format
-    if 'exclude' in rclone_options and isinstance(rclone_options['exclude'], list):
-        rclone_options['exclude'] = [str(pattern)
-                                     for pattern in rclone_options['exclude']]
-    else:
-        rclone_options['exclude'] = []
-
-    # Load bisync-specific options
     bisync_options = config.get('bisync_options', {})
-
-    # Load resync-specific options
     resync_options = config.get('resync_options', {})
 
-    # Load sync intervals
+    # Initialize last_sync_times but don't schedule tasks yet
     for key, value in sync_paths.items():
-        interval = value.get('sync_interval', None)
-        if interval:
-            sync_intervals[key] = parse_interval(interval)
-        # Read the dry_run setting for each sync_path
-        value['dry_run'] = value.get('dry_run', False)
+        if value.get('active', True) and 'sync_interval' in value:
+            if key not in last_sync_times:
+                last_sync_times[key] = script_start_time
 
 
 # Parse interval string to seconds
@@ -194,6 +173,8 @@ def parse_interval(interval_str):
         return 604800  # 7 days in seconds
     elif interval_str == 'monthly':
         return 2592000  # 30 days in seconds (approximate)
+    elif interval_str == 'yearly':
+        return 31536000  # 365 days in seconds (approximate)
 
     unit = interval_str[-1].lower()
     try:
@@ -207,61 +188,55 @@ def parse_interval(interval_str):
         return value * 3600
     elif unit == 'd':
         return value * 86400
+    elif unit == 'w':
+        return value * 604800
+    elif unit == 'y':
+        return value * 31536000
     else:
         raise ValueError(f"Invalid interval format: {interval_str}")
 
 
 # Parse command line arguments
 def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('folders', nargs='?', default=None,
-                        help='Specify folders to sync as a comma-separated list (optional).')
+    parser = argparse.ArgumentParser(description="RClone BiSync Manager")
     parser.add_argument('-d', '--dry-run', action='store_true',
                         help='Perform a dry run without making any changes.')
-    parser.add_argument('--resync', action='store_true',
-                        help='Force a resynchronization, ignoring previous sync status.')
-    parser.add_argument('--force-bisync', action='store_true',
-                        help='Force the operation without confirmation, only applicable if specific folders are specified.')
     parser.add_argument('--console-log', action='store_true',
                         help='Print log messages to the console in addition to the log files.')
-    parser.add_argument('--daemon', action='store_true',
-                        help='Run the script in daemon mode.')
-    parser.add_argument('--stop', action='store_true', help='Stop the daemon')
-    parser.add_argument('--status', action='store_true',
-                        help='Get status report from the daemon')
-    args, unknown = parser.parse_known_args()
+
+    subparsers = parser.add_subparsers(dest='command', required=True)
+
+    # Daemon command
+    daemon_parser = subparsers.add_parser('daemon', help='Run in daemon mode')
+    daemon_parser.add_argument('action', choices=['start', 'stop', 'status'],
+                               help='Action to perform on the daemon')
+
+    # Sync command
+    sync_parser = subparsers.add_parser(
+        'sync', help='Perform a sync operation')
+    sync_parser.add_argument('folders', nargs='*',
+                             help='Specify folders to sync (optional, sync all if not specified)')
+    sync_parser.add_argument('--resync', action='store_true',
+                             help='Force a resynchronization, ignoring previous sync status.')
+    sync_parser.add_argument('--force-bisync', action='store_true',
+                             help='Force the bisync operation without confirmation.')
+
+    args = parser.parse_args()
+
     global dry_run, force_resync, console_log, specific_folders, force_operation, daemon_mode
     dry_run = args.dry_run
-    force_resync = args.resync
     console_log = args.console_log
-    specific_folders = args.folders.split(',') if args.folders else None
-    force_operation = args.force_bisync
-    daemon_mode = args.daemon
 
-    if specific_folders:
-        for folder in specific_folders:
-            if folder not in sync_paths:
-                error_message = f"The specified folder '{
-                    folder}' is not configured in the sync directories. Please check the configuration file at {config_file}."
-                log_error(error_message)
-                sys.exit(1)
-
-    if force_operation and specific_folders:
-        for folder in specific_folders:
-            local_path = os.path.join(
-                local_base_path, sync_paths[folder]['local'])
-            remote_path = f"{sync_paths[folder]['rclone_remote']}:{
-                sync_paths[folder]['remote']}"
-            log_message(f"WARNING: You are about to force a bisync on '{
-                local_path}' and '{remote_path}'.")
-        confirmation = input("Are you sure you want to proceed? (yes/no): ")
-        if confirmation.lower() != 'yes':
-            log_message("Operation aborted by the user.")
-            sys.exit(0)
-    elif force_operation and not specific_folders:
-        error_message = "ERROR: --force-bisync can only be used when specific sync_dirs are specified."
-        log_error(error_message)
-        sys.exit(1)
+    if args.command == 'sync':
+        force_resync = args.resync
+        specific_folders = args.folders if args.folders else None
+        force_operation = args.force_bisync
+        daemon_mode = False
+    elif args.command == 'daemon':
+        force_resync = False
+        specific_folders = None
+        force_operation = False
+        daemon_mode = True
 
     return args
 
@@ -289,12 +264,9 @@ def ensure_rclone_dir():
         os.chmod(rclone_dir, 0o777)
 
 
-# Ensure log directory exists
-def ensure_log_directory():
-    os.makedirs(log_directory, exist_ok=True)
-    global log_file_path, error_log_file_path
-    log_file_path = os.path.join(log_directory, sync_log_file_name)
-    error_log_file_path = os.path.join(log_directory, sync_error_log_file_name)
+# Ensure log file path exists
+def ensure_log_file_path():
+    os.makedirs(default_log_dir, exist_ok=True)
 
 
 # Calculate the MD5 of a file
@@ -366,8 +338,8 @@ def add_rclone_args(rclone_args, options):
 def get_base_rclone_options():
     options = {
         'exclude': [resync_status_file_name, bisync_status_file_name],
-        'log-file': os.path.join(log_directory, sync_log_file_name),
-        'log-level': rclone_options['log_level'] if not dry_run else 'INFO',
+        'log-file': log_file_path,
+        'log-level': rclone_options['log_level'] if not dry_run else 'ERROR',
         'recover': None,
         'resilient': None,
     }
@@ -546,104 +518,227 @@ def check_remote_rclone_test(remote_path):
     return True
 
 
-# Perform the sync operations
-def perform_sync_operations():
-    global last_sync_times, dry_run
+@dataclass(order=True)
+class SyncTask:
+    scheduled_time: datetime
+    path_key: str = field(compare=False)
 
-    if specific_folders:
-        folders_to_sync = specific_folders
-    else:
-        folders_to_sync = sync_paths.keys()
 
-    for key in folders_to_sync:
+class SyncScheduler:
+    def __init__(self):
+        self.tasks: List[SyncTask] = []
+        self.task_map: Dict[str, SyncTask] = {}
+
+    def schedule_task(self, path_key: str, next_run: datetime):
+        if path_key in self.task_map:
+            self.remove_task(path_key)
+        task = SyncTask(next_run, path_key)
+        heapq.heappush(self.tasks, task)
+        self.task_map[path_key] = task
+
+    def remove_task(self, path_key: str):
+        if path_key in self.task_map:
+            task = self.task_map.pop(path_key)
+            self.tasks.remove(task)
+            heapq.heapify(self.tasks)
+
+    def get_next_task(self) -> Optional[SyncTask]:
+        return self.tasks[0] if self.tasks else None
+
+    def pop_next_task(self) -> Optional[SyncTask]:
+        if self.tasks:
+            task = heapq.heappop(self.tasks)
+            del self.task_map[task.path_key]
+            return task
+        return None
+
+
+scheduler = SyncScheduler()
+
+
+def reload_config():
+    global dry_run, last_sync_times
+    log_message("Reloading configuration...")
+
+    old_sync_paths = sync_paths.copy()
+    old_intervals = {key: parse_interval(
+        value['sync_interval']) for key, value in old_sync_paths.items() if 'sync_interval' in value}
+
+    load_config()
+    args = parse_args()
+    dry_run = args.dry_run
+
+    current_time = datetime.now()
+
+    # Update existing tasks and add new ones
+    for key, value in sync_paths.items():
+        if value.get('active', True) and 'sync_interval' in value:
+            new_interval = parse_interval(value['sync_interval'])
+            if key in old_intervals:
+                old_interval = old_intervals[key]
+                last_sync = last_sync_times[key]
+                time_since_last_sync = current_time - last_sync
+                old_progress = time_since_last_sync.total_seconds() / old_interval
+
+                # Calculate the next sync time based on the new interval
+                next_sync = last_sync + \
+                    timedelta(seconds=new_interval * old_progress)
+
+                # If the next sync time is in the past, schedule it for the next interval
+                if next_sync <= current_time:
+                    next_sync = current_time + timedelta(seconds=new_interval)
+
+                scheduler.schedule_task(key, next_sync)
+            else:
+                # For new paths, schedule the first sync after one interval
+                next_sync = current_time + timedelta(seconds=new_interval)
+                last_sync_times[key] = current_time
+                scheduler.schedule_task(key, next_sync)
+
+    # Remove tasks for paths that no longer exist
+    for key in old_sync_paths:
         if key not in sync_paths:
-            log_error(f"Folder '{
-                      key}' is not configured in sync directories. Make sure it is in the list of sync_dirs in the configuration file at {config_file}.")
-            continue
+            scheduler.remove_task(key)
+            if key in last_sync_times:
+                del last_sync_times[key]
 
-        value = sync_paths[key]
-
-        # Skip if no sync_interval is specified or if the sync is not active
-        if 'sync_interval' not in value or not value.get('active', True):
-            continue
-
-        local_path = os.path.join(local_base_path, value['local'])
-        remote_path = f"{value['rclone_remote']}:{value['remote']}"
-
-        # Check if it's time to sync this folder
-        last_sync = last_sync_times.get(key, datetime.min)
-        interval = parse_interval(value['sync_interval'])
-        if datetime.now() - last_sync < timedelta(seconds=interval):
-            continue
-
-        if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
-            continue
-
-        ensure_local_directory(local_path)
-
-        # Use the global dry_run flag or the per-path setting
-        path_dry_run = dry_run or value.get('dry_run', False)
-
-        if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
-            bisync(remote_path, local_path, path_dry_run)
-
-        # Update last sync time only if not in dry run mode
-        if not path_dry_run:
-            last_sync_times[key] = datetime.now()
-
-# Main function for daemon mode
+    log_message(f"Configuration reloaded. Dry run: {dry_run}")
+    log_message(f"Updated sync intervals: {sync_intervals}")
+    log_message(f"Adjusted last sync times: {last_sync_times}")
 
 
 def daemon_main():
-    global running, dry_run
+    global running, dry_run, last_sync_times, currently_syncing, queued_paths, shutting_down, shutdown_complete
+
+    log_message("Daemon started")
+
+    load_config()
+
     status_thread = threading.Thread(target=status_server, daemon=True)
     status_thread.start()
 
-    while running:
-        if check_config_changed():
-            reload_config()
-        perform_sync_operations()
-        generate_status_report()  # Generate status report after each sync operation
-        for _ in range(60):  # Check the running flag and config changes every second
-            if not running:
-                break
-            if check_config_changed():
-                reload_config()
-            time.sleep(1)
+    # Perform initial sync for all active paths
+    log_message("Starting initial sync for all active paths")
+    for key, value in sync_paths.items():
+        if value.get('active', True):
+            add_to_sync_queue(key)
 
-    log_message('Daemon shutting down...')
-    # Perform any cleanup here if necessary
-
-
-def stop_daemon():
-    if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
-            pid = int(f.read().strip())
+    while running and not shutting_down:
         try:
-            os.kill(pid, signal.SIGTERM)
-            log_message(f"Sent termination signal to process {pid}")
-        except ProcessLookupError:
-            log_message(f"No process found with PID {pid}")
-        except PermissionError:
-            log_message(f"Permission denied to terminate process {pid}")
-        os.remove(pid_file)
-    else:
-        log_message("PID file not found. Daemon may not be running.")
+            # Process the sync queue
+            while not sync_queue.empty() and not shutting_down:
+                with sync_lock:
+                    if currently_syncing is None:
+                        key = sync_queue.get_nowait()
+                        currently_syncing = key
+                        queued_paths.remove(key)
+                    else:
+                        break  # Exit the loop if a sync is already in progress
+
+                if key in sync_paths:
+                    perform_sync_operations(key)
+
+                with sync_lock:
+                    currently_syncing = None
+
+            # Check for scheduled tasks
+            next_task = scheduler.get_next_task()
+            if next_task and not shutting_down:
+                now = datetime.now()
+                if now >= next_task.scheduled_time:
+                    task = scheduler.pop_next_task()
+                    add_to_sync_queue(task.path_key)
+                else:
+                    # Sleep until the next task or for a maximum of 1 second
+                    sleep_time = min(
+                        (next_task.scheduled_time - now).total_seconds(), 1)
+                    time.sleep(sleep_time)
+            else:
+                time.sleep(1)
+
+            if check_config_changed() and not shutting_down:
+                reload_config()
+
+        except Exception as e:
+            log_error(f"An error occurred in the main loop: {str(e)}")
+            time.sleep(1)  # Avoid tight loop in case of persistent errors
+
+    # Graceful shutdown
+    log_message('Daemon shutting down...')
+
+    # Wait for current sync to finish
+    while currently_syncing:
+        time.sleep(1)
+
+    # Clear remaining queue
+    while not sync_queue.empty():
+        sync_queue.get_nowait()
+    queued_paths.clear()
+
+    shutdown_complete = True
+    log_message('Daemon shutdown complete.')
+    status_thread.join(timeout=5)
+
+
+def add_to_sync_queue(key):
+    global shutting_down
+    with sync_lock:
+        if not shutting_down and key not in queued_paths and key != currently_syncing:
+            sync_queue.put(key)
+            queued_paths.add(key)
+
+
+def perform_sync_operations(key):
+    global current_sync_start_time
+    current_sync_start_time = datetime.now()
+
+    value = sync_paths[key]
+
+    local_path = os.path.join(local_base_path, value['local'])
+    remote_path = f"{value['rclone_remote']}:{value['remote']}"
+
+    if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
+        current_sync_start_time = None
+        return
+
+    ensure_local_directory(local_path)
+
+    path_dry_run = dry_run or value.get('dry_run', False)
+
+    if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
+        bisync(remote_path, local_path, path_dry_run)
+
+    # Update last sync time and schedule next run
+    last_sync_times[key] = datetime.now()
+    interval = parse_interval(value['sync_interval'])
+    next_run = last_sync_times[key] + timedelta(seconds=interval)
+    scheduler.schedule_task(key, next_run)
+
+    current_sync_start_time = None
 
 
 def generate_status_report():
+    current_time = datetime.now()
     status = {
+        "pid": os.getpid(),
         "active_syncs": {},
-        "last_check": datetime.now().isoformat(),
+        "last_check": current_time.isoformat(),
         "global_dry_run": dry_run,
+        "currently_syncing": currently_syncing,
+        "sync_queue_size": sync_queue.qsize(),
+        "queued_paths": list(queued_paths),
+        "shutting_down": shutting_down
     }
+
+    if currently_syncing and current_sync_start_time:
+        sync_duration = current_time - current_sync_start_time
+        status["current_sync_duration"] = str(sync_duration).split('.')[
+            0]  # Remove microseconds
 
     for key, value in sync_paths.items():
         local_path = os.path.join(local_base_path, value['local'])
         remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
-        sync_status = read_sync_status(local_path)
-        resync_status = read_resync_status(local_path)
         last_sync = last_sync_times.get(key, "Never")
         if isinstance(last_sync, datetime):
             last_sync = last_sync.isoformat()
@@ -653,13 +748,17 @@ def generate_status_report():
             "remote_path": remote_path,
             "sync_interval": value.get('sync_interval', "Not set"),
             "last_sync": last_sync,
-            "sync_status": sync_status,
-            "resync_status": resync_status,
             "dry_run": dry_run or value.get('dry_run', False),
             "is_active": value.get('active', True),
+            "is_currently_syncing": key == currently_syncing,
         }
 
-    return json.dumps(status, indent=2)
+        if key == currently_syncing and current_sync_start_time:
+            sync_duration = current_time - current_sync_start_time
+            status["active_syncs"][key]["current_sync_duration"] = str(
+                sync_duration).split('.')[0]  # Remove microseconds
+
+    return json.dumps(status, ensure_ascii=False, indent=2)
 
 
 def read_sync_status(local_path):
@@ -677,9 +776,9 @@ def handle_status_request(conn):
 
 
 def status_server():
-    global running
+    global running, shutdown_complete
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    socket_path = '/tmp/rclone_bisync_status.sock'
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
 
     try:
         os.unlink(socket_path)
@@ -691,7 +790,7 @@ def status_server():
     server.listen(1)
     server.settimeout(1)  # Set a timeout so we can check the running flag
 
-    while running:
+    while running or not shutdown_complete:
         try:
             conn, addr = server.accept()
             threading.Thread(target=handle_status_request,
@@ -715,38 +814,60 @@ def check_config_changed():
     return False
 
 
-def reload_config():
-    global dry_run  # Ensure we're modifying the global dry_run variable
-    log_message("Reloading configuration...")
-    load_config()
-    args = parse_args()
-    dry_run = args.dry_run  # Update dry_run based on command line argument
-    log_message(f"Configuration reloaded. Dry run: {dry_run}")
+def stop_daemon():
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
+    if os.path.exists(socket_path):
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(socket_path)
+            status = json.loads(client.recv(4096).decode())
+            client.close()
+
+            if 'pid' in status:
+                os.kill(status['pid'], signal.SIGTERM)
+                print(f"Sent SIGTERM to daemon (PID: {status['pid']})")
+                print("Daemon is shutting down. Use 'daemon status' to check progress.")
+
+                # Log the stop request
+                log_message("Daemon stop request received. Shutting down.")
+            else:
+                print("Unable to determine daemon PID from status")
+        except Exception as e:
+            print(f"Error stopping daemon: {e}")
+    else:
+        print("Status socket not found. Daemon may not be running.")
 
 
-# Add this function near the top of the script, after the import statements
-def setup_logging():
-    global log_file_path, error_log_file_path
-    default_log_dir = os.path.join(os.path.expanduser(
-        '~'), '.cache', 'rclone', 'bisync', 'logs')
-    os.makedirs(default_log_dir, exist_ok=True)
-    log_file_path = os.path.join(default_log_dir, sync_log_file_name)
-    error_log_file_path = os.path.join(
-        default_log_dir, sync_error_log_file_name)
+def print_daemon_status():
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
+    if os.path.exists(socket_path):
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(socket_path)
+            status = json.loads(client.recv(4096).decode())
+            client.close()
+
+            if status.get("shutting_down", False):
+                print("Daemon is shutting down. Current status:")
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        except Exception as e:
+            print(f"Error getting daemon status: {e}")
+    else:
+        print("Daemon is not running.")
 
 
 def main():
     global dry_run, daemon_mode
-    setup_logging()  # Set up logging early
     args = parse_args()
-    check_pid()
-    load_config()
+    load_config()  # Load config first to set up log paths
+
     check_tools()
     ensure_rclone_dir()
-    ensure_log_directory()
+    ensure_log_file_path()
     handle_filter_changes()
 
-    log_message(f"PID file: {pid_file}")
+    log_message("Warning: This script does not prevent multiple instances from running. Please ensure you don't start it multiple times unintentionally.")
+
     # Log home directory
     home_dir = os.environ.get('HOME')
     if home_dir:
@@ -754,38 +875,30 @@ def main():
     else:
         log_error("Unable to determine home directory")
 
-    if args.stop:
-        stop_daemon()
-        return
-
-    if args.status:
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect('/tmp/rclone_bisync_status.sock')
-            status = client.recv(4096).decode()
-            print(status)
-            client.close()
-        except ConnectionRefusedError:
-            log_message(
-                "Unable to connect to the daemon. Make sure it's running.")
-        except FileNotFoundError:
-            log_message(
-                "Status socket not found. Make sure the daemon is running.")
-        return
-
-    if daemon_mode:
-        with daemon.DaemonContext(
-            working_directory='/',
-            pidfile=lockfile.FileLock(pid_file),
-            umask=0o002,
-            signal_map={
-                signal.SIGTERM: signal_handler,
-                signal.SIGINT: signal_handler,
-            }
-        ):
-            daemon_main()
-    else:
-        perform_sync_operations()
+    if args.command == 'daemon':
+        if args.action == 'start':
+            with daemon.DaemonContext(
+                working_directory='/',
+                umask=0o002,
+                signal_map={
+                    signal.SIGTERM: signal_handler,
+                    signal.SIGINT: signal_handler,
+                }
+            ):
+                daemon_main()
+        elif args.action == 'stop':
+            stop_daemon()
+        elif args.action == 'status':
+            print_daemon_status()
+    elif args.command == 'sync':
+        paths_to_sync = specific_folders if specific_folders else [
+            key for key, value in sync_paths.items() if value.get('active', True)]
+        for key in paths_to_sync:
+            if key in sync_paths:
+                perform_sync_operations(key)
+            else:
+                log_error(f"Specified folder '{
+                          key}' not found in configuration")
 
 
 if __name__ == "__main__":
