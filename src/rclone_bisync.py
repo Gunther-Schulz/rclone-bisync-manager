@@ -50,14 +50,17 @@ ctrl_c_presses = 0
 # Global list to keep track of subprocesses
 subprocesses = []
 
-# New global variables
+# Global variables for the daemon mode
 daemon_mode = False
-sync_intervals = {}
-last_sync_times: Dict[str, datetime] = {}
-script_start_time = datetime.now()
 
-# Global variable to indicate whether the daemon should continue running
-running = True
+# Global variables for the sync intervals
+sync_intervals = {}
+
+# Global variables for the last sync times
+last_sync_times: Dict[str, datetime] = {}
+
+# Global variable for the script start time
+script_start_time = datetime.now()
 
 # Global variable to track the last modification time of the config file
 last_config_mtime = 0
@@ -65,13 +68,26 @@ last_config_mtime = 0
 # Global variable for the lock file
 lock_file = None
 
+# Global variables for the sync queue
 sync_queue = Queue()
+
+# Global variables for the sync queue
 queued_paths = set()
+
+# Global variables for the sync lock
 sync_lock = Lock()
+
+# Global variables for the currently syncing path
 currently_syncing = None
+
+# Global variables for the currently syncing path
 current_sync_start_time = None
 
+# Global variable to indicate whether the daemon should continue running
+running = True
+# Global variable to indicate whether the daemon is shutting down
 shutting_down = False
+# Global variable to indicate whether the daemon has completed shutting down
 shutdown_complete = False
 
 # Handle CTRL-C
