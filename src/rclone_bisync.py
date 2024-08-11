@@ -137,8 +137,9 @@ def load_config():
     if not os.path.exists(os.path.dirname(config_file)):
         os.makedirs(os.path.dirname(config_file), exist_ok=True)
     if not os.path.exists(config_file):
-        print(f"Configuration file not found. Please ensure it exists at: {
-              config_file}")
+        error_message = f"Configuration file not found. Please ensure it exists at: {
+            config_file}"
+        log_error(error_message)
         sys.exit(1)
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
@@ -240,8 +241,9 @@ def parse_args():
     if specific_folders:
         for folder in specific_folders:
             if folder not in sync_paths:
-                print(f"ERROR: The specified folder '{
-                      folder}' is not configured in the sync directories. Please check the configuration file at {config_file}.")
+                error_message = f"The specified folder '{
+                    folder}' is not configured in the sync directories. Please check the configuration file at {config_file}."
+                log_error(error_message)
                 sys.exit(1)
 
     if force_operation and specific_folders:
@@ -250,15 +252,15 @@ def parse_args():
                 local_base_path, sync_paths[folder]['local'])
             remote_path = f"{sync_paths[folder]['rclone_remote']}:{
                 sync_paths[folder]['remote']}"
-            print(f"WARNING: You are about to force a bisync on '{
-                  local_path}' and '{remote_path}'.")
+            log_message(f"WARNING: You are about to force a bisync on '{
+                local_path}' and '{remote_path}'.")
         confirmation = input("Are you sure you want to proceed? (yes/no): ")
         if confirmation.lower() != 'yes':
-            print("Operation aborted by the user.")
+            log_message("Operation aborted by the user.")
             sys.exit(0)
     elif force_operation and not specific_folders:
-        print(
-            "ERROR: --force-bisync can only be used when specific sync_dirs are specified.")
+        error_message = "ERROR: --force-bisync can only be used when specific sync_dirs are specified."
+        log_error(error_message)
         sys.exit(1)
 
     return args
@@ -269,8 +271,8 @@ def check_tools():
     required_tools = ["rclone", "mkdir", "grep", "awk", "find", "md5sum"]
     for tool in required_tools:
         if subprocess.call(['which', tool], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
-            print(f"{tool} could not be found, please install it.",
-                  file=sys.stderr)
+            error_message = f"{tool} could not be found, please install it."
+            log_error(error_message)
             sys.exit(1)
 
 
@@ -609,7 +611,7 @@ def daemon_main():
                 reload_config()
             time.sleep(1)
 
-    print('Daemon shutting down...')
+    log_message('Daemon shutting down...')
     # Perform any cleanup here if necessary
 
 
@@ -619,14 +621,14 @@ def stop_daemon():
             pid = int(f.read().strip())
         try:
             os.kill(pid, signal.SIGTERM)
-            print(f"Sent termination signal to process {pid}")
+            log_message(f"Sent termination signal to process {pid}")
         except ProcessLookupError:
-            print(f"No process found with PID {pid}")
+            log_message(f"No process found with PID {pid}")
         except PermissionError:
-            print(f"Permission denied to terminate process {pid}")
+            log_message(f"Permission denied to terminate process {pid}")
         os.remove(pid_file)
     else:
-        print("PID file not found. Daemon may not be running.")
+        log_message("PID file not found. Daemon may not be running.")
 
 
 def generate_status_report():
@@ -722,8 +724,20 @@ def reload_config():
     log_message(f"Configuration reloaded. Dry run: {dry_run}")
 
 
+# Add this function near the top of the script, after the import statements
+def setup_logging():
+    global log_file_path, error_log_file_path
+    default_log_dir = os.path.join(os.path.expanduser(
+        '~'), '.cache', 'rclone', 'bisync', 'logs')
+    os.makedirs(default_log_dir, exist_ok=True)
+    log_file_path = os.path.join(default_log_dir, sync_log_file_name)
+    error_log_file_path = os.path.join(
+        default_log_dir, sync_error_log_file_name)
+
+
 def main():
     global dry_run, daemon_mode
+    setup_logging()  # Set up logging early
     args = parse_args()
     check_pid()
     load_config()
@@ -752,9 +766,11 @@ def main():
             print(status)
             client.close()
         except ConnectionRefusedError:
-            print("Unable to connect to the daemon. Make sure it's running.")
+            log_message(
+                "Unable to connect to the daemon. Make sure it's running.")
         except FileNotFoundError:
-            print("Status socket not found. Make sure the daemon is running.")
+            log_message(
+                "Status socket not found. Make sure the daemon is running.")
         return
 
     if daemon_mode:
