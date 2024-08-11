@@ -244,7 +244,7 @@ def parse_args():
 
 # Check if the required tools are installed
 def check_tools():
-    required_tools = ["rclone", "mkdir", "grep", "awk", "find", "md5sum"]
+    required_tools = ["rclone"]
     for tool in required_tools:
         if subprocess.call(['which', tool], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
             error_message = f"{tool} could not be found, please install it."
