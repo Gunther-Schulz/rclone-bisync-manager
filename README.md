@@ -124,7 +124,7 @@ Refer to the comments in the example configuration file for detailed explanation
 
 ## Logs
 
-Logs are stored in the directory specified in your configuration file. Check `rclone-bisync-error.log` for errors and `rclone-bisync.log` for detailed information.
+Logs are stored in the directory specified in your configuration file. Check `rclone-bisync-manager-error.log` for errors and `rclone-bisync-manager.log` for detailed information.
 
 ## Automating Synchronization with Systemd
 
