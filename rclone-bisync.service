@@ -3,8 +3,7 @@ Description=Rclone Bisync Daemon
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/g/dev/Gunther-Schulz/rclone-bisync-wrapper/src/rclone-bisync.py --daemon
-User=g
+ExecStart=/usr/bin/rclone-bisync --daemon
 Restart=on-failure
 
 [Install]
