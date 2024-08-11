@@ -54,6 +54,9 @@ last_sync_times = {}
 # Global variable to indicate whether the daemon should continue running
 running = True
 
+# Global variable to track the last modification time of the config file
+last_config_mtime = 0
+
 # Handle CTRL-C
 
 
@@ -175,6 +178,8 @@ def load_config():
         interval = value.get('sync_interval', None)
         if interval:
             sync_intervals[key] = parse_interval(interval)
+        # Add this line to read the dry-run setting for each sync_path
+        value['dry_run'] = value.get('dry_run', False)
 
 
 # Parse interval string to seconds
@@ -576,21 +581,32 @@ def perform_sync_operations():
         if resync(remote_path, local_path) == "COMPLETED":
             bisync(remote_path, local_path)
 
-        # Update last sync time
-        last_sync_times[key] = datetime.now()
+        # Update last sync time only if not in dry run mode
+        if not dry_run:
+            last_sync_times[key] = datetime.now()
 
 # Main function for daemon mode
 
 
 def daemon_main():
-    global running
+    global running, dry_run
     status_thread = threading.Thread(target=status_server, daemon=True)
     status_thread.start()
 
     while running:
+        if check_config_changed():
+            reload_config()
         perform_sync_operations()
         generate_status_report()  # Generate status report after each sync operation
-        time.sleep(60)  # Check every minute
+        for _ in range(60):  # Check the running flag and config changes every second
+            if not running:
+                break
+            if check_config_changed():
+                reload_config()
+            time.sleep(1)
+
+    print('Daemon shutting down...')
+    # Perform any cleanup here if necessary
 
 
 def stop_daemon():
@@ -653,6 +669,7 @@ def handle_status_request(conn):
 
 
 def status_server():
+    global running
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     socket_path = '/tmp/rclone_bisync_status.sock'
 
@@ -664,16 +681,46 @@ def status_server():
 
     server.bind(socket_path)
     server.listen(1)
+    server.settimeout(1)  # Set a timeout so we can check the running flag
 
-    while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_status_request, args=(conn,)).start()
+    while running:
+        try:
+            conn, addr = server.accept()
+            threading.Thread(target=handle_status_request,
+                             args=(conn,)).start()
+        except socket.timeout:
+            continue
+
+    server.close()
+    os.unlink(socket_path)
+
+
+def check_config_changed():
+    global last_config_mtime
+    try:
+        current_mtime = os.path.getmtime(config_file)
+        if current_mtime > last_config_mtime:
+            last_config_mtime = current_mtime
+            return True
+    except OSError:
+        pass  # File doesn't exist or can't be accessed
+    return False
+
+
+def reload_config():
+    global dry_run  # Ensure we're modifying the global dry_run variable
+    log_message("Reloading configuration...")
+    load_config()
+    args = parse_args()
+    dry_run = args.dry_run  # Update dry_run based on command line argument
+    log_message(f"Configuration reloaded. Dry run: {dry_run}")
 
 
 def main():
+    global dry_run, daemon_mode
+    args = parse_args()
     check_pid()
     load_config()
-    args = parse_args()
     check_tools()
     ensure_rclone_dir()
     ensure_log_directory()
