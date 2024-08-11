@@ -23,13 +23,11 @@ from threading import Lock
 # Set the locale to UTF-8 to handle special characters correctly
 os.environ['LC_ALL'] = 'C.UTF-8'
 
-# Default arguments
+# Global variables for the command line options
 dry_run = False
 force_resync = False
 console_log = False
 specific_folders = None
-
-# Initialize variables
 
 # Default log directory
 default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
@@ -175,6 +173,8 @@ def parse_interval(interval_str):
         return 604800  # 7 days in seconds
     elif interval_str == 'monthly':
         return 2592000  # 30 days in seconds (approximate)
+    elif interval_str == 'yearly':
+        return 31536000  # 365 days in seconds (approximate)
 
     unit = interval_str[-1].lower()
     try:
@@ -188,6 +188,10 @@ def parse_interval(interval_str):
         return value * 3600
     elif unit == 'd':
         return value * 86400
+    elif unit == 'w':
+        return value * 604800
+    elif unit == 'y':
+        return value * 31536000
     else:
         raise ValueError(f"Invalid interval format: {interval_str}")
 
