@@ -7,10 +7,8 @@ import subprocess
 import argparse
 from datetime import datetime, timedelta
 import signal
-import atexit
 import time
 import daemon
-import lockfile
 import json
 import socket
 import threading
@@ -57,6 +55,9 @@ running = True
 # Global variable to track the last modification time of the config file
 last_config_mtime = 0
 
+# Global variable for the lock file
+lock_file = None
+
 # Handle CTRL-C
 
 
@@ -73,7 +74,6 @@ def signal_handler(signum, frame):
         if proc.poll() is None:  # Subprocess is still running
             proc.send_signal(signal.SIGINT)
         proc.wait()  # Wait indefinitely until subprocess terminates
-    remove_pid_file()
     running = False
 
 
@@ -103,37 +103,9 @@ def log_error(message):
         print(error_entry, end='')
 
 
-# Check if the script is already running
-def check_pid():
-    if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
-            pid = f.read().strip()
-        # Check if the process is still running
-        try:
-            os.kill(int(pid), 0)
-            # log_error(f"Script is already running with PID {pid}.")
-            sys.exit(1)
-        except OSError:
-            # log_message(f"Removing stale PID file {pid_file}.")
-            os.remove(pid_file)
-
-    with open(pid_file, 'w') as f:
-        f.write(str(os.getpid()))
-
-    # Register the cleanup function to remove the PID file at exit
-    atexit.register(remove_pid_file)
-
-
-# Remove the PID file
-def remove_pid_file():
-    if os.path.exists(pid_file):
-        os.remove(pid_file)
-        # log_message("PID file removed.")
-
-
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, sync_paths, log_directory, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals
+    global local_base_path, exclusion_rules_file, sync_paths, log_file_path, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals, error_log_file_path
     if not os.path.exists(os.path.dirname(config_file)):
         os.makedirs(os.path.dirname(config_file), exist_ok=True)
     if not os.path.exists(config_file):
@@ -144,34 +116,25 @@ def load_config():
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
-    # This will be None if not specified
     exclusion_rules_file = config.get('exclusion_rules_file')
     sync_paths = config.get('sync_paths', {})
 
-    # Set default log_directory
+    # Set default log_file_path
     default_log_dir = os.path.join(os.path.expanduser(
         '~'), '.cache', 'rclone', 'bisync', 'logs')
-    log_directory = config.get('log_directory', default_log_dir)
+    log_file_path = config.get('log_file_path', os.path.join(
+        default_log_dir, sync_log_file_name))
 
     # Ensure log directory exists
-    os.makedirs(log_directory, exist_ok=True)
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+
+    # Set error log file path
+    error_log_file_path = os.path.join(
+        os.path.dirname(log_file_path), sync_error_log_file_name)
 
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
-
-    # Load all rclone options from config
     rclone_options = config.get('rclone_options', {})
-
-    # Ensure exclude patterns are in the correct format
-    if 'exclude' in rclone_options and isinstance(rclone_options['exclude'], list):
-        rclone_options['exclude'] = [str(pattern)
-                                     for pattern in rclone_options['exclude']]
-    else:
-        rclone_options['exclude'] = []
-
-    # Load bisync-specific options
     bisync_options = config.get('bisync_options', {})
-
-    # Load resync-specific options
     resync_options = config.get('resync_options', {})
 
     # Load sync intervals
@@ -289,12 +252,9 @@ def ensure_rclone_dir():
         os.chmod(rclone_dir, 0o777)
 
 
-# Ensure log directory exists
-def ensure_log_directory():
-    os.makedirs(log_directory, exist_ok=True)
-    global log_file_path, error_log_file_path
-    log_file_path = os.path.join(log_directory, sync_log_file_name)
-    error_log_file_path = os.path.join(log_directory, sync_error_log_file_name)
+# Ensure log file path exists
+def ensure_log_file_path():
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
 
 
 # Calculate the MD5 of a file
@@ -366,7 +326,7 @@ def add_rclone_args(rclone_args, options):
 def get_base_rclone_options():
     options = {
         'exclude': [resync_status_file_name, bisync_status_file_name],
-        'log-file': os.path.join(log_directory, sync_log_file_name),
+        'log-file': log_file_path,
         'log-level': rclone_options['log_level'] if not dry_run else 'INFO',
         'recover': None,
         'resilient': None,
@@ -595,9 +555,31 @@ def perform_sync_operations():
 
 
 def daemon_main():
-    global running, dry_run
+    global running, dry_run, last_sync_times
+
+    log_message("Daemon started")  # New log message to indicate daemon start
+
     status_thread = threading.Thread(target=status_server, daemon=True)
     status_thread.start()
+
+    # Perform initial sync for paths with sync_interval set
+    log_message("Starting initial sync for paths with sync_interval set")
+    for key, value in sync_paths.items():
+        if value.get('active', True) and 'sync_interval' in value:
+            local_path = os.path.join(local_base_path, value['local'])
+            remote_path = f"{value['rclone_remote']}:{value['remote']}"
+
+            path_dry_run = dry_run or value.get('dry_run', False)
+
+            if check_local_rclone_test(local_path) and check_remote_rclone_test(remote_path):
+                ensure_local_directory(local_path)
+                if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
+                    bisync(remote_path, local_path, path_dry_run)
+
+                if not path_dry_run:
+                    last_sync_times[key] = datetime.now()
+
+    log_message("Initial sync completed")
 
     while running:
         if check_config_changed():
@@ -612,27 +594,13 @@ def daemon_main():
             time.sleep(1)
 
     log_message('Daemon shutting down...')
-    # Perform any cleanup here if necessary
-
-
-def stop_daemon():
-    if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
-            pid = int(f.read().strip())
-        try:
-            os.kill(pid, signal.SIGTERM)
-            log_message(f"Sent termination signal to process {pid}")
-        except ProcessLookupError:
-            log_message(f"No process found with PID {pid}")
-        except PermissionError:
-            log_message(f"Permission denied to terminate process {pid}")
-        os.remove(pid_file)
-    else:
-        log_message("PID file not found. Daemon may not be running.")
+    # Perform any necessary cleanup here
+    status_thread.join(timeout=5)  # Wait for status thread to finish
 
 
 def generate_status_report():
     status = {
+        "pid": os.getpid(),
         "active_syncs": {},
         "last_check": datetime.now().isoformat(),
         "global_dry_run": dry_run,
@@ -724,29 +692,42 @@ def reload_config():
     log_message(f"Configuration reloaded. Dry run: {dry_run}")
 
 
-# Add this function near the top of the script, after the import statements
-def setup_logging():
-    global log_file_path, error_log_file_path
-    default_log_dir = os.path.join(os.path.expanduser(
-        '~'), '.cache', 'rclone', 'bisync', 'logs')
-    os.makedirs(default_log_dir, exist_ok=True)
-    log_file_path = os.path.join(default_log_dir, sync_log_file_name)
-    error_log_file_path = os.path.join(
-        default_log_dir, sync_error_log_file_name)
+def stop_daemon():
+    socket_path = '/tmp/rclone_bisync_status.sock'
+    if os.path.exists(socket_path):
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(socket_path)
+            status = json.loads(client.recv(4096).decode())
+            client.close()
+
+            if 'pid' in status:
+                os.kill(status['pid'], signal.SIGTERM)
+                log_message(f"Sent SIGTERM to daemon (PID: {status['pid']})")
+            else:
+                log_error("Unable to determine daemon PID from status")
+        except Exception as e:
+            log_error(f"Error stopping daemon: {e}")
+    else:
+        log_error("Status socket not found. Daemon may not be running.")
 
 
 def main():
     global dry_run, daemon_mode
-    setup_logging()  # Set up logging early
     args = parse_args()
-    check_pid()
-    load_config()
+    load_config()  # Load config first to set up log paths
+
+    if args.stop:
+        stop_daemon()
+        return
+
     check_tools()
     ensure_rclone_dir()
-    ensure_log_directory()
+    ensure_log_file_path()
     handle_filter_changes()
 
-    log_message(f"PID file: {pid_file}")
+    log_message("Warning: This script does not prevent multiple instances from running. Please ensure you don't start it multiple times unintentionally.")
+
     # Log home directory
     home_dir = os.environ.get('HOME')
     if home_dir:
@@ -754,29 +735,9 @@ def main():
     else:
         log_error("Unable to determine home directory")
 
-    if args.stop:
-        stop_daemon()
-        return
-
-    if args.status:
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect('/tmp/rclone_bisync_status.sock')
-            status = client.recv(4096).decode()
-            print(status)
-            client.close()
-        except ConnectionRefusedError:
-            log_message(
-                "Unable to connect to the daemon. Make sure it's running.")
-        except FileNotFoundError:
-            log_message(
-                "Status socket not found. Make sure the daemon is running.")
-        return
-
     if daemon_mode:
         with daemon.DaemonContext(
             working_directory='/',
-            pidfile=lockfile.FileLock(pid_file),
             umask=0o002,
             signal_map={
                 signal.SIGTERM: signal_handler,
