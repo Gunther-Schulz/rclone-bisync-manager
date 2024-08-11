@@ -15,6 +15,7 @@ import threading
 import heapq
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+import queue
 from queue import Queue
 from threading import Lock
 
@@ -71,18 +72,32 @@ sync_lock = Lock()
 currently_syncing = None
 current_sync_start_time = None
 
+# Add this to your global variables
+shutting_down = False
+
 # Handle CTRL-C
 
 
 def signal_handler(signum, frame):
-    global ctrl_c_presses, running
+    global ctrl_c_presses, running, shutting_down
     ctrl_c_presses += 1
 
     if ctrl_c_presses > 1:
         print('Multiple CTRL-C detected. Forcing exit.')
         os._exit(1)  # Force exit immediately
-
     print('SIGINT or CTRL-C detected. Exiting gracefully.')
+
+    # Set the shutting_down flag
+    shutting_down = True
+
+    # Clear the sync queue and queued_paths
+    while not sync_queue.empty():
+        try:
+            sync_queue.get_nowait()
+        except queue.Empty:
+            break
+    queued_paths.clear()
+
     for proc in subprocesses:
         if proc.poll() is None:  # Subprocess is still running
             proc.send_signal(signal.SIGINT)
@@ -605,7 +620,7 @@ def reload_config():
 
 
 def daemon_main():
-    global running, dry_run, last_sync_times, currently_syncing, queued_paths
+    global running, dry_run, last_sync_times, currently_syncing, queued_paths, shutting_down
 
     log_message("Daemon started")
 
@@ -623,7 +638,7 @@ def daemon_main():
     while running:
         try:
             # Process the sync queue
-            while not sync_queue.empty():
+            while not sync_queue.empty() and not shutting_down:
                 with sync_lock:
                     if currently_syncing is None:
                         key = sync_queue.get_nowait()
@@ -640,7 +655,7 @@ def daemon_main():
 
             # Check for scheduled tasks
             next_task = scheduler.get_next_task()
-            if next_task:
+            if next_task and not shutting_down:
                 now = datetime.now()
                 if now >= next_task.scheduled_time:
                     task = scheduler.pop_next_task()
@@ -653,7 +668,7 @@ def daemon_main():
             else:
                 time.sleep(1)
 
-            if check_config_changed():
+            if check_config_changed() and not shutting_down:
                 reload_config()
 
         except Exception as e:
@@ -665,8 +680,9 @@ def daemon_main():
 
 
 def add_to_sync_queue(key):
+    global shutting_down
     with sync_lock:
-        if key not in queued_paths and key != currently_syncing:
+        if not shutting_down and key not in queued_paths and key != currently_syncing:
             sync_queue.put(key)
             queued_paths.add(key)
 
