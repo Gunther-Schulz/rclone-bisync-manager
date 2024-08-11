@@ -3,7 +3,7 @@ Description=Rclone Bisync Daemon
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/rclone-bisync --daemon
+ExecStart=/usr/bin/rclone-bisync-manager --daemon
 Restart=on-failure
 
 [Install]

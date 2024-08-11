@@ -15,7 +15,6 @@ import threading
 import heapq
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-import queue
 from queue import Queue
 from threading import Lock
 
@@ -32,65 +31,57 @@ specific_folders = None
 
 # Initialize variables
 
+# Global variables for the PID file
 pid_file = os.path.join(os.environ.get(
     'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync.pid')
+# Global variables for the config file
 config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
     '~/.config')), 'rclone-bisync', 'config.yaml')
+# Global variables for the cache directory
 cache_dir = os.path.join(os.environ.get(
     'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync')
+# Global variables for the resync status file
 resync_status_file_name = ".resync_status"
+# Global variables for the bisync status file
 bisync_status_file_name = ".bisync_status"
+# Global variables for the log files
 sync_log_file_name = "rclone-bisync.log"
+# Global variables for the error log file
 sync_error_log_file_name = "rclone-bisync-error.log"
+# Global variables for the rclone test file.
 rclone_test_file_name = "RCLONE_TEST"
-
 # Global counter for CTRL-C presses
 ctrl_c_presses = 0
-
 # Global list to keep track of subprocesses
 subprocesses = []
-
 # Global variables for the daemon mode
 daemon_mode = False
-
 # Global variables for the sync intervals
 sync_intervals = {}
-
 # Global variables for the last sync times
 last_sync_times: Dict[str, datetime] = {}
-
 # Global variable for the script start time
 script_start_time = datetime.now()
-
 # Global variable to track the last modification time of the config file
 last_config_mtime = 0
-
 # Global variable for the lock file
 lock_file = None
-
 # Global variables for the sync queue
 sync_queue = Queue()
-
 # Global variables for the sync queue
 queued_paths = set()
-
 # Global variables for the sync lock
 sync_lock = Lock()
-
 # Global variables for the currently syncing path
 currently_syncing = None
-
 # Global variables for the currently syncing path
 current_sync_start_time = None
-
 # Global variable to indicate whether the daemon should continue running
 running = True
 # Global variable to indicate whether the daemon is shutting down
 shutting_down = False
 # Global variable to indicate whether the daemon has completed shutting down
 shutdown_complete = False
-
-# Handle CTRL-C
 
 
 def signal_handler(signum, frame):
