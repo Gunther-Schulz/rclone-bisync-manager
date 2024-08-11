@@ -178,7 +178,7 @@ def load_config():
         interval = value.get('sync_interval', None)
         if interval:
             sync_intervals[key] = parse_interval(interval)
-        # Add this line to read the dry-run setting for each sync_path
+        # Read the dry_run setting for each sync_path
         value['dry_run'] = value.get('dry_run', False)
 
 
@@ -391,9 +391,9 @@ def get_base_rclone_options():
 
 
 # Perform a bisync
-def bisync(remote_path, local_path):
+def bisync(remote_path, local_path, path_dry_run):
     log_message(f"Bisync started for {local_path} at {
-                datetime.now()}" + (" - Performing a dry run" if dry_run else ""))
+                datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
 
     rclone_args = [
         'rclone', 'bisync', remote_path, local_path,
@@ -411,7 +411,7 @@ def bisync(remote_path, local_path):
 
     if os.path.exists(exclusion_rules_file):
         rclone_args.extend(['--exclude-from', exclusion_rules_file])
-    if dry_run:
+    if path_dry_run:
         rclone_args.append('--dry-run')
     if force_operation:
         rclone_args.append('--force')
@@ -432,7 +432,7 @@ def bisync(remote_path, local_path):
     write_sync_status(local_path, sync_result)
 
 
-def resync(remote_path, local_path):
+def resync(remote_path, local_path, path_dry_run):
     if force_resync:
         log_message("Force resync requested.")
     else:
@@ -448,7 +448,7 @@ def resync(remote_path, local_path):
             sys.exit(1)
 
     log_message(f"Resync started for {local_path} at {
-                datetime.now()}" + (" - Performing a dry run" if dry_run else ""))
+                datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
 
     write_resync_status(local_path, "IN_PROGRESS")
 
@@ -469,7 +469,7 @@ def resync(remote_path, local_path):
 
     if os.path.exists(exclusion_rules_file):
         rclone_args.extend(['--exclude-from', exclusion_rules_file])
-    if dry_run:
+    if path_dry_run:
         rclone_args.append('--dry-run')
 
     # Only use cpulimit if it's installed
@@ -546,7 +546,7 @@ def check_remote_rclone_test(remote_path):
 
 # Perform the sync operations
 def perform_sync_operations():
-    global last_sync_times
+    global last_sync_times, dry_run
 
     if specific_folders:
         folders_to_sync = specific_folders
@@ -561,8 +561,8 @@ def perform_sync_operations():
 
         value = sync_paths[key]
 
-        # Skip if no sync_interval is specified
-        if 'sync_interval' not in value:
+        # Skip if no sync_interval is specified or if the sync is not active
+        if 'sync_interval' not in value or not value.get('active', True):
             continue
 
         local_path = os.path.join(local_base_path, value['local'])
@@ -578,11 +578,15 @@ def perform_sync_operations():
             continue
 
         ensure_local_directory(local_path)
-        if resync(remote_path, local_path) == "COMPLETED":
-            bisync(remote_path, local_path)
+
+        # Use the global dry_run flag or the per-path setting
+        path_dry_run = dry_run or value.get('dry_run', False)
+
+        if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
+            bisync(remote_path, local_path, path_dry_run)
 
         # Update last sync time only if not in dry run mode
-        if not dry_run:
+        if not path_dry_run:
             last_sync_times[key] = datetime.now()
 
 # Main function for daemon mode
@@ -629,6 +633,7 @@ def generate_status_report():
     status = {
         "active_syncs": {},
         "last_check": datetime.now().isoformat(),
+        "global_dry_run": dry_run,
     }
 
     for key, value in sync_paths.items():
@@ -648,7 +653,8 @@ def generate_status_report():
             "last_sync": last_sync,
             "sync_status": sync_status,
             "resync_status": resync_status,
-            "is_active": key in sync_intervals,
+            "dry_run": dry_run or value.get('dry_run', False),
+            "is_active": value.get('active', True),
         }
 
     return json.dumps(status, indent=2)
