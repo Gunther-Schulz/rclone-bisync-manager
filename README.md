@@ -33,104 +33,78 @@ pip install python-daemon
 
 ## Installation
 
-1. Clone the repository or download the script to your local machine.
-2. Ensure that the script is executable:
+### From Git Repository
 
-```bash
-chmod +x rclone_bisync.py
-```
+1. Clone the repository:
 
-3. Create the configuration directory:
+   ```bash
+   git clone https://github.com/yourusername/rclone-bisync.git
+   cd rclone-bisync
+   ```
 
-```bash
-mkdir -p ~/.config/rclone_bisync
-```
+2. Install required Python packages:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Make the script executable:
+
+   ```bash
+   chmod +x rclone_bisync.py
+   ```
+
+4. Create the configuration directory:
+
+   ```bash
+   mkdir -p ~/.config/rclone_bisync
+   ```
+
+5. Copy the example configuration:
+
+   ```bash
+   cp config/config.yaml.example ~/.config/rclone_bisync/config.yaml
+   ```
+
+6. Edit the configuration file to suit your needs:
+   ```bash
+   nano ~/.config/rclone_bisync/config.yaml
+   ```
+
+### From AUR (Arch User Repository)
+
+If you're using an Arch-based system, you can install rclone-bisync from the AUR:
+
+1. Use your preferred AUR helper. For example, with `yay`:
+
+   ```bash
+   yay -S rclone-bisync
+   ```
+
+2. After installation, copy the example configuration:
+
+   ```bash
+   mkdir -p ~/.config/rclone-bisync
+   cp /etc/rclone-bisync/config.yaml.example ~/.config/rclone-bisync/config.yaml
+   ```
+
+3. Edit the configuration file:
+   ```bash
+   nano ~/.config/rclone-bisync/config.yaml
+   ```
 
 ## Configuration
 
-Before running the script, you must set up the configuration file (`~/.config/rclone_bisync/config.yaml`). This file contains all necessary settings for the synchronization process.
-
-### Configuration File Structure
-
-Here is a detailed explanation of the configuration file:
-
-- **local_base_path**: The base directory on your local machine where synchronization folders are located.
-- **exclusion_rules_file**: (Optional) Path to a file containing patterns to exclude from synchronization.
-- **log_directory**: (Optional) Directory where log files will be stored. If not specified, defaults to `~/.cache/rclone/bisync/logs`.
-- **max_cpu_usage_percent**: CPU usage limit as a percentage. This setting is only used if the optional dependency `cpulimit` is installed.
-- **sync_paths**: A dictionary of synchronization pairs with details for local and remote directories.
-- **rclone_options**: A dictionary of rclone options to be applied to all sync operations.
-- **bisync_options**: A dictionary of bisync-specific options.
-- **resync_options**: A dictionary of resync-specific options.
-
-#### Example Configuration
-
-```yaml
-local_base_path: /home/g/hidrive
-exclusion_rules_file: /home/g/hidrive/filter.txt
-log_directory: /home/g/hidrive/logs
-max_cpu_usage_percent: 100
-sync_paths:
-  documents:
-    local: "Docs"
-    rclone_remote: "remoteName"
-    remote: "RemoteDocs"
-    sync_interval: "daily"
-  photos:
-    local: "Photos"
-    rclone_remote: "remoteName"
-    remote: "RemotePhotos"
-    sync_interval: "weekly"
-rclone_options:
-  max_delete: 5
-  log_level: INFO
-  max_lock: 15m
-  retries: 3
-  low_level_retries: 10
-  compare: "size,modtime,checksum"
-  create_empty_src_dirs: null
-  check_access: null
-  track_renames: null
-bisync_options:
-  conflict_resolve: newer
-  conflict_loser: num
-  conflict_suffix: rc-conflict
-resync_options:
-  error_on_no_transfer: null
-  resync_mode: path1
-```
-
-### Important Notes
-
-- **local_base_path**: This should be an absolute path.
-- **exclusion_rules_file**: This file should contain one pattern per line, which defines which files to exclude from sync. For more details refer to the rclone documenatation. Example:
-
-```bash
-.*\.txt$
-.*\.doc$
-```
-
-- **sync_paths**: Each entry under this key represents a pair of directories to be synchronized. `local` is a subdirectory under `local_base_path`, and `remote` is the path on the remote storage.
-- **sync_interval**: This is an optional field that specifies the interval for periodic syncing. If not provided, the path will not be synced automatically in daemon mode.
-- **rclone_options**, **bisync_options**, and **resync_options**: These allow you to customize various aspects of the sync operation. Refer to the rclone documentation for details on available options.
-- The `resync` option in `bisync_options` is ignored if set in the config file. Use the command-line argument `--resync` to trigger a resync operation.
-- Options that don't accept parameters (like `track_renames`, `create_empty_src_dirs`, etc.) should be set to `null` in the configuration file.
-
-The following settings are not configurable and are always used:
-
-- `resync`
-- `log-file`
-- `recover`
-- `resilient`
+The configuration file (`~/.config/rclone_bisync/config.yaml`) contains all necessary settings for the synchronization process. Refer to the comments in the example configuration file for detailed explanations of each option.
 
 ## Usage
 
-Before running any synchronization operations, it's strongly recommended to perform a dry run first to ensure everything is set up correctly and to preview the changes that would be made.
+### Manual Execution
 
 Run the script using the following command:
 
 ```bash
-python rclone_bisync.py [options]
+./rclone_bisync.py [options]
 ```
 
 ### Command Line Options
@@ -145,12 +119,12 @@ python rclone_bisync.py [options]
 
 Examples:
 
-- Dry run for all folders (recommended for initial testing): `python rclone_bisync.py -d`
-- Dry run for specific folders: `python rclone_bisync.py documents,photos -d`
-- Resync specific folders: `python rclone_bisync.py documents,music --resync`
-- Force bisync with console logging: `python rclone_bisync.py photos --force-bisync --console-log`
-- Run in daemon mode: `python rclone_bisync.py --daemon`
-- Stop the daemon: `python rclone_bisync.py --stop`
+- Dry run for all folders (recommended for initial testing): `./rclone_bisync.py -d`
+- Dry run for specific folders: `./rclone_bisync.py documents,photos -d`
+- Resync specific folders: `./rclone_bisync.py documents,music --resync`
+- Force bisync with console logging: `./rclone_bisync.py photos --force-bisync --console-log`
+- Run in daemon mode: `./rclone_bisync.py --daemon`
+- Stop the daemon: `./rclone_bisync.py --stop`
 
 It's highly recommended to always start with a dry run, especially when setting up the script for the first time or making changes to your configuration. This allows you to review the proposed changes without risking any data loss or unintended modifications.
 
@@ -158,7 +132,7 @@ Once you're confident that the dry run results are as expected, you can run the 
 
 ## Logs
 
-Logs are stored in the `logs` directory within the base directory specified in the configuration file. There are separate logs for general operations and errors.
+Logs are stored in the directory specified in your configuration file. Check `rclone-bisync-error.log` for errors and `rclone-bisync.log` for detailed information.
 
 ## Handling Errors
 
@@ -166,50 +140,55 @@ If the script encounters critical errors, it logs them and may require manual in
 
 ## Automating Synchronization with Systemd
 
-To run the RClone BiSync script as a systemd service, follow these steps:
+To run the RClone BiSync script as a systemd user service:
 
-1. Create a systemd service file named `rclone-bisync.service` in `/etc/systemd/system/`:
+1. Copy the provided service file to your user systemd directory:
 
-```ini
-[Unit]
-Description=Rclone Bisync Daemon
-After=network.target
+   ```bash
+   mkdir -p ~/.config/systemd/user/
+   cp rclone-bisync.service ~/.config/systemd/user/
+   ```
 
-[Service]
-ExecStart=/usr/bin/python3 /path/to/rclone-bisync.py --daemon
-User=your_username
-Restart=on-failure
+2. Reload the systemd daemon:
 
-[Install]
-WantedBy=multi-user.target
-```
+   ```bash
+   systemctl --user daemon-reload
+   ```
 
-2. Reload the systemd daemon and start the service:
+3. Start the service:
+
+   ```bash
+   systemctl --user start rclone-bisync.service
+   ```
+
+4. Enable the service to start on login:
+
+   ```bash
+   systemctl --user enable rclone-bisync.service
+   ```
+
+5. To stop the service:
+
+   ```bash
+   systemctl --user stop rclone-bisync.service
+   ```
+
+6. To check the status:
+
+   ```bash
+   systemctl --user status rclone-bisync.service
+   ```
+
+7. To view logs:
+   ```bash
+   journalctl --user -u rclone-bisync.service
+   ```
+
+Note: To run the service when not logged in, enable lingering:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl start rclone-bisync
+sudo loginctl enable-linger $USER
 ```
-
-3. To enable the service to start automatically on boot:
-
-```bash
-sudo systemctl enable rclone-bisync
-```
-
-4. To stop the service:
-
-```bash
-sudo systemctl stop rclone-bisync
-```
-
-5. To check the status of the service:
-
-```bash
-sudo systemctl status rclone-bisync
-```
-
-This setup allows you to run your rclone bisync script as a systemd service, which will automatically start on boot and restart if it fails.
 
 ## Contributing
 
