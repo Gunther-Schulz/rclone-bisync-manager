@@ -33,21 +33,21 @@ specific_folders = None
 
 # Global variables for the PID file
 pid_file = os.path.join(os.environ.get(
-    'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync.pid')
+    'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync-manager.pid')
 # Global variables for the config file
 config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
-    '~/.config')), 'rclone-bisync', 'config.yaml')
+    '~/.config')), 'rclone-bisync-manager', 'config.yaml')
 # Global variables for the cache directory
 cache_dir = os.path.join(os.environ.get(
-    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync')
+    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
 # Global variables for the resync status file
 resync_status_file_name = ".resync_status"
 # Global variables for the bisync status file
 bisync_status_file_name = ".bisync_status"
 # Global variables for the log files
-sync_log_file_name = "rclone-bisync.log"
+sync_log_file_name = "rclone-bisync-manager.log"
 # Global variables for the error log file
-sync_error_log_file_name = "rclone-bisync-error.log"
+sync_error_log_file_name = "rclone-bisync-manager-error.log"
 # Global variables for the rclone test file.
 rclone_test_file_name = "RCLONE_TEST"
 # Global counter for CTRL-C presses
@@ -782,7 +782,7 @@ def handle_status_request(conn):
 def status_server():
     global running, shutdown_complete
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    socket_path = '/tmp/rclone_bisync_status.sock'
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
 
     try:
         os.unlink(socket_path)
@@ -819,7 +819,7 @@ def check_config_changed():
 
 
 def stop_daemon():
-    socket_path = '/tmp/rclone_bisync_status.sock'
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
     if os.path.exists(socket_path):
         try:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -840,7 +840,7 @@ def stop_daemon():
 
 
 def print_daemon_status():
-    socket_path = '/tmp/rclone_bisync_status.sock'
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
     if os.path.exists(socket_path):
         try:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
