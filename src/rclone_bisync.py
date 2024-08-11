@@ -190,29 +190,48 @@ def parse_interval(interval_str):
 # Parse command line arguments
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('folders', nargs='?', default=None,
-                        help='Specify folders to sync as a comma-separated list (optional).')
     parser.add_argument('-d', '--dry-run', action='store_true',
                         help='Perform a dry run without making any changes.')
-    parser.add_argument('--resync', action='store_true',
-                        help='Force a resynchronization, ignoring previous sync status.')
-    parser.add_argument('--force-bisync', action='store_true',
-                        help='Force the operation without confirmation, only applicable if specific folders are specified.')
-    parser.add_argument('--console-log', action='store_true',
-                        help='Print log messages to the console in addition to the log files.')
     parser.add_argument('--daemon', action='store_true',
                         help='Run the script in daemon mode.')
     parser.add_argument('--stop', action='store_true', help='Stop the daemon')
     parser.add_argument('--status', action='store_true',
                         help='Get status report from the daemon')
+
+    # Arguments only for non-daemon mode
+    non_daemon_group = parser.add_argument_group('Non-daemon mode arguments')
+    non_daemon_group.add_argument('folders', nargs='?', default=None,
+                                  help='Specify folders to sync as a comma-separated list (optional).')
+    non_daemon_group.add_argument('--resync', action='store_true',
+                                  help='Force a resynchronization, ignoring previous sync status.')
+    non_daemon_group.add_argument('--force-bisync', action='store_true',
+                                  help='Force the operation without confirmation, only applicable if specific folders are specified.')
+    non_daemon_group.add_argument('--console-log', action='store_true',
+                                  help='Print log messages to the console in addition to the log files.')
+
     args = parser.parse_args()
+
+    # Check for conflicting arguments
+    if args.daemon:
+        non_daemon_args = ['folders', 'resync', 'force_bisync', 'console_log']
+        used_non_daemon_args = [
+            arg for arg in non_daemon_args if getattr(args, arg)]
+        if used_non_daemon_args:
+            parser.error(
+                f"The following arguments cannot be used with --daemon: {', '.join(used_non_daemon_args)}")
+
+    if args.stop or args.status:
+        if args.daemon or any([args.folders, args.resync, args.force_bisync, args.console_log, args.dry_run]):
+            parser.error(
+                "--stop and --status cannot be used with other arguments")
 
     global dry_run, force_resync, console_log, specific_folders, force_operation, daemon_mode
     dry_run = args.dry_run
-    force_resync = args.resync
-    console_log = args.console_log
-    specific_folders = args.folders.split(',') if args.folders else None
-    force_operation = args.force_bisync
+    force_resync = args.resync if not args.daemon else False
+    console_log = args.console_log if not args.daemon else False
+    specific_folders = args.folders.split(
+        ',') if args.folders and not args.daemon else None
+    force_operation = args.force_bisync if not args.daemon else False
     daemon_mode = args.daemon
 
     return args
@@ -831,10 +850,15 @@ def main():
         ):
             daemon_main()
     else:
-        # If not in daemon mode, perform a single sync for all active paths
-        for key, value in sync_paths.items():
-            if value.get('active', True):
+        # If not in daemon mode, perform a single sync for specified or all active paths
+        paths_to_sync = specific_folders if specific_folders else [
+            key for key, value in sync_paths.items() if value.get('active', True)]
+        for key in paths_to_sync:
+            if key in sync_paths:
                 perform_sync_operations(key)
+            else:
+                log_error(f"Specified folder '{
+                          key}' not found in configuration")
 
 
 if __name__ == "__main__":
