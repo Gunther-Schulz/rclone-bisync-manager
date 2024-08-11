@@ -2,11 +2,6 @@
 
 RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files between local directories and remote storage supported by RClone. This Python script runs in the background, providing continuous synchronization with features such as periodic syncing, detailed logging, and real-time status reporting.
 
-## TODO
-
-- Check if all config changes are reloaded on the fly
-- Check command line options if they still work
-
 ## Key Features
 
 - **Daemon-based Operation**: Runs continuously in the background, managing synchronization tasks without user intervention.
@@ -33,7 +28,6 @@ To ensure robust operation, RClone BiSync Manager always uses the following RClo
 ## Prerequisites
 
 - `rclone` (required)
-- `mkdir`, `grep`, `awk`, `find`, `md5sum` (required)
 - `cpulimit` (optional, for CPU usage limiting)
 - Python 3.6+
 - Required Python packages (install via `pip install -r requirements.txt`):

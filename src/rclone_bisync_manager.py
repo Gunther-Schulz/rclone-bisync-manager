@@ -3,6 +3,7 @@
 import yaml
 import os
 import sys
+import hashlib
 import subprocess
 import argparse
 from datetime import datetime, timedelta
@@ -271,12 +272,15 @@ def ensure_log_file_path():
 
 # Calculate the MD5 of a file
 def calculate_md5(file_path):
-    result = subprocess.run(['md5sum', file_path],
-                            capture_output=True, text=True)
-    return result.stdout.split()[0]
-
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 # Handle filter changes
+
+
 def handle_filter_changes():
     stored_md5_file = os.path.join(cache_dir, '.filter_md5')
     os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
