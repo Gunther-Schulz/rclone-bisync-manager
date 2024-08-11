@@ -3,8 +3,8 @@ Description=RClone BiSync Manager Daemon
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/rclone-bisync-manager.py daemon start
-ExecStop=/usr/bin/rclone-bisync-manager.py daemon stop
+ExecStart=/usr/bin/rclone_bisync_manager.py daemon start
+ExecStop=/usr/bin/rclone_bisync_manager.py daemon stop
 Restart=on-failure
 
 [Install]
