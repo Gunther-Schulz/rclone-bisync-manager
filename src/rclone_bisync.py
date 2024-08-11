@@ -205,7 +205,8 @@ def parse_args():
     parser.add_argument('--stop', action='store_true', help='Stop the daemon')
     parser.add_argument('--status', action='store_true',
                         help='Get status report from the daemon')
-    args, unknown = parser.parse_known_args()
+    args = parser.parse_args()
+
     global dry_run, force_resync, console_log, specific_folders, force_operation, daemon_mode
     dry_run = args.dry_run
     force_resync = args.resync
@@ -213,31 +214,6 @@ def parse_args():
     specific_folders = args.folders.split(',') if args.folders else None
     force_operation = args.force_bisync
     daemon_mode = args.daemon
-
-    if specific_folders:
-        for folder in specific_folders:
-            if folder not in sync_paths:
-                error_message = f"The specified folder '{
-                    folder}' is not configured in the sync directories. Please check the configuration file at {config_file}."
-                log_error(error_message)
-                sys.exit(1)
-
-    if force_operation and specific_folders:
-        for folder in specific_folders:
-            local_path = os.path.join(
-                local_base_path, sync_paths[folder]['local'])
-            remote_path = f"{sync_paths[folder]['rclone_remote']}:{
-                sync_paths[folder]['remote']}"
-            log_message(f"WARNING: You are about to force a bisync on '{
-                local_path}' and '{remote_path}'.")
-        confirmation = input("Are you sure you want to proceed? (yes/no): ")
-        if confirmation.lower() != 'yes':
-            log_message("Operation aborted by the user.")
-            sys.exit(0)
-    elif force_operation and not specific_folders:
-        error_message = "ERROR: --force-bisync can only be used when specific sync_dirs are specified."
-        log_error(error_message)
-        sys.exit(1)
 
     return args
 
@@ -802,6 +778,21 @@ def stop_daemon():
         log_error("Status socket not found. Daemon may not be running.")
 
 
+def print_daemon_status():
+    socket_path = '/tmp/rclone_bisync_status.sock'
+    if os.path.exists(socket_path):
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(socket_path)
+            status = client.recv(4096).decode()
+            client.close()
+            print(status)
+        except Exception as e:
+            print(f"Error getting daemon status: {e}")
+    else:
+        print("Daemon is not running.")
+
+
 def main():
     global dry_run, daemon_mode
     args = parse_args()
@@ -809,6 +800,10 @@ def main():
 
     if args.stop:
         stop_daemon()
+        return
+
+    if args.status:
+        print_daemon_status()
         return
 
     check_tools()
@@ -836,7 +831,10 @@ def main():
         ):
             daemon_main()
     else:
-        perform_sync_operations()
+        # If not in daemon mode, perform a single sync for all active paths
+        for key, value in sync_paths.items():
+            if value.get('active', True):
+                perform_sync_operations(key)
 
 
 if __name__ == "__main__":
