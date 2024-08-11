@@ -31,7 +31,14 @@ specific_folders = None
 
 # Initialize variables
 
-
+# Default log directory
+default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
+    '~/.local/state')), 'rclone-bisync-manager', 'logs')
+# Log file path
+log_file_path = os.path.join(default_log_dir, 'rclone-bisync-manager.log')
+# Error log file path
+error_log_file_path = os.path.join(
+    default_log_dir, 'rclone-bisync-manager-error.log')
 # Global variables for the PID file
 pid_file = os.path.join(os.environ.get(
     'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync-manager.pid')
@@ -128,7 +135,7 @@ def log_error(message):
 
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, sync_paths, log_file_path, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals, error_log_file_path, last_sync_times
+    global local_base_path, exclusion_rules_file, sync_paths, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals, last_sync_times
     if not os.path.exists(os.path.dirname(config_file)):
         os.makedirs(os.path.dirname(config_file), exist_ok=True)
     if not os.path.exists(config_file):
@@ -142,17 +149,8 @@ def load_config():
     exclusion_rules_file = config.get('exclusion_rules_file')
     sync_paths = config.get('sync_paths', {})
 
-    # Set default log_file_path
-    default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
-        '~/.local/state')), 'rclone-bisync-manager', 'logs')
-
     # Ensure the log directory exists
     os.makedirs(default_log_dir, exist_ok=True)
-
-    # Set log file paths
-    log_file_path = os.path.join(default_log_dir, 'rclone-bisync-manager.log')
-    error_log_file_path = os.path.join(
-        default_log_dir, 'rclone-bisync-manager-error.log')
 
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
     rclone_options = config.get('rclone_options', {})
@@ -264,7 +262,7 @@ def ensure_rclone_dir():
 
 # Ensure log file path exists
 def ensure_log_file_path():
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    os.makedirs(default_log_dir, exist_ok=True)
 
 
 # Calculate the MD5 of a file
@@ -337,7 +335,7 @@ def get_base_rclone_options():
     options = {
         'exclude': [resync_status_file_name, bisync_status_file_name],
         'log-file': log_file_path,
-        'log-level': rclone_options['log_level'] if not dry_run else 'INFO',
+        'log-level': rclone_options['log_level'] if not dry_run else 'ERROR',
         'recover': None,
         'resilient': None,
     }

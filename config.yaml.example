@@ -4,9 +4,6 @@ local_base_path: /path/to/your/local/base/directory
 # File containing rules for excluding certain files/directories from sync. This follows the format that rclone expects. If this file is changed, the next run will be a resync operation
 exclusion_rules_file: /path/to/your/filter.txt
 
-# Directory where log files will be stored
-log_path: /path/to/your/log/directory
-
 # CPU usage limit as a percentage
 max_cpu_usage_percent: 100
 

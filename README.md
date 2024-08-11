@@ -2,6 +2,11 @@
 
 RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files between local directories and remote storage supported by RClone. This Python script runs in the background, providing continuous synchronization with features such as periodic syncing, detailed logging, and real-time status reporting.
 
+## TODO
+
+- Check if all config changes are reloaded on the fly
+- Check command line options if they still work
+
 ## Key Features
 
 - **Daemon-based Operation**: Runs continuously in the background, managing synchronization tasks without user intervention.
@@ -117,7 +122,6 @@ The configuration file (`~/.config/rclone_bisync_manager/config.yaml`) contains 
 
 - `local_base_path`: Base path for local files to be synced
 - `exclusion_rules_file`: File containing rules for excluding files/directories from sync
-- `log_path`: Directory where log files will be stored
 - `max_cpu_usage_percent`: CPU usage limit as a percentage
 - `sync_paths`: Define the paths to be synchronized
 - `rclone_options`: Customize rclone options
@@ -128,7 +132,16 @@ Refer to the comments in the example configuration file for detailed explanation
 
 ## Logs
 
-Logs are stored in the directory specified in your configuration file. Check `rclone-bisync-manager-error.log` for errors and `rclone-bisync-manager.log` for detailed information.
+Logs are stored in the default log directory:
+
+```
+~/.local/state/rclone-bisync-manager/logs/
+```
+
+This directory contains two main log files:
+
+- `rclone-bisync-manager.log`: Contains detailed information about sync operations.
+- `rclone-bisync-manager-error.log`: Contains error messages and warnings.
 
 ## Automating Synchronization with Systemd
 
