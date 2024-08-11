@@ -722,7 +722,7 @@ def generate_status_report():
             "is_currently_syncing": key == currently_syncing,
         }
 
-    return json.dumps(status, indent=2)
+    return json.dumps(status, ensure_ascii=False, indent=2)
 
 
 def read_sync_status(local_path):
