@@ -12,6 +12,9 @@ import daemon
 import json
 import socket
 import threading
+import heapq
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 # Note: Send a SIGINT twice to force exit
 
@@ -141,6 +144,7 @@ def load_config():
     resync_options = config.get('resync_options', {})
 
     # Load sync intervals
+    sync_intervals.clear()
     for key, value in sync_paths.items():
         interval = value.get('sync_interval', None)
         if interval:
@@ -509,81 +513,188 @@ def check_remote_rclone_test(remote_path):
     return True
 
 
-# Perform the sync operations
-def perform_sync_operations():
-    global last_sync_times, dry_run
+@dataclass(order=True)
+class SyncTask:
+    scheduled_time: datetime
+    path_key: str = field(compare=False)
+
+
+class SyncScheduler:
+    def __init__(self):
+        self.tasks: List[SyncTask] = []
+        self.task_map: Dict[str, SyncTask] = {}
+
+    def schedule_task(self, path_key: str, next_run: datetime):
+        if path_key in self.task_map:
+            self.remove_task(path_key)
+        task = SyncTask(next_run, path_key)
+        heapq.heappush(self.tasks, task)
+        self.task_map[path_key] = task
+
+    def remove_task(self, path_key: str):
+        if path_key in self.task_map:
+            task = self.task_map.pop(path_key)
+            self.tasks.remove(task)
+            heapq.heapify(self.tasks)
+
+    def get_next_task(self) -> Optional[SyncTask]:
+        return self.tasks[0] if self.tasks else None
+
+    def pop_next_task(self) -> Optional[SyncTask]:
+        if self.tasks:
+            task = heapq.heappop(self.tasks)
+            del self.task_map[task.path_key]
+            return task
+        return None
+
+
+scheduler = SyncScheduler()
+
+
+def load_config():
+    global local_base_path, exclusion_rules_file, sync_paths, log_file_path, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals
+    if not os.path.exists(os.path.dirname(config_file)):
+        os.makedirs(os.path.dirname(config_file), exist_ok=True)
+    if not os.path.exists(config_file):
+        error_message = f"Configuration file not found. Please ensure it exists at: {
+            config_file}"
+        log_error(error_message)
+        sys.exit(1)
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+    local_base_path = config.get('local_base_path')
+    exclusion_rules_file = config.get('exclusion_rules_file')
+    sync_paths = config.get('sync_paths', {})
+
+    # Set default log_file_path
+    default_log_dir = os.path.join(os.path.expanduser(
+        '~'), '.cache', 'rclone', 'bisync', 'logs')
+
+    log_path = config.get('log_path', os.path.join(
+        default_log_dir, sync_log_file_name))
+
+    # Ensure log directory exists
+    os.makedirs(log_path, exist_ok=True)
+
+    log_file_path = os.path.join(log_path, sync_log_file_name)
+
+    # Set error log file path
+    error_log_file_path = os.path.join(
+        log_path, sync_error_log_file_name)
+
+    max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
+    rclone_options = config.get('rclone_options', {})
+    bisync_options = config.get('bisync_options', {})
+    resync_options = config.get('resync_options', {})
+
+    # Load sync intervals
+    sync_intervals.clear()
+    for key, value in sync_paths.items():
+        interval = value.get('sync_interval', None)
+        if interval:
+            sync_intervals[key] = parse_interval(interval)
+        # Read the dry_run setting for each sync_path
+        value['dry_run'] = value.get('dry_run', False)
+
+    # Schedule initial tasks
+    current_time = datetime.now()
+    for key, value in sync_paths.items():
+        if value.get('active', True) and 'sync_interval' in value:
+            interval = parse_interval(value['sync_interval'])
+            scheduler.schedule_task(key, current_time)
+
+
+def reload_config():
+    global dry_run
+    log_message("Reloading configuration...")
+
+    old_sync_paths = sync_paths.copy()
+    load_config()
+    args = parse_args()
+    dry_run = args.dry_run
 
     current_time = datetime.now()
 
+    # Update existing tasks and add new ones
     for key, value in sync_paths.items():
-        if not value.get('active', True) or 'sync_interval' not in value:
-            continue
+        if value.get('active', True) and 'sync_interval' in value:
+            interval = parse_interval(value['sync_interval'])
+            if key in old_sync_paths:
+                # Adjust the next run time for existing tasks
+                old_task = scheduler.task_map.get(key)
+                if old_task:
+                    time_passed = current_time - old_task.scheduled_time
+                    progress = time_passed / \
+                        timedelta(seconds=parse_interval(
+                            old_sync_paths[key]['sync_interval']))
+                    next_run = current_time + progress * \
+                        timedelta(seconds=interval)
+                    scheduler.schedule_task(key, next_run)
+            else:
+                # Schedule new tasks to run immediately
+                scheduler.schedule_task(key, current_time)
 
-        last_sync = last_sync_times.get(key, datetime.min)
-        interval = parse_interval(value['sync_interval'])
+    # Remove tasks for paths that no longer exist
+    for key in old_sync_paths:
+        if key not in sync_paths:
+            scheduler.remove_task(key)
 
-        if current_time - last_sync < timedelta(seconds=interval):
-            continue
+    log_message(f"Configuration reloaded. Dry run: {dry_run}")
 
-        local_path = os.path.join(local_base_path, value['local'])
-        remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
-        if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
-            continue
+def perform_sync_operations(task: SyncTask):
+    key = task.path_key
+    value = sync_paths[key]
 
-        ensure_local_directory(local_path)
+    local_path = os.path.join(local_base_path, value['local'])
+    remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
-        path_dry_run = dry_run or value.get('dry_run', False)
+    if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
+        return
 
-        if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
-            bisync(remote_path, local_path, path_dry_run)
+    ensure_local_directory(local_path)
 
-        if not path_dry_run:
-            last_sync_times[key] = current_time
+    path_dry_run = dry_run or value.get('dry_run', False)
 
-    return False  # Return False if no sync was performed
+    if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
+        bisync(remote_path, local_path, path_dry_run)
 
-# Main function for daemon mode
+    # Schedule next run
+    interval = parse_interval(value['sync_interval'])
+    next_run = datetime.now() + timedelta(seconds=interval)
+    scheduler.schedule_task(key, next_run)
 
 
 def daemon_main():
-    global running, dry_run, last_sync_times
+    global running
 
     log_message("Daemon started")
+    load_config()
 
     status_thread = threading.Thread(target=status_server, daemon=True)
     status_thread.start()
 
-    # Perform initial sync for all active paths
-    log_message("Starting initial sync for all active paths")
-    for key, value in sync_paths.items():
-        if value.get('active', True):
-            local_path = os.path.join(local_base_path, value['local'])
-            remote_path = f"{value['rclone_remote']}:{value['remote']}"
-
-            path_dry_run = dry_run or value.get('dry_run', False)
-
-            if check_local_rclone_test(local_path) and check_remote_rclone_test(remote_path):
-                ensure_local_directory(local_path)
-                if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
-                    bisync(remote_path, local_path, path_dry_run)
-
-                if not path_dry_run:
-                    last_sync_times[key] = datetime.now()
-
-    log_message("Initial sync completed")
-
     while running:
+        next_task = scheduler.get_next_task()
+        if next_task:
+            now = datetime.now()
+            if now >= next_task.scheduled_time:
+                task = scheduler.pop_next_task()
+                perform_sync_operations(task)
+                generate_status_report()
+            else:
+                # Sleep until the next task or for a maximum of 1 second
+                sleep_time = min(
+                    (next_task.scheduled_time - now).total_seconds(), 1)
+                time.sleep(sleep_time)
+        else:
+            time.sleep(1)
+
         if check_config_changed():
             reload_config()
 
-        if perform_sync_operations():
-            generate_status_report()
-
-        time.sleep(1)  # Check every second
-
     log_message('Daemon shutting down...')
-    status_thread.join(timeout=5)  # Wait for status thread to finish
+    status_thread.join(timeout=5)
 
 
 def generate_status_report():
@@ -669,74 +780,6 @@ def check_config_changed():
     except OSError:
         pass  # File doesn't exist or can't be accessed
     return False
-
-
-def adjust_last_sync_times(old_intervals, new_intervals):
-    global last_sync_times
-    current_time = datetime.now()
-
-    for key in new_intervals:
-        if key in old_intervals:
-            # If the path existed before, adjust the last sync time
-            if key in last_sync_times:
-                time_since_last_sync = current_time - last_sync_times[key]
-                old_interval = timedelta(seconds=old_intervals[key])
-                new_interval = timedelta(seconds=new_intervals[key])
-
-                if time_since_last_sync > new_interval:
-                    # If it's overdue with the new interval, set it to be due immediately
-                    last_sync_times[key] = current_time - new_interval
-                else:
-                    # Adjust the last sync time proportionally
-                    progress = time_since_last_sync / old_interval
-                    last_sync_times[key] = current_time - \
-                        (progress * new_interval)
-        else:
-            # If it's a new path, set it to be due immediately
-            last_sync_times[key] = current_time - \
-                timedelta(seconds=new_intervals[key])
-
-
-def reload_config():
-    global dry_run, sync_intervals, last_sync_times
-    log_message("Reloading configuration...")
-
-    old_intervals = sync_intervals.copy()
-    old_sync_paths = sync_paths.copy()
-
-    load_config()
-    args = parse_args()
-    dry_run = args.dry_run  # Update dry_run based on command line argument
-
-    # Update sync_intervals
-    new_intervals = {}
-    for key, value in sync_paths.items():
-        interval = value.get('sync_interval', None)
-        if interval:
-            new_intervals[key] = parse_interval(interval)
-
-    current_time = datetime.now()
-
-    # Adjust last_sync_times
-    for key in new_intervals:
-        if key in old_intervals:
-            # If the path existed before, keep the last sync time
-            if key not in last_sync_times:
-                last_sync_times[key] = current_time
-        else:
-            # If it's a new path, set it to be due at the next interval
-            last_sync_times[key] = current_time
-
-    # Remove last_sync_times for paths that no longer exist
-    for key in list(last_sync_times.keys()):
-        if key not in new_intervals:
-            del last_sync_times[key]
-
-    sync_intervals = new_intervals
-
-    log_message(f"Configuration reloaded. Dry run: {dry_run}")
-    log_message(f"Updated sync intervals: {sync_intervals}")
-    log_message(f"Adjusted last sync times: {last_sync_times}")
 
 
 def stop_daemon():
