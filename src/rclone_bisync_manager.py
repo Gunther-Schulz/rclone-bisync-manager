@@ -31,6 +31,7 @@ specific_folders = None
 
 # Initialize variables
 
+
 # Global variables for the PID file
 pid_file = os.path.join(os.environ.get(
     'XDG_RUNTIME_DIR', '/tmp'), 'rclone-bisync-manager.pid')
@@ -89,9 +90,11 @@ def signal_handler(signum, frame):
     ctrl_c_presses += 1
 
     if ctrl_c_presses > 1:
+        log_message('Multiple SIGINT detected. Forcing exit.')
         print('Multiple CTRL-C detected. Forcing exit.')
         os._exit(1)  # Force exit immediately
-    print('SIGINT or CTRL-C detected. Exiting gracefully.')
+
+    log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
 
     # Set the shutting_down flag
     shutting_down = True
@@ -140,20 +143,16 @@ def load_config():
     sync_paths = config.get('sync_paths', {})
 
     # Set default log_file_path
-    default_log_dir = os.path.join(os.path.expanduser(
-        '~'), '.cache', 'rclone', 'bisync', 'logs')
+    default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
+        '~/.local/state')), 'rclone-bisync-manager', 'logs')
 
-    log_path = config.get('log_path', os.path.join(
-        default_log_dir, sync_log_file_name))
+    # Ensure the log directory exists
+    os.makedirs(default_log_dir, exist_ok=True)
 
-    # Ensure log directory exists
-    os.makedirs(log_path, exist_ok=True)
-
-    log_file_path = os.path.join(log_path, sync_log_file_name)
-
-    # Set error log file path
+    # Set log file paths
+    log_file_path = os.path.join(default_log_dir, 'rclone-bisync-manager.log')
     error_log_file_path = os.path.join(
-        log_path, sync_error_log_file_name)
+        default_log_dir, 'rclone-bisync-manager-error.log')
 
     max_cpu_usage_percent = config.get('max_cpu_usage_percent', 100)
     rclone_options = config.get('rclone_options', {})
@@ -197,50 +196,45 @@ def parse_interval(interval_str):
 
 # Parse command line arguments
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="RClone BiSync Manager")
     parser.add_argument('-d', '--dry-run', action='store_true',
                         help='Perform a dry run without making any changes.')
-    parser.add_argument('--daemon', action='store_true',
-                        help='Run the script in daemon mode.')
-    parser.add_argument('--stop', action='store_true', help='Stop the daemon')
-    parser.add_argument('--status', action='store_true',
-                        help='Get status report from the daemon')
+    parser.add_argument('--console-log', action='store_true',
+                        help='Print log messages to the console in addition to the log files.')
 
-    # Arguments only for non-daemon mode
-    non_daemon_group = parser.add_argument_group('Non-daemon mode arguments')
-    non_daemon_group.add_argument('folders', nargs='?', default=None,
-                                  help='Specify folders to sync as a comma-separated list (optional).')
-    non_daemon_group.add_argument('--resync', action='store_true',
-                                  help='Force a resynchronization, ignoring previous sync status.')
-    non_daemon_group.add_argument('--force-bisync', action='store_true',
-                                  help='Force the operation without confirmation, only applicable if specific folders are specified.')
-    non_daemon_group.add_argument('--console-log', action='store_true',
-                                  help='Print log messages to the console in addition to the log files.')
+    subparsers = parser.add_subparsers(dest='command', required=True)
+
+    # Daemon command
+    daemon_parser = subparsers.add_parser('daemon', help='Run in daemon mode')
+    daemon_parser.add_argument('action', choices=['start', 'stop', 'status'],
+                               help='Action to perform on the daemon')
+
+    # Sync command
+    sync_parser = subparsers.add_parser(
+        'sync', help='Perform a sync operation')
+    sync_parser.add_argument('folders', nargs='*',
+                             help='Specify folders to sync (optional, sync all if not specified)')
+    sync_parser.add_argument('--resync', action='store_true',
+                             help='Force a resynchronization, ignoring previous sync status.')
+    sync_parser.add_argument('--force-bisync', action='store_true',
+                             help='Force the bisync operation without confirmation.')
 
     args = parser.parse_args()
 
-    # Check for conflicting arguments
-    if args.daemon:
-        non_daemon_args = ['folders', 'resync', 'force_bisync', 'console_log']
-        used_non_daemon_args = [
-            arg for arg in non_daemon_args if getattr(args, arg)]
-        if used_non_daemon_args:
-            parser.error(
-                f"The following arguments cannot be used with --daemon: {', '.join(used_non_daemon_args)}")
-
-    if args.stop or args.status:
-        if args.daemon or any([args.folders, args.resync, args.force_bisync, args.console_log, args.dry_run]):
-            parser.error(
-                "--stop and --status cannot be used with other arguments")
-
     global dry_run, force_resync, console_log, specific_folders, force_operation, daemon_mode
     dry_run = args.dry_run
-    force_resync = args.resync if not args.daemon else False
-    console_log = args.console_log if not args.daemon else False
-    specific_folders = args.folders.split(
-        ',') if args.folders and not args.daemon else None
-    force_operation = args.force_bisync if not args.daemon else False
-    daemon_mode = args.daemon
+    console_log = args.console_log
+
+    if args.command == 'sync':
+        force_resync = args.resync
+        specific_folders = args.folders if args.folders else None
+        force_operation = args.force_bisync
+        daemon_mode = False
+    elif args.command == 'daemon':
+        force_resync = False
+        specific_folders = None
+        force_operation = False
+        daemon_mode = True
 
     return args
 
@@ -830,7 +824,10 @@ def stop_daemon():
             if 'pid' in status:
                 os.kill(status['pid'], signal.SIGTERM)
                 print(f"Sent SIGTERM to daemon (PID: {status['pid']})")
-                print("Daemon is shutting down. Use --status to check progress.")
+                print("Daemon is shutting down. Use 'daemon status' to check progress.")
+
+                # Log the stop request
+                log_message("Daemon stop request received. Shutting down.")
             else:
                 print("Unable to determine daemon PID from status")
         except Exception as e:
@@ -862,14 +859,6 @@ def main():
     args = parse_args()
     load_config()  # Load config first to set up log paths
 
-    if args.stop:
-        stop_daemon()
-        return
-
-    if args.status:
-        print_daemon_status()
-        return
-
     check_tools()
     ensure_rclone_dir()
     ensure_log_file_path()
@@ -884,18 +873,22 @@ def main():
     else:
         log_error("Unable to determine home directory")
 
-    if daemon_mode:
-        with daemon.DaemonContext(
-            working_directory='/',
-            umask=0o002,
-            signal_map={
-                signal.SIGTERM: signal_handler,
-                signal.SIGINT: signal_handler,
-            }
-        ):
-            daemon_main()
-    else:
-        # If not in daemon mode, perform a single sync for specified or all active paths
+    if args.command == 'daemon':
+        if args.action == 'start':
+            with daemon.DaemonContext(
+                working_directory='/',
+                umask=0o002,
+                signal_map={
+                    signal.SIGTERM: signal_handler,
+                    signal.SIGINT: signal_handler,
+                }
+            ):
+                daemon_main()
+        elif args.action == 'stop':
+            stop_daemon()
+        elif args.action == 'status':
+            print_daemon_status()
+    elif args.command == 'sync':
         paths_to_sync = specific_folders if specific_folders else [
             key for key, value in sync_paths.items() if value.get('active', True)]
         for key in paths_to_sync:

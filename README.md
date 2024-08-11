@@ -65,47 +65,51 @@ To ensure robust operation, RClone BiSync Manager always uses the following RClo
 
 ## Usage
 
-RClone BiSync Manager can operate in two modes: daemon mode and standalone mode.
+RClone BiSync Manager can operate in two modes: daemon mode and sync mode.
+
+### Global Options
+
+These options can be used with any command:
+
+- **-d, --dry-run**: Perform a dry run without making actual changes.
+- **--console-log**: Enable logging to the console in addition to log files.
 
 ### Daemon Mode
 
-To start the RClone BiSync Manager daemon:
+To manage the RClone BiSync Manager daemon:
 
 ```bash
-./rclone_bisync_manager.py --daemon
+./rclone_bisync_manager.py daemon [start|stop|status]
 ```
 
-Daemon-specific commands:
-
-- **--daemon**: Run the script in daemon mode.
-- **--stop**: Stop the running daemon.
-- **--status**: Get real-time status report from the daemon.
-- **-d, --dry-run**: Perform a dry run without making actual changes.
-
 Examples:
 
-- Start the daemon: `./rclone_bisync_manager.py --daemon`
-- Stop the daemon: `./rclone_bisync_manager.py --stop`
-- Get daemon status: `./rclone_bisync_manager.py --status`
+- Start the daemon: `./rclone_bisync_manager.py daemon start`
+- Stop the daemon: `./rclone_bisync_manager.py daemon stop`
+- Get daemon status: `./rclone_bisync_manager.py daemon status`
+- Start daemon in dry-run mode: `./rclone_bisync_manager.py -d daemon start`
 
-### Standalone Mode
+### Sync Mode
 
-In standalone mode, the script performs a single sync operation and then exits.
+In sync mode, the script performs a single sync operation and then exits:
 
-Command Line Options:
+```bash
+./rclone_bisync_manager.py sync [folders] [options]
+```
 
-- **folders**: Specify particular folders to sync as a comma-separated list.
-- **-d, --dry-run**: Perform a dry run without making actual changes.
+Options:
+
+- **folders**: Specify particular folders to sync (optional, syncs all if not specified).
 - **--resync**: Force a resynchronization of specified folders.
-- **--force-bisync**: Force a bisync operation (only when specific folders are specified).
-- **--console-log**: Enable logging to the console in addition to log files.
+- **--force-bisync**: Force a bisync operation.
 
 Examples:
 
-- Dry run for all folders: `./rclone_bisync_manager.py -d`
-- Sync specific folders: `./rclone_bisync_manager.py documents,photos`
-- Resync specific folders with console logging: `./rclone_bisync_manager.py documents,music --resync --console-log`
-- Force bisync with console logging: `./rclone_bisync_manager.py photos --force-bisync --console-log`
+- Sync all folders: `./rclone_bisync_manager.py sync`
+- Sync specific folders: `./rclone_bisync_manager.py sync folder1 folder2`
+- Force resync of a folder: `./rclone_bisync_manager.py sync folder1 --resync`
+- Dry run for all folders: `./rclone_bisync_manager.py -d sync`
+- Force bisync with console logging: `./rclone_bisync_manager.py sync folder1 --force-bisync --console-log`
 
 ## Configuration
 
