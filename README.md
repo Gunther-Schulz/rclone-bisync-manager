@@ -1,6 +1,6 @@
 # RClone BiSync Script
 
-This Python script provides a robust solution for bidirectional synchronization of files between a local directory and a remote storage supported by RClone. It includes features such as dry runs, forced resynchronization, and detailed logging.
+This Python script provides a robust solution for bidirectional synchronization of files between a local directory and a remote storage supported by RClone. It includes features such as dry runs, forced resynchronization, detailed logging, and daemon mode for periodic syncing.
 
 ## Features
 
@@ -9,10 +9,12 @@ This Python script provides a robust solution for bidirectional synchronization 
 - **Detailed Logging**: Log all operations, with separate logs for errors.
 - **Configurable**: Configuration through a YAML file.
 - **Signal Handling**: Graceful shutdown on SIGINT (CTRL-C).
+- **Daemon Mode**: Run the script as a background process for periodic syncing.
+- **Periodic Sync**: Set individual sync intervals for each sync path.
 
 ## Opinionated Settings
 
-To keep the script running as robustly as possible, this script uses always the following settings:
+To keep the script running as robustly as possible, this script always uses the following settings:
 
 - `--recover`: Attempts to recover from a failed sync.
 - `--resilient`: Continues the sync even if some files can't be transferred.
@@ -22,6 +24,12 @@ To keep the script running as robustly as possible, this script uses always the 
 Ensure you have `rclone` installed on your system along with other required tools like `mkdir`, `grep`, `awk`, `find`, and `md5sum`. These tools are necessary for the script to function correctly.
 
 Optional: Install `cpulimit` if you want to use the CPU usage limiting feature. If `cpulimit` is not installed, the `max_cpu_usage_percent` setting in the configuration will be ignored.
+
+For daemon mode, install the `python-daemon` package:
+
+```bash
+pip install python-daemon
+```
 
 ## Installation
 
@@ -67,6 +75,12 @@ sync_paths:
     local: "Docs"
     rclone_remote: "remoteName"
     remote: "RemoteDocs"
+    sync_interval: "daily"
+  photos:
+    local: "Photos"
+    rclone_remote: "remoteName"
+    remote: "RemotePhotos"
+    sync_interval: "weekly"
 rclone_options:
   max_delete: 5
   log_level: INFO
@@ -97,6 +111,7 @@ resync_options:
 ```
 
 - **sync_paths**: Each entry under this key represents a pair of directories to be synchronized. `local` is a subdirectory under `local_base_path`, and `remote` is the path on the remote storage.
+- **sync_interval**: This is an optional field that specifies the interval for periodic syncing. If not provided, the path will not be synced automatically in daemon mode.
 - **rclone_options**, **bisync_options**, and **resync_options**: These allow you to customize various aspects of the sync operation. Refer to the rclone documentation for details on available options.
 - The `resync` option in `bisync_options` is ignored if set in the config file. Use the command-line argument `--resync` to trigger a resync operation.
 - Options that don't accept parameters (like `track_renames`, `create_empty_src_dirs`, etc.) should be set to `null` in the configuration file.
@@ -125,6 +140,8 @@ python rclone_bisync.py [options]
 - **--resync**: Force a resynchronization.
 - **--force-bisync**: Force a bisync. This option is only applicable if specific folders are specified.
 - **--console-log**: Enable logging to the console. Only wrapper messages are logged to the console, not the detailed log messages from rclone.
+- **--daemon**: Run the script in daemon mode for periodic syncing.
+- **--stop**: Stop the daemon if it's running.
 
 Examples:
 
@@ -132,6 +149,8 @@ Examples:
 - Dry run for specific folders: `python rclone_bisync.py documents,photos -d`
 - Resync specific folders: `python rclone_bisync.py documents,music --resync`
 - Force bisync with console logging: `python rclone_bisync.py photos --force-bisync --console-log`
+- Run in daemon mode: `python rclone_bisync.py --daemon`
+- Stop the daemon: `python rclone_bisync.py --stop`
 
 It's highly recommended to always start with a dry run, especially when setting up the script for the first time or making changes to your configuration. This allows you to review the proposed changes without risking any data loss or unintended modifications.
 
@@ -147,129 +166,50 @@ If the script encounters critical errors, it logs them and may require manual in
 
 ## Automating Synchronization with Systemd
 
-To run the RClone BiSync script periodically using systemd, follow these steps:
+To run the RClone BiSync script as a systemd service, follow these steps:
 
-1. Copy the systemd service and timer files to the appropriate directory:
-
-   ```bash
-   sudo cp systemd/rclone-bisync@.service /etc/systemd/system/
-   sudo cp systemd/rclone-bisync@.timer /etc/systemd/system/
-   ```
-
-2. Create the configuration directory and copy the timer configuration file:
-
-   ```bash
-   sudo mkdir -p /etc/rclone-bisync
-   sudo cp systemd/rclone-bisync.conf /etc/rclone-bisync/
-   ```
-
-3. Edit the `/etc/rclone-bisync/rclone-bisync.conf` file to set the desired user, paths, and other settings. For example:
-
-   ```bash
-   RCLONE_BISYNC_EXTRA_OPTIONS=--dry-run
-   RCLONE_BISYNC_PATHS_sync_all=
-   RCLONE_BISYNC_PATHS_sync_photos=photos
-   ```
-
-   In this example, RCLONE_BISYNC_PATHS_sync_all is empty, so all paths will be synced.
-
-4. Edit the `systemd/rclone-bisync@.service` file to set your username and environment variables:
-
-   ```ini
-   [Service]
-   User=your_username
-   Environment=XDG_RUNTIME_DIR=/run/user/your_user_id
-   Environment=XDG_CONFIG_HOME=/home/your_username/.config
-   ```
-
-   **Note**: The script relies on `XDG_RUNTIME_DIR` and `XDG_CONFIG_HOME` in the user context, but systemd unit files cannot access them by default. Therefore, we need to explicitly set them.
-
-   You can get your user id with the following command:
-
-   ```bash
-   id -u
-   ```
-
-   Make sure they match the actual values on your system of the user you are running the script as. You can check the values with the following commands:
-
-   ```bash
-   echo $XDG_RUNTIME_DIR
-   echo $XDG_CONFIG_HOME
-   ```
-
-5. To start the timer for all configured paths:
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now rclone-bisync@sync_all.timer
-   ```
-
-   This will start a timer that runs the sync for all paths defined in `RCLONE_BISYNC_PATHS_sync_all`.
-
-6. To enable timers for specific sync paths:
-
-   ```bash
-   sudo systemctl enable --now rclone-bisync@photos.timer
-   ```
-
-   This will use the paths defined in `RCLONE_BISYNC_PATHS_sync_photos`.
-
-7. Check the status of a timer:
-
-   ```bash
-   sudo systemctl status rclone-bisync@sync_all.timer
-   ```
-
-   Or for a specific path:
-
-   ```bash
-   sudo systemctl status rclone-bisync@photos.timer
-   ```
-
-8. If you modify the timer configuration, reload the systemd daemon and restart the timer:
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl restart rclone-bisync@sync_all.timer
-   ```
-
-   Or for a specific path:
-
-   ```bash
-   sudo systemctl restart rclone-bisync@photos.timer
-   ```
-
-This setup allows you to run your rclone bisync script periodically using systemd, either for all configured paths at once or for individual paths. The system ensures that only one instance of rclone-bisync runs at a time, preventing overlaps and potential conflicts.
-
-You can customize the timer intervals by editing the `rclone-bisync@.timer` file. The default configuration runs the sync 15 minutes after boot and then every hour.
-
-### Running the Service with Different Intervals
-
-To run the same service with a different interval, you can create a new timer unit file with the desired interval. Use the existing `rclone-bisync@.timer` as a template and modify the `OnBootSec` and `OnUnitActiveSec` values.
-
-For example, create a new timer file `rclone-bisync-different-interval@.timer`:
+1. Create a systemd service file named `rclone-bisync.service` in `/etc/systemd/system/`:
 
 ```ini
 [Unit]
-Description=Run Rclone Bisync for %i periodically with a different interval
+Description=Rclone Bisync Daemon
+After=network.target
 
-[Timer]
-OnBootSec=10min
-OnUnitActiveSec=30min
-Persistent=true
+[Service]
+ExecStart=/usr/bin/python3 /path/to/rclone-bisync.py --daemon
+User=your_username
+Restart=on-failure
 
 [Install]
-WantedBy=timers.target
+WantedBy=multi-user.target
 ```
 
-Enable and start the new timer with the instance name:
+2. Reload the systemd daemon and start the service:
 
 ```bash
-sudo systemctl enable rclone-bisync-different-interval@example.timer
-sudo systemctl start rclone-bisync-different-interval@example.timer
+sudo systemctl daemon-reload
+sudo systemctl start rclone-bisync
 ```
 
-In this case, `example` is the instance name. The timer `rclone-bisync-different-interval@example.timer` will trigger the service `rclone-bisync@example.service`.
+3. To enable the service to start automatically on boot:
+
+```bash
+sudo systemctl enable rclone-bisync
+```
+
+4. To stop the service:
+
+```bash
+sudo systemctl stop rclone-bisync
+```
+
+5. To check the status of the service:
+
+```bash
+sudo systemctl status rclone-bisync
+```
+
+This setup allows you to run your rclone bisync script as a systemd service, which will automatically start on boot and restart if it fails.
 
 ## Contributing
 
