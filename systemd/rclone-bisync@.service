@@ -5,9 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+User=your_username
+Environment=XDG_RUNTIME_DIR=/run/user/your_user_id
+Environment=XDG_CONFIG_HOME=/home/your_username/.config
 EnvironmentFile=/etc/rclone-bisync/rclone-bisync.conf
-ExecStart=/usr/bin/rclone-bisync %i
-User=${RCLONE_BISYNC_USER}
+ExecStartPre=/bin/bash -c 'while [ -f "${XDG_RUNTIME_DIR}/rclone-bisync.pid" ]; do sleep 5; done'
+ExecStart=/usr/local/bin/rclone-bisync.sh ${RCLONE_BISYNC_PATHS_%i} ${RCLONE_BISYNC_EXTRA_OPTIONS}
 LockPersonality=yes
 
 [Install]
