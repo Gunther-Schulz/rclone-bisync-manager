@@ -65,21 +65,20 @@ last_config_mtime = 0
 # Global variable for the lock file
 lock_file = None
 
-# Add these to your global variables
 sync_queue = Queue()
 queued_paths = set()
 sync_lock = Lock()
 currently_syncing = None
 current_sync_start_time = None
 
-# Add this to your global variables
 shutting_down = False
+shutdown_complete = False
 
 # Handle CTRL-C
 
 
 def signal_handler(signum, frame):
-    global ctrl_c_presses, running, shutting_down
+    global ctrl_c_presses, shutting_down
     ctrl_c_presses += 1
 
     if ctrl_c_presses > 1:
@@ -89,20 +88,6 @@ def signal_handler(signum, frame):
 
     # Set the shutting_down flag
     shutting_down = True
-
-    # Clear the sync queue and queued_paths
-    while not sync_queue.empty():
-        try:
-            sync_queue.get_nowait()
-        except queue.Empty:
-            break
-    queued_paths.clear()
-
-    for proc in subprocesses:
-        if proc.poll() is None:  # Subprocess is still running
-            proc.send_signal(signal.SIGINT)
-        proc.wait()  # Wait indefinitely until subprocess terminates
-    running = False
 
 
 # Set the signal handler
@@ -620,7 +605,7 @@ def reload_config():
 
 
 def daemon_main():
-    global running, dry_run, last_sync_times, currently_syncing, queued_paths, shutting_down
+    global running, dry_run, last_sync_times, currently_syncing, queued_paths, shutting_down, shutdown_complete
 
     log_message("Daemon started")
 
@@ -635,7 +620,7 @@ def daemon_main():
         if value.get('active', True):
             add_to_sync_queue(key)
 
-    while running:
+    while running and not shutting_down:
         try:
             # Process the sync queue
             while not sync_queue.empty() and not shutting_down:
@@ -675,7 +660,20 @@ def daemon_main():
             log_error(f"An error occurred in the main loop: {str(e)}")
             time.sleep(1)  # Avoid tight loop in case of persistent errors
 
+    # Graceful shutdown
     log_message('Daemon shutting down...')
+
+    # Wait for current sync to finish
+    while currently_syncing:
+        time.sleep(1)
+
+    # Clear remaining queue
+    while not sync_queue.empty():
+        sync_queue.get_nowait()
+    queued_paths.clear()
+
+    shutdown_complete = True
+    log_message('Daemon shutdown complete.')
     status_thread.join(timeout=5)
 
 
@@ -726,6 +724,7 @@ def generate_status_report():
         "currently_syncing": currently_syncing,
         "sync_queue_size": sync_queue.qsize(),
         "queued_paths": list(queued_paths),
+        "shutting_down": shutting_down
     }
 
     if currently_syncing and current_sync_start_time:
@@ -774,7 +773,7 @@ def handle_status_request(conn):
 
 
 def status_server():
-    global running
+    global running, shutdown_complete
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     socket_path = '/tmp/rclone_bisync_status.sock'
 
@@ -788,7 +787,7 @@ def status_server():
     server.listen(1)
     server.settimeout(1)  # Set a timeout so we can check the running flag
 
-    while running:
+    while running or not shutdown_complete:
         try:
             conn, addr = server.accept()
             threading.Thread(target=handle_status_request,
@@ -823,13 +822,14 @@ def stop_daemon():
 
             if 'pid' in status:
                 os.kill(status['pid'], signal.SIGTERM)
-                log_message(f"Sent SIGTERM to daemon (PID: {status['pid']})")
+                print(f"Sent SIGTERM to daemon (PID: {status['pid']})")
+                print("Daemon is shutting down. Use --status to check progress.")
             else:
-                log_error("Unable to determine daemon PID from status")
+                print("Unable to determine daemon PID from status")
         except Exception as e:
-            log_error(f"Error stopping daemon: {e}")
+            print(f"Error stopping daemon: {e}")
     else:
-        log_error("Status socket not found. Daemon may not be running.")
+        print("Status socket not found. Daemon may not be running.")
 
 
 def print_daemon_status():
@@ -838,9 +838,12 @@ def print_daemon_status():
         try:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             client.connect(socket_path)
-            status = client.recv(4096).decode()
+            status = json.loads(client.recv(4096).decode())
             client.close()
-            print(status)
+
+            if status.get("shutting_down", False):
+                print("Daemon is shutting down. Current status:")
+            print(json.dumps(status, ensure_ascii=False, indent=2))
         except Exception as e:
             print(f"Error getting daemon status: {e}")
     else:
