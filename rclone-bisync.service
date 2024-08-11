@@ -7,4 +7,4 @@ ExecStart=/usr/bin/rclone-bisync --daemon
 Restart=on-failure
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
