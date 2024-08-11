@@ -69,6 +69,7 @@ sync_queue = Queue()
 queued_paths = set()
 sync_lock = Lock()
 currently_syncing = None
+current_sync_start_time = None
 
 # Handle CTRL-C
 
@@ -671,12 +672,16 @@ def add_to_sync_queue(key):
 
 
 def perform_sync_operations(key):
+    global current_sync_start_time
+    current_sync_start_time = datetime.now()
+
     value = sync_paths[key]
 
     local_path = os.path.join(local_base_path, value['local'])
     remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
+        current_sync_start_time = None
         return
 
     ensure_local_directory(local_path)
@@ -692,17 +697,25 @@ def perform_sync_operations(key):
     next_run = last_sync_times[key] + timedelta(seconds=interval)
     scheduler.schedule_task(key, next_run)
 
+    current_sync_start_time = None
+
 
 def generate_status_report():
+    current_time = datetime.now()
     status = {
         "pid": os.getpid(),
         "active_syncs": {},
-        "last_check": datetime.now().isoformat(),
+        "last_check": current_time.isoformat(),
         "global_dry_run": dry_run,
         "currently_syncing": currently_syncing,
         "sync_queue_size": sync_queue.qsize(),
         "queued_paths": list(queued_paths),
     }
+
+    if currently_syncing and current_sync_start_time:
+        sync_duration = current_time - current_sync_start_time
+        status["current_sync_duration"] = str(sync_duration).split('.')[
+            0]  # Remove microseconds
 
     for key, value in sync_paths.items():
         local_path = os.path.join(local_base_path, value['local'])
@@ -721,6 +734,11 @@ def generate_status_report():
             "is_active": value.get('active', True),
             "is_currently_syncing": key == currently_syncing,
         }
+
+        if key == currently_syncing and current_sync_start_time:
+            sync_duration = current_time - current_sync_start_time
+            status["active_syncs"][key]["current_sync_duration"] = str(
+                sync_duration).split('.')[0]  # Remove microseconds
 
     return json.dumps(status, ensure_ascii=False, indent=2)
 
