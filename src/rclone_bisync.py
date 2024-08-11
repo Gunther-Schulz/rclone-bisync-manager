@@ -513,46 +513,35 @@ def check_remote_rclone_test(remote_path):
 def perform_sync_operations():
     global last_sync_times, dry_run
 
-    if specific_folders:
-        folders_to_sync = specific_folders
-    else:
-        folders_to_sync = sync_paths.keys()
+    current_time = datetime.now()
 
-    for key in folders_to_sync:
-        if key not in sync_paths:
-            log_error(f"Folder '{
-                      key}' is not configured in sync directories. Make sure it is in the list of sync_dirs in the configuration file at {config_file}.")
+    for key, value in sync_paths.items():
+        if not value.get('active', True) or 'sync_interval' not in value:
             continue
 
-        value = sync_paths[key]
+        last_sync = last_sync_times.get(key, datetime.min)
+        interval = parse_interval(value['sync_interval'])
 
-        # Skip if no sync_interval is specified or if the sync is not active
-        if 'sync_interval' not in value or not value.get('active', True):
+        if current_time - last_sync < timedelta(seconds=interval):
             continue
 
         local_path = os.path.join(local_base_path, value['local'])
         remote_path = f"{value['rclone_remote']}:{value['remote']}"
-
-        # Check if it's time to sync this folder
-        last_sync = last_sync_times.get(key, datetime.min)
-        interval = parse_interval(value['sync_interval'])
-        if datetime.now() - last_sync < timedelta(seconds=interval):
-            continue
 
         if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
             continue
 
         ensure_local_directory(local_path)
 
-        # Use the global dry_run flag or the per-path setting
         path_dry_run = dry_run or value.get('dry_run', False)
 
         if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
             bisync(remote_path, local_path, path_dry_run)
 
-        # Update last sync time only if not in dry run mode
         if not path_dry_run:
-            last_sync_times[key] = datetime.now()
+            last_sync_times[key] = current_time
+
+    return False  # Return False if no sync was performed
 
 # Main function for daemon mode
 
@@ -560,15 +549,15 @@ def perform_sync_operations():
 def daemon_main():
     global running, dry_run, last_sync_times
 
-    log_message("Daemon started")  # New log message to indicate daemon start
+    log_message("Daemon started")
 
     status_thread = threading.Thread(target=status_server, daemon=True)
     status_thread.start()
 
-    # Perform initial sync for paths with sync_interval set
-    log_message("Starting initial sync for paths with sync_interval set")
+    # Perform initial sync for all active paths
+    log_message("Starting initial sync for all active paths")
     for key, value in sync_paths.items():
-        if value.get('active', True) and 'sync_interval' in value:
+        if value.get('active', True):
             local_path = os.path.join(local_base_path, value['local'])
             remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
@@ -587,17 +576,13 @@ def daemon_main():
     while running:
         if check_config_changed():
             reload_config()
-        perform_sync_operations()
-        generate_status_report()  # Generate status report after each sync operation
-        for _ in range(60):  # Check the running flag and config changes every second
-            if not running:
-                break
-            if check_config_changed():
-                reload_config()
-            time.sleep(1)
+
+        if perform_sync_operations():
+            generate_status_report()
+
+        time.sleep(1)  # Check every second
 
     log_message('Daemon shutting down...')
-    # Perform any necessary cleanup here
     status_thread.join(timeout=5)  # Wait for status thread to finish
 
 
@@ -686,13 +671,72 @@ def check_config_changed():
     return False
 
 
+def adjust_last_sync_times(old_intervals, new_intervals):
+    global last_sync_times
+    current_time = datetime.now()
+
+    for key in new_intervals:
+        if key in old_intervals:
+            # If the path existed before, adjust the last sync time
+            if key in last_sync_times:
+                time_since_last_sync = current_time - last_sync_times[key]
+                old_interval = timedelta(seconds=old_intervals[key])
+                new_interval = timedelta(seconds=new_intervals[key])
+
+                if time_since_last_sync > new_interval:
+                    # If it's overdue with the new interval, set it to be due immediately
+                    last_sync_times[key] = current_time - new_interval
+                else:
+                    # Adjust the last sync time proportionally
+                    progress = time_since_last_sync / old_interval
+                    last_sync_times[key] = current_time - \
+                        (progress * new_interval)
+        else:
+            # If it's a new path, set it to be due immediately
+            last_sync_times[key] = current_time - \
+                timedelta(seconds=new_intervals[key])
+
+
 def reload_config():
-    global dry_run  # Ensure we're modifying the global dry_run variable
+    global dry_run, sync_intervals, last_sync_times
     log_message("Reloading configuration...")
+
+    old_intervals = sync_intervals.copy()
+    old_sync_paths = sync_paths.copy()
+
     load_config()
     args = parse_args()
     dry_run = args.dry_run  # Update dry_run based on command line argument
+
+    # Update sync_intervals
+    new_intervals = {}
+    for key, value in sync_paths.items():
+        interval = value.get('sync_interval', None)
+        if interval:
+            new_intervals[key] = parse_interval(interval)
+
+    current_time = datetime.now()
+
+    # Adjust last_sync_times
+    for key in new_intervals:
+        if key in old_intervals:
+            # If the path existed before, keep the last sync time
+            if key not in last_sync_times:
+                last_sync_times[key] = current_time
+        else:
+            # If it's a new path, set it to be due at the next interval
+            last_sync_times[key] = current_time
+
+    # Remove last_sync_times for paths that no longer exist
+    for key in list(last_sync_times.keys()):
+        if key not in new_intervals:
+            del last_sync_times[key]
+
+    sync_intervals = new_intervals
+
     log_message(f"Configuration reloaded. Dry run: {dry_run}")
+    log_message(f"Updated sync intervals: {sync_intervals}")
+    log_message(f"Adjusted last sync times: {last_sync_times}")
 
 
 def stop_daemon():
