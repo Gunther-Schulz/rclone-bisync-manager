@@ -5,6 +5,7 @@ import sys
 from threading import Lock
 from queue import Queue
 from interval_utils import parse_interval
+import hashlib
 
 
 def _initial_log_error(message):
@@ -95,6 +96,14 @@ class Config:
 
         # Update last_config_mtime
         self.last_config_mtime = os.path.getmtime(self.config_file)
+
+    def get_status_file_path(self, job_key):
+        local_path = self.sync_jobs[job_key]['local']
+        remote_path = f"{self.sync_jobs[job_key]['rclone_remote']}:{
+            self.sync_jobs[job_key]['remote']}"
+        unique_id = hashlib.md5(f"{job_key}:{local_path}:{
+                                remote_path}".encode()).hexdigest()
+        return os.path.join(self.cache_dir, f'{unique_id}.status')
 
 
 config = Config()

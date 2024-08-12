@@ -64,7 +64,6 @@ def ensure_rclone_dir():
 
 
 def handle_filter_changes():
-    global config
     if not config.exclusion_rules_file:
         return
     stored_md5_file = os.path.join(config.cache_dir, '.filter_md5')
@@ -88,7 +87,6 @@ def handle_filter_changes():
 
 
 def check_config_changed():
-    global config
     current_mtime = os.path.getmtime(config.config_file)
     if current_mtime > config.last_config_mtime:
         config.last_config_mtime = current_mtime
@@ -115,6 +113,16 @@ def check_and_create_lock_file():
     try:
         lock_fd = open(lock_file, 'w')
         fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lock_fd
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        return lock_fd, None
     except IOError:
-        return None
+        try:
+            with open(lock_file, 'r') as f:
+                pid = f.read().strip()
+            if pid and os.path.exists(f'/proc/{pid}'):
+                return None, f"Daemon is already running (PID: {pid})"
+            else:
+                return None, f"Stale lock file found. The daemon may have crashed. To start the daemon, manually remove the lock file: {lock_file}"
+        except IOError:
+            return None, "Unable to read lock file. Check permissions and try again."

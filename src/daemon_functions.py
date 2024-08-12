@@ -2,7 +2,7 @@ import json
 import socket
 from status_server import start_status_server
 from logging_utils import log_message, log_error
-from utils import check_config_changed, parse_interval
+from utils import check_config_changed, parse_interval, check_and_create_lock_file
 from scheduler import scheduler
 from sync import perform_sync_operations
 from config import config, signal_handler
@@ -15,12 +15,9 @@ import fcntl
 
 
 def daemon_main():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
-    try:
-        lock_fd = open(lock_file, 'w')
-        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        log_error("Another instance of the daemon is already running. Exiting.")
+    lock_fd, error_message = check_and_create_lock_file()
+    if error_message:
+        log_error(f"Error starting daemon: {error_message}")
         return
 
     log_message("Daemon started")

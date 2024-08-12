@@ -8,20 +8,10 @@ from config import config
 from cli import parse_args
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
-from utils import check_tools, ensure_rclone_dir, handle_filter_changes
+from utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_and_create_lock_file
 from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from config import signal_handler
 import fcntl
-
-
-def check_and_create_lock_file():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
-    try:
-        lock_fd = open(lock_file, 'w')
-        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lock_fd
-    except IOError:
-        return None
 
 
 def main():
@@ -52,8 +42,12 @@ def main():
 
     if args.command == 'daemon':
         if args.action == 'start':
-            if os.path.exists(lock_file):
-                print("Error: Daemon is already running.")
+            lock_fd, error_message = check_and_create_lock_file()
+            if error_message:
+                print(f"Error: {error_message}")
+                if "Daemon is already running" in error_message:
+                    print(
+                        "Use 'daemon status' to check its status or 'daemon stop' to stop it.")
                 sys.exit(1)
             try:
                 log_message("Starting daemon...")

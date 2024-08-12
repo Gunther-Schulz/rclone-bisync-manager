@@ -1,6 +1,8 @@
 # TODO
 
-- exclude rule file change shoudl trigger a resync
+- no need for "gloabl' keyword because of config ?
+- why rdyrun is a parameter in sync instead of unsing config ?
+- exclude rule file change shoudl trigger a resync (needs testing)
 - dont use these, use a .cahe thing instead
   2024/08/12 12:28:34 NOTICE: - Path2 Queue copy to Path1 - pbs:users/pb-schulz/v/.bisync_status
   2024/08/12 12:28:34 NOTICE: - Path2 Queue copy to Path1 - pbs:users/pb-schulz/v/.resync_status
@@ -11,6 +13,7 @@
 - if an error occured previously, show helpful message how to do a resync with the daemon
 - also do the same for non-daemon mode
 
+DONE:
 Saw this in a log file. It completed sucessfully but it should have been a resync. It did apparently exit with 0. A manual resync did fix it. Should we implement a resync if we detect that the hash is blank?
 
 ```
