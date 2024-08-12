@@ -84,11 +84,11 @@ class Config:
 
         # Initialize last_sync_times and sync_intervals
         for key, value in self.sync_jobs.items():
-            if value.get('active', True) and 'sync_interval' in value:
+            if value.get('active', True) and 'interval' in value:
                 if key not in self.last_sync_times:
                     self.last_sync_times[key] = self.script_start_time
                 self.sync_intervals[key] = parse_interval(
-                    value['sync_interval'])
+                    value['interval'])
 
         # Update last_config_mtime
         self.last_config_mtime = os.path.getmtime(self.config_file)

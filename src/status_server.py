@@ -66,7 +66,7 @@ def generate_status_report():
         status["active_syncs"][key] = {
             "local_path": local_path,
             "remote_path": remote_path,
-            "sync_interval": value.get('sync_interval', "Not set"),
+            "interval": value.get('interval', "Not set"),
             "last_sync": last_sync,
             "dry_run": config.dry_run or value.get('dry_run', False),
             "is_active": value.get('active', True),

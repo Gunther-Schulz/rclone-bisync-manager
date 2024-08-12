@@ -26,7 +26,7 @@ def perform_sync_operations(key):
         bisync(remote_path, local_path, path_dry_run)
 
     config.last_sync_times[key] = datetime.now()
-    interval = parse_interval(value['sync_interval'])
+    interval = parse_interval(value['interval'])
     next_run = config.last_sync_times[key] + timedelta(seconds=interval)
     scheduler.schedule_task(key, next_run)
 

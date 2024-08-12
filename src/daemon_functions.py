@@ -27,7 +27,7 @@ def daemon_main():
     for key, value in config.sync_jobs.items():
         if value.get('active', True):
             add_to_sync_queue(key)
-            interval = parse_interval(value['sync_interval'])
+            interval = parse_interval(value['interval'])
             scheduler.schedule_task(
                 key, datetime.now() + timedelta(seconds=interval))
 
@@ -94,7 +94,7 @@ def check_scheduled_tasks():
                 add_to_sync_queue(task.path_key)
                 # Reschedule the task
                 interval = parse_interval(
-                    config.sync_jobs[task.path_key]['sync_interval'])
+                    config.sync_jobs[task.path_key]['interval'])
                 scheduler.schedule_task(
                     task.path_key, now + timedelta(seconds=interval))
             else:
