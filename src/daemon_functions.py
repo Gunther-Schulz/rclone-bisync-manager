@@ -1,19 +1,20 @@
-import os
-import signal
-import time
-import threading
-from datetime import datetime, timedelta
+from status_server import start_status_server
+from logging_utils import log_message, log_error
+from utils import check_config_changed, parse_interval
+from scheduler import scheduler
+from sync import perform_sync_operations
+from config import load_config
 from shared_variables import (
     running, shutting_down, shutdown_complete, currently_syncing,
     current_sync_start_time, sync_queue, queued_paths, sync_jobs,
     last_sync_times
 )
-from config import load_config
-from sync import perform_sync_operations
-from scheduler import scheduler
-from utils import check_config_changed, parse_interval
-from logging_utils import log_message, log_error
-from status_server import start_status_server
+import os
+import signal
+import time
+import threading
+from datetime import datetime, timedelta
+from shared_variables import sync_lock
 
 
 def daemon_main():

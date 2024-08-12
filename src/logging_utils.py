@@ -1,6 +1,8 @@
 import os
 import logging
+import sys
 from datetime import datetime
+from shared_variables import daemon_mode
 
 log_file_path = None
 error_log_file_path = None
@@ -21,47 +23,37 @@ def ensure_log_file_path():
 def setup_loggers(console_log=False):
     global logger, error_logger
     ensure_log_file_path()
+    logger = FileLogger(log_file_path)
+    error_logger = FileLogger(error_log_file_path)
 
-    logger = logging.getLogger('rclone_bisync_manager')
-    logger.setLevel(logging.INFO)
 
-    file_handler = logging.FileHandler(log_file_path)
-    file_handler.setLevel(logging.INFO)
+class FileLogger:
+    def __init__(self, file_path):
+        self.file_path = file_path
 
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
+    def log(self, level, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"{timestamp} - {level} - {message}\n"
+        with open(self.file_path, 'a') as f:
+            f.write(log_entry)
 
-    logger.addHandler(file_handler)
+    def info(self, message):
+        self.log("INFO", message)
 
-    error_logger = logging.getLogger('rclone_bisync_manager_error')
-    error_logger.setLevel(logging.ERROR)
-
-    error_file_handler = logging.FileHandler(error_log_file_path)
-    error_file_handler.setLevel(logging.ERROR)
-    error_file_handler.setFormatter(formatter)
-
-    error_logger.addHandler(error_file_handler)
-
-    if console_log:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-        error_logger.addHandler(console_handler)
+    def error(self, message):
+        self.log("ERROR", message)
 
 
 def log_message(message):
-    if logger:
-        logger.info(message)
-    print(message)  # Always print to console for non-daemon mode
+    logger.info(message)
+    if not daemon_mode:
+        print(message)
 
 
 def log_error(message):
-    if error_logger:
-        error_logger.error(message)
-    if logger:
-        logger.error(message)
-    print(f"ERROR: {message}")  # Always print errors to console
+    error_logger.error(message)
+    if not daemon_mode:
+        print(f"ERROR: {message}")
 
 
 def log_initial_warning():
@@ -98,3 +90,7 @@ def log_daemon_stop():
 
 def log_daemon_shutdown_complete():
     log_message("Daemon shutdown complete.")
+
+
+def log_status_server_error(e):
+    log_error(f"Error in status server: {str(e)}")

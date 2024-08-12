@@ -4,7 +4,7 @@ import os
 import signal
 import sys
 import daemon
-from config import load_config, parse_args, sync_jobs, specific_sync_jobs, config_file
+from config import load_config, sync_jobs, specific_sync_jobs, config_file
 from cli import parse_args
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
@@ -22,12 +22,12 @@ def main():
     global dry_run, daemon_mode
     args = parse_args()
     load_config()  # Load config first to set up log paths
+    ensure_log_file_path()
+    setup_loggers()  # Move this line up
     log_config_file_location(config_file)
 
     check_tools()
     ensure_rclone_dir()
-    ensure_log_file_path()
-    setup_loggers()  # Add this line
     print(f"Log file location: {log_file_path}")
     handle_filter_changes()
 

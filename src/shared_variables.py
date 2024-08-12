@@ -1,6 +1,8 @@
+from threading import Lock
 import os
 from queue import Queue
 from datetime import datetime
+
 
 # Global variables for command line options
 dry_run = False
@@ -18,6 +20,7 @@ currently_syncing = None
 current_sync_start_time = None
 sync_queue = Queue()
 queued_paths = set()
+sync_lock = Lock()
 
 # Global variables for sync operations
 sync_jobs = {}
