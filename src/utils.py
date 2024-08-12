@@ -7,6 +7,7 @@ from logging_utils import log_message, log_error
 from interval_utils import parse_interval
 from config import config
 import fcntl
+import errno
 
 
 def is_cpulimit_installed():
@@ -111,18 +112,19 @@ def ensure_log_file_path():
 def check_and_create_lock_file():
     lock_file = '/tmp/rclone_bisync_manager.lock'
     try:
-        lock_fd = open(lock_file, 'w')
-        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        lock_fd.write(str(os.getpid()))
-        lock_fd.flush()
-        return lock_fd, None
-    except IOError:
-        try:
-            with open(lock_file, 'r') as f:
-                pid = f.read().strip()
-            if pid and os.path.exists(f'/proc/{pid}'):
+        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(fd, str(os.getpid()).encode())
+        return fd, None
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = int(f.read().strip())
+                os.kill(pid, 0)  # Check if process is running
                 return None, f"Daemon is already running (PID: {pid})"
-            else:
-                return None, f"Stale lock file found. The daemon may have crashed. To start the daemon, manually remove the lock file: {lock_file}"
-        except IOError:
-            return None, "Unable to read lock file. Check permissions and try again."
+            except (OSError, ValueError):
+                # Process not running or PID not valid, remove stale lock file
+                os.unlink(lock_file)
+                return check_and_create_lock_file()  # Retry
+        return None, f"Unexpected error: {str(e)}"

@@ -12,6 +12,7 @@ from utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_a
 from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from config import signal_handler
 import fcntl
+import errno
 
 
 def main():
