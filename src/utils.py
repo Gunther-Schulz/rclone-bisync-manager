@@ -5,12 +5,7 @@ import hashlib
 from datetime import datetime, timedelta
 from logging_utils import log_message, log_error
 from interval_utils import parse_interval
-
-config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
-    '~/.config')), 'rclone-bisync-manager', 'config.yaml')
-cache_dir = os.path.join(os.environ.get(
-    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
-rclone_test_file_name = "RCLONE_TEST"
+from config import config_file, cache_dir, rclone_test_file_name, exclusion_rules_file, last_config_mtime
 
 
 def is_cpulimit_installed():
@@ -68,6 +63,9 @@ def ensure_rclone_dir():
 
 
 def handle_filter_changes():
+    global force_resync
+    if not exclusion_rules_file:
+        return
     stored_md5_file = os.path.join(cache_dir, '.filter_md5')
     os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
     if os.path.exists(exclusion_rules_file):
@@ -81,8 +79,9 @@ def handle_filter_changes():
             with open(stored_md5_file, 'w') as f:
                 f.write(current_md5)
             log_message("Filter file has changed. A resync is required.")
-            global force_resync
             force_resync = True
+    else:
+        log_message(f"Exclusion rules file not found: {exclusion_rules_file}")
 
 
 def check_config_changed():

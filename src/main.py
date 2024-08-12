@@ -4,11 +4,11 @@ import os
 import signal
 import sys
 import daemon
-from config import load_config, parse_args, sync_jobs, specific_sync_jobs
+from config import load_config, parse_args, sync_jobs, specific_sync_jobs, config_file
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
-from utils import check_tools, ensure_rclone_dir, handle_filter_changes, config_file, cache_dir, rclone_test_file_name
-from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers
+from utils import check_tools, ensure_rclone_dir, handle_filter_changes, cache_dir, rclone_test_file_name
+from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_file_path
 from shared_variables import signal_handler
 
 # Initialize global variables
@@ -21,10 +21,13 @@ def main():
     global dry_run, daemon_mode
     args = parse_args()
     load_config()  # Load config first to set up log paths
+    print(f"Config file location: {config_file}")
 
     check_tools()
     ensure_rclone_dir()
+    setup_loggers()  # Add this line
     ensure_log_file_path()
+    print(f"Log file location: {log_file_path}")
     handle_filter_changes()
 
     log_message("Warning: This script does not prevent multiple instances from running. Please ensure you don't start it multiple times unintentionally.")
@@ -75,7 +78,3 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"Unhandled exception in main: {str(e)}")
         print(f"Unhandled exception: {str(e)}")
-
-
-if __name__ == "__main__":
-    main()
