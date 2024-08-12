@@ -1,19 +1,22 @@
 # Base path for local files to be synced
 local_base_path: /path/to/your/local/base/directory
 
-# File containing rules for excluding certain files/directories from sync. This follows the format that rclone expects. If this file is changed, the next run will be a resync operation as required by rclone
+# File containing rules for excluding certain files/directories from sync
 exclusion_rules_file: /path/to/your/filter.txt
+
+# Redirect rclone log output
+redirect_rclone_log_output: true
 
 # CPU usage limit as a percentage
 max_cpu_usage_percent: 100
 
 # Define the paths to be synchronized
-sync_paths:
-  example_sync:
+sync_jobs:
+  example_job:
     local: example_folder
     rclone_remote: your_remote
     remote: path/on/remote/storage
-    sync_interval: 1h
+    interval: 30m
     dry_run: true
 
 # Rclone options

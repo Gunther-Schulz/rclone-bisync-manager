@@ -5,7 +5,7 @@ RClone BiSync Manager is a daemon-based solution for automated, bidirectional sy
 ## Key Features
 
 - **Daemon-based Operation**: Runs continuously in the background, managing synchronization tasks without user intervention.
-- **Periodic Synchronization**: Automatically syncs files at user-defined intervals for each sync path.
+- **Periodic Synchronization**: Automatically syncs files at user-defined intervals for each sync job.
 - **Real-time Status Reporting**: Provides up-to-date information on sync operations and daemon status.
 - **Dynamic Configuration Reloading**: Automatically detects and applies configuration changes without restarting the daemon.
 - **Graceful Shutdown Handling**: Ensures clean termination of sync operations when stopping the daemon.
@@ -17,13 +17,6 @@ Additional features include:
 - Detailed Logging with separate error logs
 - CPU Usage Limiting during sync operations (requires cpulimit)
 - Flexible RClone Options for customizing sync behavior
-
-## Opinionated Settings
-
-To ensure robust operation, RClone BiSync Manager always uses the following RClone settings:
-
-- `--recover`: Attempts to recover from a failed sync.
-- `--resilient`: Continues the sync even if some files can't be transferred.
 
 ## Prerequisites
 
@@ -52,14 +45,14 @@ To ensure robust operation, RClone BiSync Manager always uses the following RClo
 3. Copy the example configuration:
 
    ```bash
-   mkdir -p ~/.config/rclone_bisync_manager
-   cp config/config.yaml.example ~/.config/rclone_bisync_manager/config.yaml
+   mkdir -p ~/.config/rclone-bisync-manager
+   cp config.yaml.example ~/.config/rclone-bisync-manager/config.yaml
    ```
 
 4. Edit the configuration file to suit your needs:
 
    ```bash
-   nano ~/.config/rclone_bisync_manager/config.yaml
+   nano ~/.config/rclone-bisync-manager/config.yaml
    ```
 
 ## Usage
@@ -72,6 +65,7 @@ These options can be used with any command:
 
 - **-d, --dry-run**: Perform a dry run without making actual changes.
 - **--console-log**: Enable logging to the console in addition to log files.
+- **--daemon-console-log**: Enable console logging in daemon mode.
 
 ### Daemon Mode
 
@@ -93,31 +87,32 @@ Examples:
 In sync mode, the script performs a single sync operation and then exits:
 
 ```bash
-./rclone_bisync_manager.py sync [folders] [options]
+./rclone_bisync_manager.py sync [sync_jobs] [options]
 ```
 
 Options:
 
-- **folders**: Specify particular folders to sync (optional, syncs all if not specified).
-- **--resync**: Force a resynchronization of specified folders.
+- **sync_jobs**: Specify particular sync jobs to run (optional, syncs all if not specified).
+- **--resync**: Force a resynchronization of specified sync jobs.
 - **--force-bisync**: Force a bisync operation.
 
 Examples:
 
-- Sync all folders: `./rclone_bisync_manager.py sync`
-- Sync specific folders: `./rclone_bisync_manager.py sync folder1 folder2`
-- Force resync of a folder: `./rclone_bisync_manager.py sync folder1 --resync`
-- Dry run for all folders: `./rclone_bisync_manager.py -d sync`
-- Force bisync with console logging: `./rclone_bisync_manager.py sync folder1 --force-bisync --console-log`
+- Sync all jobs: `./rclone_bisync_manager.py sync`
+- Sync specific jobs: `./rclone_bisync_manager.py sync job1 job2`
+- Force resync of a job: `./rclone_bisync_manager.py sync job1 --resync`
+- Dry run for all jobs: `./rclone_bisync_manager.py -d sync`
+- Force bisync with console logging: `./rclone_bisync_manager.py sync job1 --force-bisync --console-log`
 
 ## Configuration
 
-The configuration file (`~/.config/rclone_bisync_manager/config.yaml`) contains all necessary settings for the synchronization process. Key configuration options include:
+The configuration file (`~/.config/rclone-bisync-manager/config.yaml`) contains all necessary settings for the synchronization process. Key configuration options include:
 
 - `local_base_path`: Base path for local files to be synced
 - `exclusion_rules_file`: File containing rules for excluding files/directories from sync
+- `redirect_rclone_log_output`: Redirect rclone log output to the main log file
 - `max_cpu_usage_percent`: CPU usage limit as a percentage
-- `sync_paths`: Define the paths to be synchronized
+- `sync_jobs`: Define the paths to be synchronized
 - `rclone_options`: Customize rclone options
 - `bisync_options`: Customize bisync-specific options
 - `resync_options`: Customize resync-specific options
