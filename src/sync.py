@@ -1,7 +1,7 @@
 import os
 import subprocess
 from datetime import datetime, timedelta
-from config import sync_jobs, local_base_path, dry_run, force_resync, force_operation, rclone_options, bisync_options, resync_options, last_sync_times
+from config import sync_jobs, local_base_path, dry_run, force_resync, force_operation, rclone_options, bisync_options, resync_options, last_sync_times, exclusion_rules_file, max_cpu_usage_percent
 from utils import is_cpulimit_installed, parse_interval, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
 from logging_utils import log_message, log_error
 from scheduler import scheduler
@@ -99,6 +99,8 @@ def get_rclone_args(options, path_dry_run):
         else:
             args.extend([option_key, str(value)])
 
+    if os.path.exists(exclusion_rules_file):
+        args.extend(['--exclude-from', exclusion_rules_file])
     if path_dry_run:
         args.append('--dry-run')
     if force_operation:
@@ -109,8 +111,8 @@ def get_rclone_args(options, path_dry_run):
 
 def run_rclone_command(rclone_args):
     if is_cpulimit_installed():
-        cpulimit_command = [
-            'cpulimit', f'--limit={rclone_options.get("max_cpu_usage_percent", 100)}', '--']
+        cpulimit_command = ['cpulimit',
+                            f'--limit={max_cpu_usage_percent}', '--']
         cpulimit_command.extend(rclone_args)
         return subprocess.run(cpulimit_command, capture_output=True, text=True)
     else:

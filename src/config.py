@@ -2,6 +2,7 @@ import yaml
 import os
 import argparse
 from datetime import datetime
+import sys
 
 # Global variables
 dry_run = False
@@ -20,6 +21,9 @@ resync_options = {}
 last_sync_times = {}
 script_start_time = datetime.now()
 last_config_mtime = 0
+rclone_test_file_name = "RCLONE_TEST"
+cache_dir = os.path.join(os.environ.get(
+    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
 
 # Configuration file paths
 config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -54,6 +58,13 @@ def load_config():
         if value.get('active', True) and 'sync_interval' in value:
             if key not in last_sync_times:
                 last_sync_times[key] = script_start_time
+
+    # Initialize sync_intervals and last_sync_times
+    sync_intervals = {key: parse_interval(
+        value['sync_interval']) for key, value in sync_jobs.items() if 'sync_interval' in value}
+    for key in sync_jobs:
+        if key not in last_sync_times:
+            last_sync_times[key] = script_start_time
 
 
 def parse_args():

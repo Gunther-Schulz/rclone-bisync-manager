@@ -1,8 +1,9 @@
 import os
 import subprocess
 import shutil
+import hashlib
 from datetime import datetime, timedelta
-from config import config_file, last_config_mtime, exclusion_rules_file
+from config import config_file, last_config_mtime, exclusion_rules_file, cache_dir, force_resync, rclone_test_file_name
 from logging_utils import log_message, log_error
 
 
@@ -11,35 +12,62 @@ def is_cpulimit_installed():
 
 
 def parse_interval(interval_str):
-    units = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
-    unit = interval_str[-1]
-    if unit not in units:
-        raise ValueError(f"Invalid interval unit: {unit}")
+    interval_str = interval_str.lower()
+    if interval_str == 'hourly':
+        return 3600  # 1 hour in seconds
+    elif interval_str == 'daily':
+        return 86400  # 24 hours in seconds
+    elif interval_str == 'weekly':
+        return 604800  # 7 days in seconds
+    elif interval_str == 'monthly':
+        return 2592000  # 30 days in seconds (approximate)
+    elif interval_str == 'yearly':
+        return 31536000  # 365 days in seconds (approximate)
+
+    unit = interval_str[-1].lower()
     try:
         value = int(interval_str[:-1])
     except ValueError:
-        raise ValueError(f"Invalid interval value: {interval_str[:-1]}")
-    return value * units[unit]
+        raise ValueError(f"Invalid interval format: {interval_str}")
+
+    if unit == 'm':
+        return value * 60
+    elif unit == 'h':
+        return value * 3600
+    elif unit == 'd':
+        return value * 86400
+    elif unit == 'w':
+        return value * 604800
+    elif unit == 'y':
+        return value * 31536000
+    else:
+        raise ValueError(f"Invalid interval format: {interval_str}")
 
 
 def check_local_rclone_test(local_path):
-    try:
-        subprocess.run(['rclone', 'lsf', local_path],
-                       check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError:
+    result = subprocess.run(['rclone', 'lsf', local_path],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
         log_error(f"Local rclone test failed for {local_path}")
         return False
+    if rclone_test_file_name not in result.stdout:
+        log_message(f"{rclone_test_file_name} file not found in {
+                    local_path}. To add it run 'rclone touch \"{local_path}/{rclone_test_file_name}\"'")
+        return False
+    return True
 
 
 def check_remote_rclone_test(remote_path):
-    try:
-        subprocess.run(['rclone', 'lsf', remote_path],
-                       check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError:
+    result = subprocess.run(['rclone', 'lsf', remote_path],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
         log_error(f"Remote rclone test failed for {remote_path}")
         return False
+    if rclone_test_file_name not in result.stdout:
+        log_message(f"{rclone_test_file_name} file not found in {
+                    remote_path}. To add it run 'rclone touch \"{remote_path}/{rclone_test_file_name}\"'")
+        return False
+    return True
 
 
 def ensure_local_directory(local_path):
@@ -59,21 +87,29 @@ def check_tools():
 
 
 def ensure_rclone_dir():
-    rclone_dir = os.path.expanduser('~/.config/rclone')
-    if not os.path.exists(rclone_dir):
+    rclone_dir = os.path.join(os.environ['HOME'], '.cache', 'rclone', 'bisync')
+    if not os.access(rclone_dir, os.W_OK):
         os.makedirs(rclone_dir, exist_ok=True)
-        log_message(f"Created rclone config directory: {rclone_dir}")
+        os.chmod(rclone_dir, 0o777)
+    log_message(f"Ensured rclone directory: {rclone_dir}")
 
 
 def handle_filter_changes():
-    if exclusion_rules_file and os.path.exists(exclusion_rules_file):
-        from config import sync_jobs
-        for key, value in sync_jobs.items():
-            local_path = os.path.join(value['local'])
-            filter_file = os.path.join(local_path, '.filter')
-            if not os.path.exists(filter_file) or os.path.getmtime(filter_file) < os.path.getmtime(exclusion_rules_file):
-                shutil.copy2(exclusion_rules_file, filter_file)
-                log_message(f"Updated filter file for {key}")
+    stored_md5_file = os.path.join(cache_dir, '.filter_md5')
+    os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
+    if os.path.exists(exclusion_rules_file):
+        current_md5 = calculate_md5(exclusion_rules_file)
+        if os.path.exists(stored_md5_file):
+            with open(stored_md5_file, 'r') as f:
+                stored_md5 = f.read().strip()
+        else:
+            stored_md5 = ""
+        if current_md5 != stored_md5:
+            with open(stored_md5_file, 'w') as f:
+                f.write(current_md5)
+            log_message("Filter file has changed. A resync is required.")
+            global force_resync
+            force_resync = True
 
 
 def check_config_changed():
@@ -83,3 +119,11 @@ def check_config_changed():
         last_config_mtime = current_mtime
         return True
     return False
+
+
+def calculate_md5(file_path):
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()

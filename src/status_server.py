@@ -4,50 +4,80 @@ import json
 import threading
 from datetime import datetime
 from config import sync_jobs, last_sync_times
+from scheduler import scheduler
+from shared_variables import *
 
 
-def status_server():
+def start_status_server():
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
 
     if os.path.exists(socket_path):
-        os.remove(socket_path)
+        os.unlink(socket_path)
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(socket_path)
     server.listen(1)
+    server.settimeout(1)  # Set a timeout so we can check the running flag
 
     while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_client, args=(conn,)).start()
+        try:
+            conn, addr = server.accept()
+            threading.Thread(target=handle_client, args=(conn,)).start()
+        except socket.timeout:
+            if shutting_down:
+                break
+
+    server.close()
+    os.unlink(socket_path)
 
 
 def handle_client(conn):
     try:
-        status = get_status()
-        conn.sendall(json.dumps(status).encode())
+        status = generate_status_report()
+        conn.sendall(status.encode())
     finally:
         conn.close()
 
 
-def get_status():
-    from daemon import running, shutting_down, shutdown_complete, currently_syncing, sync_queue
+def generate_status_report():
+    current_time = datetime.now()
     status = {
         "pid": os.getpid(),
-        "running": running,
-        "shutting_down": shutting_down,
-        "shutdown_complete": shutdown_complete,
+        "active_syncs": {},
+        "last_check": current_time.isoformat(),
+        "global_dry_run": dry_run,
         "currently_syncing": currently_syncing,
-        "sync_queue": sync_queue,
-        "last_sync_times": {k: v.isoformat() for k, v in last_sync_times.items()},
-        "sync_jobs": {}
+        "sync_queue_size": sync_queue.qsize(),
+        "queued_paths": list(queued_paths),
+        "shutting_down": shutting_down
     }
 
+    if currently_syncing and 'current_sync_start_time' in globals():
+        sync_duration = current_time - globals()['current_sync_start_time']
+        status["current_sync_duration"] = str(sync_duration).split('.')[
+            0]  # Remove microseconds
+
     for key, value in sync_jobs.items():
-        status["sync_jobs"][key] = {
-            "active": value.get("active", True),
-            "local_path": value["local"],
-            "remote_path": f"{value['rclone_remote']}:{value['remote']}",
-            "sync_interval": value["sync_interval"]
+        local_path = value['local']
+        remote_path = f"{value['rclone_remote']}:{value['remote']}"
+
+        last_sync = last_sync_times.get(key, "Never")
+        if isinstance(last_sync, datetime):
+            last_sync = last_sync.isoformat()
+
+        status["active_syncs"][key] = {
+            "local_path": local_path,
+            "remote_path": remote_path,
+            "sync_interval": value.get('sync_interval', "Not set"),
+            "last_sync": last_sync,
+            "dry_run": dry_run or value.get('dry_run', False),
+            "is_active": value.get('active', True),
+            "is_currently_syncing": key == currently_syncing,
         }
 
-    return status
+        if key == currently_syncing and 'current_sync_start_time' in globals():
+            sync_duration = current_time - globals()['current_sync_start_time']
+            status["active_syncs"][key]["current_sync_duration"] = str(
+                sync_duration).split('.')[0]  # Remove microseconds
+
+    return json.dumps(status, ensure_ascii=False, indent=2)
