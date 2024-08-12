@@ -44,6 +44,7 @@ class Config:
         self.script_start_time = datetime.now()
         self.last_config_mtime = 0
         self.redirect_rclone_log_output = False
+        self.last_log_position = 0
 
         # File paths
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(

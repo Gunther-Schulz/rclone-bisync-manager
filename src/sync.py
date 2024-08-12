@@ -41,11 +41,18 @@ def bisync(remote_path, local_path, path_dry_run):
     log_message(f"Bisync started for {local_path} at {
                 datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
 
+    # Set the initial log position
+    config.last_log_position = get_log_file_position()
+
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
     rclone_args.extend(get_rclone_args(config.sync_jobs.get(
         local_path, {}).get('bisync_options', {}), path_dry_run, 'bisync'))
 
     result = run_rclone_command(rclone_args)
+
+    # Check for hash warnings in the log file
+    check_for_hash_warnings(local_path)
+
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Bisync")
     log_message(f"Bisync status for {local_path}: {sync_result}")
@@ -124,6 +131,9 @@ def get_rclone_args(options, path_dry_run, operation_type):
     if config.redirect_rclone_log_output:
         args.extend(['--log-file', config.log_file_path])
 
+    if merged_options.get('ignore_size', False):
+        args.append('--ignore-size')
+
     return args
 
 
@@ -181,3 +191,24 @@ def read_resync_status(local_path):
         with open(sync_status_file, 'r') as f:
             return f.read().strip()
     return "NONE"
+
+
+def get_log_file_position():
+    if os.path.exists(config.log_file_path):
+        return os.path.getsize(config.log_file_path)
+    return 0
+
+
+def check_for_hash_warnings(local_path):
+    log_file_path = config.log_file_path
+    if os.path.exists(log_file_path):
+        current_position = os.path.getsize(log_file_path)
+        if current_position > config.last_log_position:
+            with open(log_file_path, 'r') as log_file:
+                log_file.seek(config.last_log_position)
+                new_content = log_file.read()
+                if "WARNING: hash unexpectedly blank despite Fs support" in new_content:
+                    log_message(f"WARNING: Detected blank hash warnings for {
+                                local_path}. This may indicate issues with Live Photos or other special file types. You should try to resync and if that is not successful you should consider using --ignore-size for future syncs.")
+
+        config.last_log_position = current_position
