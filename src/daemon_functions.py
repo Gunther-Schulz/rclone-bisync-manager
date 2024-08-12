@@ -27,6 +27,9 @@ def daemon_main():
     for key, value in config.sync_jobs.items():
         if value.get('active', True):
             add_to_sync_queue(key)
+            interval = parse_interval(value['sync_interval'])
+            scheduler.schedule_task(
+                key, datetime.now() + timedelta(seconds=interval))
 
     while config.running:
         try:
@@ -82,12 +85,22 @@ def process_sync_queue():
 
 
 def check_scheduled_tasks():
-    next_task = scheduler.get_next_task()
-    if next_task and not config.shutting_down:
-        now = datetime.now()
-        if now >= next_task.scheduled_time:
-            task = scheduler.pop_next_task()
-            add_to_sync_queue(task.path_key)
+    while True:
+        next_task = scheduler.get_next_task()
+        if next_task and not config.shutting_down:
+            now = datetime.now()
+            if now >= next_task.scheduled_time:
+                task = scheduler.pop_next_task()
+                add_to_sync_queue(task.path_key)
+                # Reschedule the task
+                interval = parse_interval(
+                    config.sync_jobs[task.path_key]['sync_interval'])
+                scheduler.schedule_task(
+                    task.path_key, now + timedelta(seconds=interval))
+            else:
+                break
+        else:
+            break
 
 
 def check_and_reload_config():
