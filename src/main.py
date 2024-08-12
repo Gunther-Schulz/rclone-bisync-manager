@@ -34,10 +34,9 @@ def main():
 
     # Log home directory
     home_dir = os.environ.get('HOME')
-    if home_dir:
-        log_message(f"Home directory: {home_dir}")
-    else:
+    if not home_dir:
         log_error("Unable to determine home directory")
+        sys.exit(1)
 
     lock_file = '/tmp/rclone_bisync_manager.lock'
 

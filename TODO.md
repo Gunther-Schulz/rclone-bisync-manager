@@ -1,5 +1,10 @@
 # TODO
 
+- keep an absolute sync schedule in config. we can probably keep it in the status file. the interval will be based on the first successful sync.
+- make inital sync optional (flag in config yaml)
+- see if we still have the abaility to add a job to the top of the queue while a sync is running
+- ability to relaod ALL settings from config file?
+- internal python cpu limiter
 - no need for "gloabl' keyword because of config ?
 - why rdyrun is a parameter in sync instead of unsing config ?
 - exclude rule file change shoudl trigger a resync (needs testing)
