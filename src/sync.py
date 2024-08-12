@@ -6,6 +6,7 @@ from utils import is_cpulimit_installed, parse_interval, check_local_rclone_test
 from logging_utils import log_message, log_error
 from scheduler import scheduler
 import json
+import fcntl
 
 
 def perform_sync_operations(key):
@@ -200,32 +201,57 @@ def write_status(job_key, sync_status, resync_status):
     status_file = config.get_status_file_path(job_key)
     if not config.dry_run:
         with open(status_file, 'w') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
             json.dump({
                 "sync_status": "NONE" if sync_status is None else sync_status,
                 "resync_status": "NONE" if resync_status is None else resync_status
             }, f)
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def read_status(job_key):
     status_file = config.get_status_file_path(job_key)
     if os.path.exists(status_file):
         with open(status_file, 'r') as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
             try:
                 status = json.load(f)
                 return status.get("sync_status", "NONE"), status.get("resync_status", "NONE")
             except json.JSONDecodeError:
                 return "NONE", "NONE"
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
     return "NONE", "NONE"
 
 
 def write_sync_status(job_key, sync_status):
-    _, resync_status = read_status(job_key)
-    write_status(job_key, sync_status, resync_status)
+    status_file = config.get_status_file_path(job_key)
+    with open(status_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            status = json.load(f)
+        except json.JSONDecodeError:
+            status = {}
+        status["sync_status"] = sync_status
+        f.seek(0)
+        f.truncate()
+        json.dump(status, f)
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def write_resync_status(job_key, resync_status):
-    sync_status, _ = read_status(job_key)
-    write_status(job_key, sync_status, resync_status)
+    status_file = config.get_status_file_path(job_key)
+    with open(status_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            status = json.load(f)
+        except json.JSONDecodeError:
+            status = {}
+        status["resync_status"] = resync_status
+        f.seek(0)
+        f.truncate()
+        json.dump(status, f)
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def read_sync_status(job_key):
