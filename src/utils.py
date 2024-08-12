@@ -3,45 +3,18 @@ import subprocess
 import shutil
 import hashlib
 from datetime import datetime, timedelta
-from config import config_file, last_config_mtime, exclusion_rules_file, cache_dir, force_resync, rclone_test_file_name
 from logging_utils import log_message, log_error
+from interval_utils import parse_interval
+
+config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
+    '~/.config')), 'rclone-bisync-manager', 'config.yaml')
+cache_dir = os.path.join(os.environ.get(
+    'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
+rclone_test_file_name = "RCLONE_TEST"
 
 
 def is_cpulimit_installed():
     return shutil.which('cpulimit') is not None
-
-
-def parse_interval(interval_str):
-    interval_str = interval_str.lower()
-    if interval_str == 'hourly':
-        return 3600  # 1 hour in seconds
-    elif interval_str == 'daily':
-        return 86400  # 24 hours in seconds
-    elif interval_str == 'weekly':
-        return 604800  # 7 days in seconds
-    elif interval_str == 'monthly':
-        return 2592000  # 30 days in seconds (approximate)
-    elif interval_str == 'yearly':
-        return 31536000  # 365 days in seconds (approximate)
-
-    unit = interval_str[-1].lower()
-    try:
-        value = int(interval_str[:-1])
-    except ValueError:
-        raise ValueError(f"Invalid interval format: {interval_str}")
-
-    if unit == 'm':
-        return value * 60
-    elif unit == 'h':
-        return value * 3600
-    elif unit == 'd':
-        return value * 86400
-    elif unit == 'w':
-        return value * 604800
-    elif unit == 'y':
-        return value * 31536000
-    else:
-        raise ValueError(f"Invalid interval format: {interval_str}")
 
 
 def check_local_rclone_test(local_path):

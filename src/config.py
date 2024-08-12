@@ -3,6 +3,7 @@ import os
 import argparse
 from datetime import datetime
 import sys
+from interval_utils import parse_interval
 
 # Global variables
 dry_run = False
