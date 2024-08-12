@@ -145,7 +145,7 @@ def load_config():
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
-    exclusion_rules_file = config.get('exclusion_rules_file')
+    exclusion_rules_file = config.get('exclusion_rules_file', None)
     sync_jobs = config.get('sync_jobs', {})
 
     # Ensure the log directory exists
