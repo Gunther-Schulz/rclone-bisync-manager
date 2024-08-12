@@ -47,8 +47,13 @@ def main():
     else:
         log_error("Unable to determine home directory")
 
+    lock_file = '/tmp/rclone_bisync_manager.lock'
+
     if args.command == 'daemon':
         if args.action == 'start':
+            if os.path.exists(lock_file):
+                print("Error: Daemon is already running.")
+                sys.exit(1)
             try:
                 log_message("Starting daemon...")
                 with daemon.DaemonContext(
@@ -70,15 +75,34 @@ def main():
         elif args.action == 'status':
             print_daemon_status()
     elif args.command == 'sync':
-        paths_to_sync = args.specific_sync_jobs if args.specific_sync_jobs else [
-            key for key, value in config.sync_jobs.items() if value.get('active', True)]
-        for key in paths_to_sync:
-            if key in config.sync_jobs:
-                perform_sync_operations(
-                    key, args.dry_run, args.force_resync, args.force_operation)
-            else:
-                log_error(f"Specified sync job '{
-                          key}' not found in configuration")
+        if os.path.exists(lock_file):
+            print(
+                "Error: Daemon is running. Use 'daemon stop' to stop it before running sync manually.")
+            sys.exit(1)
+
+        # Create a lock file for non-daemon mode
+        lock_fd = open(lock_file, 'w')
+        try:
+            fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except IOError:
+            print("Error: Another sync instance is already running.")
+            sys.exit(1)
+
+        try:
+            paths_to_sync = args.specific_sync_jobs if args.specific_sync_jobs else [
+                key for key, value in config.sync_jobs.items() if value.get('active', True)]
+            for key in paths_to_sync:
+                if key in config.sync_jobs:
+                    perform_sync_operations(
+                        key, args.dry_run, args.force_resync, args.force_operation)
+                else:
+                    log_error(f"Specified sync job '{
+                              key}' not found in configuration")
+        finally:
+            # Release the lock and remove the lock file
+            fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            os.unlink(lock_file)
 
 
 if __name__ == "__main__":
