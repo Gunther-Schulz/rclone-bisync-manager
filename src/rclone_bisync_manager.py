@@ -134,7 +134,7 @@ def log_error(message):
 
 # Load the configuration file
 def load_config():
-    global local_base_path, exclusion_rules_file, sync_paths, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals, last_sync_times
+    global local_base_path, exclusion_rules_file, sync_jobs, max_cpu_usage_percent, rclone_options, bisync_options, resync_options, sync_intervals, last_sync_times
     if not os.path.exists(os.path.dirname(config_file)):
         os.makedirs(os.path.dirname(config_file), exist_ok=True)
     if not os.path.exists(config_file):
@@ -146,7 +146,7 @@ def load_config():
         config = yaml.safe_load(f)
     local_base_path = config.get('local_base_path')
     exclusion_rules_file = config.get('exclusion_rules_file')
-    sync_paths = config.get('sync_paths', {})
+    sync_jobs = config.get('sync_jobs', {})
 
     # Ensure the log directory exists
     os.makedirs(default_log_dir, exist_ok=True)
@@ -157,7 +157,7 @@ def load_config():
     resync_options = config.get('resync_options', {})
 
     # Initialize last_sync_times but don't schedule tasks yet
-    for key, value in sync_paths.items():
+    for key, value in sync_jobs.items():
         if value.get('active', True) and 'sync_interval' in value:
             if key not in last_sync_times:
                 last_sync_times[key] = script_start_time
@@ -278,9 +278,8 @@ def calculate_md5(file_path):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+
 # Handle filter changes
-
-
 def handle_filter_changes():
     stored_md5_file = os.path.join(cache_dir, '.filter_md5')
     os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
@@ -323,6 +322,8 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
         log_error(f"{sync_type} {message} for {local_path}.")
         return "FAILED"
 
+# Add rclone arguments
+
 
 def add_rclone_args(rclone_args, options):
     for key, value in options.items():
@@ -339,6 +340,7 @@ def add_rclone_args(rclone_args, options):
             rclone_args.extend([f'--{option_key}', str(value)])
 
 
+# Get base rclone options
 def get_base_rclone_options():
     options = {
         'exclude': [resync_status_file_name, bisync_status_file_name],
@@ -410,6 +412,7 @@ def bisync(remote_path, local_path, path_dry_run):
     write_sync_status(local_path, sync_result)
 
 
+# Perform a resync
 def resync(remote_path, local_path, path_dry_run):
     if force_resync:
         log_message("Force resync requested.")
@@ -500,6 +503,7 @@ def ensure_local_directory(local_path):
         log_message(f"Local directory {local_path} created.")
 
 
+# Check if the local rclone test file exists
 def check_local_rclone_test(local_path):
     # use rclone lsf to check if the file exists
     result = subprocess.run(['rclone', 'lsf', local_path],
@@ -511,6 +515,7 @@ def check_local_rclone_test(local_path):
     return True
 
 
+# Check if the remote rclone test file exists
 def check_remote_rclone_test(remote_path):
     # use rclone lsf to check if the file exists
     result = subprocess.run(['rclone', 'lsf', remote_path],
@@ -522,12 +527,14 @@ def check_remote_rclone_test(remote_path):
     return True
 
 
+# Define a dataclass for the sync task
 @dataclass(order=True)
 class SyncTask:
     scheduled_time: datetime
     path_key: str = field(compare=False)
 
 
+# Define a class for the sync scheduler
 class SyncScheduler:
     def __init__(self):
         self.tasks: List[SyncTask] = []
@@ -560,13 +567,14 @@ class SyncScheduler:
 scheduler = SyncScheduler()
 
 
+# Reload the configuration
 def reload_config():
     global dry_run, last_sync_times
     log_message("Reloading configuration...")
 
-    old_sync_paths = sync_paths.copy()
+    old_sync_jobs = sync_jobs.copy()
     old_intervals = {key: parse_interval(
-        value['sync_interval']) for key, value in old_sync_paths.items() if 'sync_interval' in value}
+        value['sync_interval']) for key, value in old_sync_jobs.items() if 'sync_interval' in value}
 
     load_config()
     args = parse_args()
@@ -575,7 +583,7 @@ def reload_config():
     current_time = datetime.now()
 
     # Update existing tasks and add new ones
-    for key, value in sync_paths.items():
+    for key, value in sync_jobs.items():
         if value.get('active', True) and 'sync_interval' in value:
             new_interval = parse_interval(value['sync_interval'])
             if key in old_intervals:
@@ -600,8 +608,8 @@ def reload_config():
                 scheduler.schedule_task(key, next_sync)
 
     # Remove tasks for paths that no longer exist
-    for key in old_sync_paths:
-        if key not in sync_paths:
+    for key in old_sync_jobs:
+        if key not in sync_jobs:
             scheduler.remove_task(key)
             if key in last_sync_times:
                 del last_sync_times[key]
@@ -611,6 +619,7 @@ def reload_config():
     log_message(f"Adjusted last sync times: {last_sync_times}")
 
 
+# Daemon main function
 def daemon_main():
     global running, dry_run, last_sync_times, currently_syncing, queued_paths, shutting_down, shutdown_complete
 
@@ -623,7 +632,7 @@ def daemon_main():
 
     # Perform initial sync for all active paths
     log_message("Starting initial sync for all active paths")
-    for key, value in sync_paths.items():
+    for key, value in sync_jobs.items():
         if value.get('active', True):
             add_to_sync_queue(key)
 
@@ -639,7 +648,7 @@ def daemon_main():
                     else:
                         break  # Exit the loop if a sync is already in progress
 
-                if key in sync_paths:
+                if key in sync_jobs:
                     perform_sync_operations(key)
 
                 with sync_lock:
@@ -684,6 +693,7 @@ def daemon_main():
     status_thread.join(timeout=5)
 
 
+# Add a path to the sync queue
 def add_to_sync_queue(key):
     global shutting_down
     with sync_lock:
@@ -692,11 +702,12 @@ def add_to_sync_queue(key):
             queued_paths.add(key)
 
 
+# Perform the sync operations
 def perform_sync_operations(key):
     global current_sync_start_time
     current_sync_start_time = datetime.now()
 
-    value = sync_paths[key]
+    value = sync_jobs[key]
 
     local_path = os.path.join(local_base_path, value['local'])
     remote_path = f"{value['rclone_remote']}:{value['remote']}"
@@ -721,6 +732,7 @@ def perform_sync_operations(key):
     current_sync_start_time = None
 
 
+# Generate the status report
 def generate_status_report():
     current_time = datetime.now()
     status = {
@@ -739,7 +751,7 @@ def generate_status_report():
         status["current_sync_duration"] = str(sync_duration).split('.')[
             0]  # Remove microseconds
 
-    for key, value in sync_paths.items():
+    for key, value in sync_jobs.items():
         local_path = os.path.join(local_base_path, value['local'])
         remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
@@ -765,6 +777,7 @@ def generate_status_report():
     return json.dumps(status, ensure_ascii=False, indent=2)
 
 
+# Read the sync status
 def read_sync_status(local_path):
     sync_status_file = os.path.join(local_path, bisync_status_file_name)
     if os.path.exists(sync_status_file):
@@ -773,12 +786,14 @@ def read_sync_status(local_path):
     return "UNKNOWN"
 
 
+# Handle the status request
 def handle_status_request(conn):
     status = generate_status_report()
     conn.sendall(status.encode())
     conn.close()
 
 
+# Start the status server
 def status_server():
     global running, shutdown_complete
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -806,6 +821,7 @@ def status_server():
     os.unlink(socket_path)
 
 
+# Check if the config file has changed
 def check_config_changed():
     global last_config_mtime
     try:
@@ -818,6 +834,7 @@ def check_config_changed():
     return False
 
 
+# Stop the daemon
 def stop_daemon():
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
     if os.path.exists(socket_path):
@@ -843,7 +860,10 @@ def stop_daemon():
 
 
 def print_daemon_status():
+    # Define the socket path
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
+
+    # Check if the socket path exists
     if os.path.exists(socket_path):
         try:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -896,9 +916,9 @@ def main():
             print_daemon_status()
     elif args.command == 'sync':
         paths_to_sync = specific_folders if specific_folders else [
-            key for key, value in sync_paths.items() if value.get('active', True)]
+            key for key, value in sync_jobs.items() if value.get('active', True)]
         for key in paths_to_sync:
-            if key in sync_paths:
+            if key in sync_jobs:
                 perform_sync_operations(key)
             else:
                 log_error(f"Specified folder '{
