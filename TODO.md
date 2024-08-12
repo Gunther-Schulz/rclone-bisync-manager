@@ -1,5 +1,6 @@
 # TODO
 
+- exclude rule file change shoudl trigger a resync
 - dont use these, use a .cahe thing instead
   2024/08/12 12:28:34 NOTICE: - Path2 Queue copy to Path1 - pbs:users/pb-schulz/v/.bisync_status
   2024/08/12 12:28:34 NOTICE: - Path2 Queue copy to Path1 - pbs:users/pb-schulz/v/.resync_status

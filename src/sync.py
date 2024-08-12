@@ -8,21 +8,25 @@ from scheduler import scheduler
 
 
 def perform_sync_operations(key):
-    global current_sync_start_time
-    current_sync_start_time = datetime.now()
-
     value = config.sync_jobs[key]
     local_path = os.path.join(config.local_base_path, value['local'])
     remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
-        current_sync_start_time = None
         return
 
     ensure_local_directory(local_path)
     path_dry_run = config.dry_run or value.get('dry_run', False)
 
-    if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
+    log_message(f"Performing sync operation for {
+                key}. Force resync: {config.force_resync}")
+
+    if config.force_resync:
+        log_message("Force resync requested.")
+        resync_result = resync(remote_path, local_path, path_dry_run)
+        if resync_result == "COMPLETED":
+            bisync(remote_path, local_path, path_dry_run)
+    else:
         bisync(remote_path, local_path, path_dry_run)
 
     config.last_sync_times[key] = datetime.now()
@@ -30,15 +34,15 @@ def perform_sync_operations(key):
     next_run = config.last_sync_times[key] + timedelta(seconds=interval)
     scheduler.schedule_task(key, next_run)
 
-    current_sync_start_time = None
-
 
 def bisync(remote_path, local_path, path_dry_run):
     log_message(f"Bisync started for {local_path} at {
                 datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
-    rclone_args.extend(get_rclone_args(config.bisync_options, path_dry_run))
+    rclone_args.extend(get_rclone_args(config.sync_jobs.get(
+        local_path, {}).get('bisync_options', {}), path_dry_run, 'bisync'))
+    print("-x-xBISYNC rclone_args: ", rclone_args)
 
     result = run_rclone_command(rclone_args)
     sync_result = handle_rclone_exit_code(
@@ -48,6 +52,7 @@ def bisync(remote_path, local_path, path_dry_run):
 
 
 def resync(remote_path, local_path, path_dry_run):
+    log_message(f"Resync called with force_resync: {config.force_resync}")
     if config.force_resync:
         log_message("Force resync requested.")
     else:
@@ -68,7 +73,9 @@ def resync(remote_path, local_path, path_dry_run):
     write_resync_status(local_path, "IN_PROGRESS")
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path, '--resync']
-    rclone_args.extend(get_rclone_args(config.resync_options, path_dry_run))
+    rclone_args.extend(get_rclone_args(config.sync_jobs.get(
+        local_path, {}).get('resync_options', {}), path_dry_run, 'resync'))
+    print("-x-xRESYNC rclone_args: ", rclone_args)
 
     result = run_rclone_command(rclone_args)
     sync_result = handle_rclone_exit_code(
@@ -79,9 +86,21 @@ def resync(remote_path, local_path, path_dry_run):
     return sync_result
 
 
-def get_rclone_args(options, path_dry_run):
+def get_rclone_args(options, path_dry_run, operation_type):
     args = []
-    for key, value in options.items():
+
+    # Determine which options to use based on operation type
+    if operation_type == 'bisync':
+        default_options = config.bisync_options
+    elif operation_type == 'resync':
+        default_options = config.resync_options
+    else:
+        default_options = {}
+
+    # Merge default options with rclone_options
+    merged_options = {**config.rclone_options, **default_options, **options}
+
+    for key, value in merged_options.items():
         option_key = f"--{key.replace('_', '-')}"
         if value is None:
             args.append(option_key)
@@ -94,8 +113,6 @@ def get_rclone_args(options, path_dry_run):
         else:
             args.extend([option_key, str(value)])
 
-    if os.path.exists(config.exclusion_rules_file):
-        args.extend(['--exclude-from', config.exclusion_rules_file])
     if path_dry_run:
         args.append('--dry-run')
     if config.force_operation:

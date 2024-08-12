@@ -91,13 +91,12 @@ def main():
         try:
             paths_to_sync = args.specific_sync_jobs if args.specific_sync_jobs else [
                 key for key, value in config.sync_jobs.items() if value.get('active', True)]
+            config.dry_run = args.dry_run
+            config.force_resync = args.force_resync
+            config.force_operation = args.force_operation
             for key in paths_to_sync:
                 if key in config.sync_jobs:
-                    perform_sync_operations(
-                        key, args.dry_run, args.force_resync, args.force_operation)
-                else:
-                    log_error(f"Specified sync job '{
-                              key}' not found in configuration")
+                    perform_sync_operations(key)
         finally:
             # Release the lock and remove the lock file
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)
