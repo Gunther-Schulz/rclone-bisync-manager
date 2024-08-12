@@ -100,6 +100,8 @@ def get_rclone_args(options, path_dry_run):
         args.append('--dry-run')
     if config.force_operation:
         args.append('--force')
+    if config.redirect_rclone_log_output:
+        args.extend(['--log-file', config.log_file_path])
 
     return args
 

@@ -43,6 +43,7 @@ class Config:
         self.sync_intervals = {}
         self.script_start_time = datetime.now()
         self.last_config_mtime = 0
+        self.redirect_rclone_log_output = False
 
         # File paths
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -78,6 +79,8 @@ class Config:
         self.rclone_options = config.get('rclone_options', {})
         self.bisync_options = config.get('bisync_options', {})
         self.resync_options = config.get('resync_options', {})
+        self.redirect_rclone_log_output = config.get(
+            'redirect_rclone_log_output', False)
 
         # Initialize last_sync_times and sync_intervals
         for key, value in self.sync_jobs.items():
