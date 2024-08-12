@@ -9,18 +9,16 @@ from cli import parse_args
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
 from utils import check_tools, ensure_rclone_dir, handle_filter_changes
-from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location
+from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from config import signal_handler
 
 
 def main():
-    global dry_run, daemon_mode
     args = parse_args()
     config.load_config()  # Load config first to set up log paths
-    from logging_utils import set_config
     set_config(config)  # Set the config for logging_utils
     ensure_log_file_path()
-    setup_loggers()  # Move this line up
+    setup_loggers(args.console_log)  # Pass console_log argument
     log_config_file_location(config.config_file)
 
     check_tools()
@@ -59,11 +57,12 @@ def main():
         elif args.action == 'status':
             print_daemon_status()
     elif args.command == 'sync':
-        paths_to_sync = specific_sync_jobs if specific_sync_jobs else [
-            key for key, value in sync_jobs.items() if value.get('active', True)]
+        paths_to_sync = args.specific_sync_jobs if args.specific_sync_jobs else [
+            key for key, value in config.sync_jobs.items() if value.get('active', True)]
         for key in paths_to_sync:
-            if key in sync_jobs:
-                perform_sync_operations(key)
+            if key in config.sync_jobs:
+                perform_sync_operations(
+                    key, args.dry_run, args.force_resync, args.force_operation)
             else:
                 log_error(f"Specified sync job '{
                           key}' not found in configuration")

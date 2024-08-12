@@ -5,7 +5,7 @@ from logging_utils import log_message, log_error
 from utils import check_config_changed, parse_interval
 from scheduler import scheduler
 from sync import perform_sync_operations
-from config import config, load_config, signal_handler
+from config import config, signal_handler
 import os
 import signal
 import time
@@ -102,7 +102,7 @@ def add_to_sync_queue(key):
 
 
 def reload_config():
-    load_config()
+    config.load_config()
     log_message("Config reloaded.")
 
     scheduler.clear_tasks()

@@ -5,7 +5,10 @@ import sys
 from threading import Lock
 from queue import Queue
 from interval_utils import parse_interval
-from logging_utils import log_error
+
+
+def _initial_log_error(message):
+    print(f"ERROR: {message}", file=sys.stderr)
 
 
 class Config:
@@ -62,7 +65,7 @@ class Config:
         if not os.path.exists(self.config_file):
             error_message = f"Configuration file not found. Please ensure it exists at: {
                 self.config_file}"
-            log_error(error_message)
+            _initial_log_error(error_message)
             sys.exit(1)
 
         with open(self.config_file, 'r') as f:
