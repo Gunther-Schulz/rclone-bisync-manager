@@ -45,6 +45,8 @@ class Config:
         self.last_config_mtime = 0
         self.redirect_rclone_log_output = False
         self.last_log_position = 0
+        self.hash_warnings = {}
+        self.sync_errors = {}
 
         # File paths
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(

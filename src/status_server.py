@@ -47,7 +47,6 @@ def generate_status_report():
         "currently_syncing": config.currently_syncing,
         "sync_queue_size": config.sync_queue.qsize(),
         "queued_paths": list(config.queued_paths),
-        "hash_warnings": config.hash_warnings,
         "shutting_down": config.shutting_down
     }
 
@@ -72,6 +71,8 @@ def generate_status_report():
             "dry_run": config.dry_run or value.get('dry_run', False),
             "is_active": value.get('active', True),
             "is_currently_syncing": key == config.currently_syncing,
+            "hash_warning": config.hash_warnings.get(local_path),
+            "sync_error": config.sync_errors.get(local_path)
         }
 
         if key == config.currently_syncing and 'current_sync_start_time' in globals():
