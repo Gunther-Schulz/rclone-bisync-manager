@@ -45,7 +45,8 @@ error_log_file_path = os.path.join(
 
 def signal_handler(signum, frame):
     global running, shutting_down
-    running = False
-    shutting_down = True
+    globals()['running'] = False
+    globals()['shutting_down'] = True
     from logging_utils import log_message
     log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
+    print('SIGINT or SIGTERM received. Initiating graceful shutdown.')

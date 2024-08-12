@@ -19,16 +19,16 @@ def start_status_server():
     server.listen(1)
     server.settimeout(1)  # Set a timeout so we can check the running flag
 
-    while True:
+    while running or not shutdown_complete:
         try:
             conn, addr = server.accept()
             threading.Thread(target=handle_client, args=(conn,)).start()
         except socket.timeout:
-            if shutting_down:
-                break
+            continue
 
     server.close()
     os.unlink(socket_path)
+    print("Status server stopped")
 
 
 def handle_client(conn):

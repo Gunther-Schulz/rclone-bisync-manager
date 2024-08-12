@@ -1,12 +1,15 @@
+import json
+import socket
 from status_server import start_status_server
 from logging_utils import log_message, log_error
 from utils import check_config_changed, parse_interval
 from scheduler import scheduler
 from sync import perform_sync_operations
 from config import load_config
+import shared_variables
 from shared_variables import (
     running, shutting_down, shutdown_complete, currently_syncing,
-    current_sync_start_time, sync_queue, queued_paths, sync_jobs,
+    current_sync_start_time, signal_handler, sync_queue, queued_paths, sync_jobs,
     last_sync_times
 )
 import os
@@ -22,6 +25,9 @@ def daemon_main():
 
     log_message("Daemon started")
 
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
     status_thread = threading.Thread(target=start_status_server, daemon=True)
     status_thread.start()
 
@@ -31,7 +37,8 @@ def daemon_main():
         if value.get('active', True):
             add_to_sync_queue(key)
 
-    while running and not shutting_down:
+    while shared_variables.running:
+        print("Running", shared_variables.running)
         try:
             process_sync_queue()
             check_scheduled_tasks()
@@ -41,7 +48,26 @@ def daemon_main():
             log_error(f"An error occurred in the main loop: {str(e)}")
             time.sleep(1)  # Avoid tight loop in case of persistent errors
 
-    graceful_shutdown()
+        if shutting_down:
+            log_message(
+                "Shutdown signal received, initiating graceful shutdown")
+            break
+
+    # Graceful shutdown
+    log_message('Daemon shutting down...')
+
+    # Wait for current sync to finish
+    while currently_syncing:
+        log_message(f"Waiting for current sync to finish: {currently_syncing}")
+        time.sleep(5)  # Log every 5 seconds instead of every second
+
+    # Clear remaining queue
+    while not sync_queue.empty():
+        sync_queue.get_nowait()
+    queued_paths.clear()
+
+    shutdown_complete = True
+    log_message('Daemon shutdown complete.')
     status_thread.join(timeout=5)
 
 
@@ -58,7 +84,7 @@ def process_sync_queue():
             else:
                 break
 
-        if key in sync_jobs:
+        if key in sync_jobs and not shutting_down:
             perform_sync_operations(key)
 
         with sync_lock:
@@ -78,21 +104,6 @@ def check_scheduled_tasks():
 def check_and_reload_config():
     if check_config_changed() and not shutting_down:
         reload_config()
-
-
-def graceful_shutdown():
-    global shutdown_complete
-    log_message('Daemon shutting down...')
-
-    while currently_syncing:
-        time.sleep(1)
-
-    while not sync_queue.empty():
-        sync_queue.get_nowait()
-    queued_paths.clear()
-
-    shutdown_complete = True
-    log_message('Daemon shutdown complete.')
 
 
 def add_to_sync_queue(key):
@@ -119,8 +130,6 @@ def stop_daemon():
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
     if os.path.exists(socket_path):
         try:
-            import socket
-            import json
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             client.connect(socket_path)
             status = json.loads(client.recv(4096).decode())
