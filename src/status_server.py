@@ -27,7 +27,6 @@ def start_status_server():
 
     server.close()
     os.unlink(socket_path)
-    print("Status server stopped")
 
 
 def handle_client(conn):

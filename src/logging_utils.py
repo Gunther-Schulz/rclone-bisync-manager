@@ -1,9 +1,8 @@
 import os
-import logging
-import sys
 from datetime import datetime
 
 config = None  # We'll set this later
+daemon_console_log = False
 
 
 def ensure_log_file_path():
@@ -15,6 +14,7 @@ def setup_loggers(console_log=False):
     ensure_log_file_path()
     logger = FileLogger(config.log_file_path)
     error_logger = FileLogger(config.error_log_file_path)
+    config.console_log = console_log
 
 
 class FileLogger:
@@ -36,13 +36,13 @@ class FileLogger:
 
 def log_message(message):
     logger.info(message)
-    if not config.daemon_mode:
+    if config.console_log or (config.daemon_mode and config.daemon_console_log):
         print(message)
 
 
 def log_error(message):
     error_logger.error(message)
-    if not config.daemon_mode:
+    if config.console_log or (config.daemon_mode and config.daemon_console_log):
         print(f"ERROR: {message}")
 
 

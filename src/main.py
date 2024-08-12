@@ -18,7 +18,10 @@ def main():
     config.load_config()  # Load config first to set up log paths
     set_config(config)  # Set the config for logging_utils
     ensure_log_file_path()
-    setup_loggers(args.console_log)  # Pass console_log argument
+    config.daemon_mode = args.command == 'daemon'
+    config.daemon_console_log = args.daemon_console_log
+    # Pass both console_log and daemon_console_log arguments
+    setup_loggers(args.console_log)
     log_config_file_location(config.config_file)
 
     check_tools()

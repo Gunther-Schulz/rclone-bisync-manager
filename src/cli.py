@@ -7,6 +7,8 @@ def parse_args():
                         help='Perform a dry run without making any changes.')
     parser.add_argument('--console-log', action='store_true',
                         help='Print log messages to the console in addition to the log files.')
+    parser.add_argument('--daemon-console-log', action='store_true',
+                        help='Print log messages to the console in daemon mode.')
 
     subparsers = parser.add_subparsers(dest='command', required=True)
 
