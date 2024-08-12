@@ -2,3 +2,5 @@
 build/
 
 d.sh
+
+src/__pycache__/
