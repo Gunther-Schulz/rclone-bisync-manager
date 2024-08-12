@@ -16,10 +16,12 @@ def perform_sync_operations(key):
         return
 
     ensure_local_directory(local_path)
+
+    # Use the global dry run flag if set, otherwise use the per-job dry run flag
     path_dry_run = config.dry_run or value.get('dry_run', False)
 
-    log_message(f"Performing sync operation for {
-                key}. Force resync: {config.force_resync}")
+    log_message(f"Performing sync operation for {key}. Force resync: {
+                config.force_resync}, Dry run: {path_dry_run}")
 
     if config.force_resync:
         log_message("Force resync requested.")
@@ -42,7 +44,6 @@ def bisync(remote_path, local_path, path_dry_run):
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
     rclone_args.extend(get_rclone_args(config.sync_jobs.get(
         local_path, {}).get('bisync_options', {}), path_dry_run, 'bisync'))
-    print("-x-xBISYNC rclone_args: ", rclone_args)
 
     result = run_rclone_command(rclone_args)
     sync_result = handle_rclone_exit_code(
@@ -75,7 +76,6 @@ def resync(remote_path, local_path, path_dry_run):
     rclone_args = ['rclone', 'bisync', remote_path, local_path, '--resync']
     rclone_args.extend(get_rclone_args(config.sync_jobs.get(
         local_path, {}).get('resync_options', {}), path_dry_run, 'resync'))
-    print("-x-xRESYNC rclone_args: ", rclone_args)
 
     result = run_rclone_command(rclone_args)
     sync_result = handle_rclone_exit_code(
@@ -113,6 +113,10 @@ def get_rclone_args(options, path_dry_run, operation_type):
         else:
             args.extend([option_key, str(value)])
 
+    if os.path.exists(config.exclusion_rules_file):
+        args.extend(['--exclude-from', config.exclusion_rules_file])
+
+    # Always add --dry-run if path_dry_run is True
     if path_dry_run:
         args.append('--dry-run')
     if config.force_operation:

@@ -3,23 +3,25 @@ import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser(description="RClone BiSync Manager")
-    parser.add_argument('-d', '--dry-run', action='store_true',
-                        help='Perform a dry run without making any changes.')
-    parser.add_argument('--console-log', action='store_true',
-                        help='Print log messages to the console in addition to the log files.')
-    parser.add_argument('--daemon-console-log', action='store_true',
-                        help='Print log messages to the console in daemon mode.')
+
+    # Global options
+    global_parser = argparse.ArgumentParser(add_help=False)
+    global_parser.add_argument('--console-log', action='store_true',
+                               help='Print log messages to the console in addition to the log files.')
+    global_parser.add_argument('-d', '--dry-run', action='store_true',
+                               help='Perform a dry run without making any changes.')
 
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     # Daemon command
-    daemon_parser = subparsers.add_parser('daemon', help='Run in daemon mode')
+    daemon_parser = subparsers.add_parser(
+        'daemon', parents=[global_parser], help='Run in daemon mode')
     daemon_parser.add_argument('action', choices=['start', 'stop', 'status'],
                                help='Action to perform on the daemon')
 
     # Sync command
     sync_parser = subparsers.add_parser(
-        'sync', help='Perform a sync operation')
+        'sync', parents=[global_parser], help='Perform a sync operation')
     sync_parser.add_argument('sync_jobs', nargs='*',
                              help='Specify sync jobs to run (optional, run all active jobs if not specified)')
     sync_parser.add_argument('--resync', action='store_true',

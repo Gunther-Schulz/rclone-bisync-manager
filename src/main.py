@@ -31,9 +31,10 @@ def main():
     ensure_log_file_path()
 
     config.daemon_mode = args.command == 'daemon'
-    config.daemon_console_log = args.daemon_console_log
-    # Pass both console_log and daemon_console_log arguments
-    setup_loggers(args.console_log)
+    config.console_log = args.console_log
+    config.dry_run = args.dry_run
+
+    setup_loggers(config.console_log)
     log_config_file_location(config.config_file)
 
     check_tools()
