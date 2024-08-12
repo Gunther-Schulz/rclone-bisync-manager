@@ -90,14 +90,24 @@ def main():
             sys.exit(1)
 
         try:
-            paths_to_sync = args.specific_sync_jobs if args.specific_sync_jobs else [
-                key for key, value in config.sync_jobs.items() if value.get('active', True)]
+            if args.specific_sync_jobs:
+                # Check if all provided sync job names exist
+                invalid_jobs = [
+                    job for job in args.specific_sync_jobs if job not in config.sync_jobs]
+                if invalid_jobs:
+                    print(f"Error: The following sync job(s) do not exist: {
+                          ', '.join(invalid_jobs)}")
+                    sys.exit(1)
+                paths_to_sync = args.specific_sync_jobs
+            else:
+                paths_to_sync = [
+                    key for key, value in config.sync_jobs.items() if value.get('active', True)]
+
             config.dry_run = args.dry_run
             config.force_resync = args.force_resync
             config.force_operation = args.force_operation
             for key in paths_to_sync:
-                if key in config.sync_jobs:
-                    perform_sync_operations(key)
+                perform_sync_operations(key)
         finally:
             # Release the lock and remove the lock file
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)
