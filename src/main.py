@@ -5,10 +5,11 @@ import signal
 import sys
 import daemon
 from config import load_config, parse_args, sync_jobs, specific_sync_jobs, config_file
+from cli import parse_args
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
 from utils import check_tools, ensure_rclone_dir, handle_filter_changes, cache_dir, rclone_test_file_name
-from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_file_path
+from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_file_path, log_config_file_location
 from shared_variables import signal_handler
 
 # Initialize global variables
@@ -21,12 +22,12 @@ def main():
     global dry_run, daemon_mode
     args = parse_args()
     load_config()  # Load config first to set up log paths
-    print(f"Config file location: {config_file}")
+    log_config_file_location(config_file)
 
     check_tools()
     ensure_rclone_dir()
-    setup_loggers()  # Add this line
     ensure_log_file_path()
+    setup_loggers()  # Add this line
     print(f"Log file location: {log_file_path}")
     handle_filter_changes()
 

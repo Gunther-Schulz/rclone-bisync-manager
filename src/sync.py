@@ -5,8 +5,7 @@ from config import sync_jobs, local_base_path, dry_run, force_resync, force_oper
 from utils import is_cpulimit_installed, parse_interval, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
 from logging_utils import log_message, log_error
 from scheduler import scheduler
-
-current_sync_start_time = None
+from shared_variables import current_sync_start_time
 
 
 def perform_sync_operations(key):
@@ -14,7 +13,6 @@ def perform_sync_operations(key):
     current_sync_start_time = datetime.now()
 
     value = sync_jobs[key]
-
     local_path = os.path.join(local_base_path, value['local'])
     remote_path = f"{value['rclone_remote']}:{value['remote']}"
 
@@ -23,13 +21,11 @@ def perform_sync_operations(key):
         return
 
     ensure_local_directory(local_path)
-
     path_dry_run = dry_run or value.get('dry_run', False)
 
     if resync(remote_path, local_path, path_dry_run) == "COMPLETED":
         bisync(remote_path, local_path, path_dry_run)
 
-    # Update last sync time and schedule next run
     last_sync_times[key] = datetime.now()
     interval = parse_interval(value['sync_interval'])
     next_run = last_sync_times[key] + timedelta(seconds=interval)

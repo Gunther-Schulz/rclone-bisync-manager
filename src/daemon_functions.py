@@ -3,22 +3,17 @@ import signal
 import time
 import threading
 from datetime import datetime, timedelta
-from config import sync_jobs, last_sync_times, load_config
+from shared_variables import (
+    running, shutting_down, shutdown_complete, currently_syncing,
+    current_sync_start_time, sync_queue, queued_paths, sync_jobs,
+    last_sync_times
+)
+from config import load_config
 from sync import perform_sync_operations
-from scheduler import scheduler, SyncTask
+from scheduler import scheduler
 from utils import check_config_changed, parse_interval
 from logging_utils import log_message, log_error
 from status_server import start_status_server
-from shared_variables import *
-
-running = True
-shutting_down = False
-shutdown_complete = False
-currently_syncing = None
-current_sync_start_time = None
-sync_queue = Queue()
-queued_paths = set()
-sync_lock = threading.Lock()
 
 
 def daemon_main():
@@ -37,65 +32,69 @@ def daemon_main():
 
     while running and not shutting_down:
         try:
-            # Process the sync queue
-            while not sync_queue.empty() and not shutting_down:
-                with sync_lock:
-                    if currently_syncing is None:
-                        key = sync_queue.get_nowait()
-                        currently_syncing = key
-                        queued_paths.remove(key)
-                        current_sync_start_time = datetime.now()
-                    else:
-                        break
-
-                if key in sync_jobs:
-                    perform_sync_operations(key)
-
-                with sync_lock:
-                    currently_syncing = None
-                    current_sync_start_time = None
-
-            # Check for scheduled tasks
-            next_task = scheduler.get_next_task()
-            if next_task and not shutting_down:
-                now = datetime.now()
-                if now >= next_task.scheduled_time:
-                    task = scheduler.pop_next_task()
-                    add_to_sync_queue(task.path_key)
-                else:
-                    # Sleep until the next task or for a maximum of 1 second
-                    sleep_time = min(
-                        (next_task.scheduled_time - now).total_seconds(), 1)
-                    time.sleep(sleep_time)
-            else:
-                time.sleep(1)
-
-            if check_config_changed() and not shutting_down:
-                reload_config()
-
+            process_sync_queue()
+            check_scheduled_tasks()
+            check_and_reload_config()
+            time.sleep(1)
         except Exception as e:
             log_error(f"An error occurred in the main loop: {str(e)}")
             time.sleep(1)  # Avoid tight loop in case of persistent errors
 
-    # Graceful shutdown
+    graceful_shutdown()
+    status_thread.join(timeout=5)
+
+
+def process_sync_queue():
+    global currently_syncing, current_sync_start_time
+
+    while not sync_queue.empty() and not shutting_down:
+        with sync_lock:
+            if currently_syncing is None:
+                key = sync_queue.get_nowait()
+                currently_syncing = key
+                queued_paths.remove(key)
+                current_sync_start_time = datetime.now()
+            else:
+                break
+
+        if key in sync_jobs:
+            perform_sync_operations(key)
+
+        with sync_lock:
+            currently_syncing = None
+            current_sync_start_time = None
+
+
+def check_scheduled_tasks():
+    next_task = scheduler.get_next_task()
+    if next_task and not shutting_down:
+        now = datetime.now()
+        if now >= next_task.scheduled_time:
+            task = scheduler.pop_next_task()
+            add_to_sync_queue(task.path_key)
+
+
+def check_and_reload_config():
+    if check_config_changed() and not shutting_down:
+        reload_config()
+
+
+def graceful_shutdown():
+    global shutdown_complete
     log_message('Daemon shutting down...')
 
-    # Wait for current sync to finish
     while currently_syncing:
         time.sleep(1)
 
-    # Clear remaining queue
     while not sync_queue.empty():
         sync_queue.get_nowait()
     queued_paths.clear()
 
     shutdown_complete = True
     log_message('Daemon shutdown complete.')
-    status_thread.join(timeout=5)
 
 
 def add_to_sync_queue(key):
-    global shutting_down
     if not shutting_down and key not in queued_paths and key != currently_syncing:
         sync_queue.put_nowait(key)
         queued_paths.add(key)
@@ -106,13 +105,13 @@ def reload_config():
     load_config()
     log_message("Config reloaded.")
 
-    # Update scheduler with new sync intervals
     scheduler.clear_tasks()
     for key, value in sync_jobs.items():
         if value.get('active', True):
             interval = value.get('interval', '1d')
             interval = parse_interval(interval)
-            scheduler.add_task(SyncTask(key, interval))
+            scheduler.schedule_task(
+                key, datetime.now() + timedelta(seconds=interval))
 
 
 def stop_daemon():

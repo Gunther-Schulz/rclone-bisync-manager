@@ -5,7 +5,7 @@ import hashlib
 from datetime import datetime, timedelta
 from logging_utils import log_message, log_error
 from interval_utils import parse_interval
-from config import config_file, cache_dir, rclone_test_file_name, exclusion_rules_file, last_config_mtime
+from config import config_file, cache_dir, rclone_test_file_name, exclusion_rules_file, last_config_mtime, force_resync
 
 
 def is_cpulimit_installed():
@@ -99,3 +99,9 @@ def calculate_md5(file_path):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
+
+
+def ensure_log_file_path():
+    global log_file_path, error_log_file_path
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    os.makedirs(os.path.dirname(error_log_file_path), exist_ok=True)
