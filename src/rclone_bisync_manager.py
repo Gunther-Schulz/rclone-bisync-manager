@@ -28,7 +28,7 @@ os.environ['LC_ALL'] = 'C.UTF-8'
 dry_run = False
 force_resync = False
 console_log = False
-specific_folders = None
+specific_sync_jobs = None
 
 # Default log directory
 default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
@@ -215,8 +215,8 @@ def parse_args():
     # Sync command
     sync_parser = subparsers.add_parser(
         'sync', help='Perform a sync operation')
-    sync_parser.add_argument('folders', nargs='*',
-                             help='Specify folders to sync (optional, sync all if not specified)')
+    sync_parser.add_argument('sync_jobs', nargs='*',
+                             help='Specify sync jobs to run (optional, run all active jobs if not specified)')
     sync_parser.add_argument('--resync', action='store_true',
                              help='Force a resynchronization, ignoring previous sync status.')
     sync_parser.add_argument('--force-bisync', action='store_true',
@@ -224,18 +224,18 @@ def parse_args():
 
     args = parser.parse_args()
 
-    global dry_run, force_resync, console_log, specific_folders, force_operation, daemon_mode
+    global dry_run, force_resync, console_log, specific_sync_jobs, force_operation, daemon_mode
     dry_run = args.dry_run
     console_log = args.console_log
 
     if args.command == 'sync':
         force_resync = args.resync
-        specific_folders = args.folders if args.folders else None
+        specific_sync_jobs = args.sync_jobs if args.sync_jobs else None
         force_operation = args.force_bisync
         daemon_mode = False
     elif args.command == 'daemon':
         force_resync = False
-        specific_folders = None
+        specific_sync_jobs = None
         force_operation = False
         daemon_mode = True
 
@@ -631,7 +631,7 @@ def daemon_main():
     status_thread.start()
 
     # Perform initial sync for all active paths
-    log_message("Starting initial sync for all active paths")
+    log_message("Starting initial sync for all active sync jobs")
     for key, value in sync_jobs.items():
         if value.get('active', True):
             add_to_sync_queue(key)
@@ -915,13 +915,13 @@ def main():
         elif args.action == 'status':
             print_daemon_status()
     elif args.command == 'sync':
-        paths_to_sync = specific_folders if specific_folders else [
+        paths_to_sync = specific_sync_jobs if specific_sync_jobs else [
             key for key, value in sync_jobs.items() if value.get('active', True)]
         for key in paths_to_sync:
             if key in sync_jobs:
                 perform_sync_operations(key)
             else:
-                log_error(f"Specified folder '{
+                log_error(f"Specified sync job '{
                           key}' not found in configuration")
 
 
