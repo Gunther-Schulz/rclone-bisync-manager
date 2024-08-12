@@ -2,7 +2,7 @@ import os
 import logging
 import sys
 from datetime import datetime
-from shared_variables import daemon_mode
+from shared_variables import shared_vars
 
 log_file_path = None
 error_log_file_path = None
@@ -12,12 +12,9 @@ error_logger = None
 
 def ensure_log_file_path():
     global log_file_path, error_log_file_path
-    default_log_dir = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser(
-        '~/.local/state')), 'rclone-bisync-manager', 'logs')
-    os.makedirs(default_log_dir, exist_ok=True)
-    log_file_path = os.path.join(default_log_dir, 'rclone-bisync-manager.log')
-    error_log_file_path = os.path.join(
-        default_log_dir, 'rclone-bisync-manager-error.log')
+    log_file_path = shared_vars.log_file_path
+    error_log_file_path = shared_vars.error_log_file_path
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
 
 
 def setup_loggers(console_log=False):
@@ -46,13 +43,13 @@ class FileLogger:
 
 def log_message(message):
     logger.info(message)
-    if not daemon_mode:
+    if not shared_vars.daemon_mode:
         print(message)
 
 
 def log_error(message):
     error_logger.error(message)
-    if not daemon_mode:
+    if not shared_vars.daemon_mode:
         print(f"ERROR: {message}")
 
 
