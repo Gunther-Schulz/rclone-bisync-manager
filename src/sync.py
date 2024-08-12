@@ -208,7 +208,11 @@ def check_for_hash_warnings(local_path):
                 log_file.seek(config.last_log_position)
                 new_content = log_file.read()
                 if "WARNING: hash unexpectedly blank despite Fs support" in new_content:
-                    log_message(f"WARNING: Detected blank hash warnings for {
-                                local_path}. This may indicate issues with Live Photos or other special file types. You should try to resync and if that is not successful you should consider using --ignore-size for future syncs.")
+                    warning_message = f"WARNING: Detected blank hash warnings for {
+                        local_path}. This may indicate issues with Live Photos or other special file types. You should try to resync and if that is not successful you should consider using --ignore-size for future syncs."
+                    log_message(warning_message)
+                    config.hash_warnings[local_path] = warning_message
+                else:
+                    config.hash_warnings.pop(local_path, None)
 
         config.last_log_position = current_position

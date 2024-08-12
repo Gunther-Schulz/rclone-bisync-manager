@@ -47,6 +47,7 @@ def generate_status_report():
         "currently_syncing": config.currently_syncing,
         "sync_queue_size": config.sync_queue.qsize(),
         "queued_paths": list(config.queued_paths),
+        "hash_warnings": config.hash_warnings,
         "shutting_down": config.shutting_down
     }
 
