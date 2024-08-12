@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from logging_utils import log_message, log_error
 from interval_utils import parse_interval
 from config import config
+import fcntl
 
 
 def is_cpulimit_installed():
@@ -107,3 +108,13 @@ def ensure_log_file_path():
     global log_file_path, error_log_file_path
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
     os.makedirs(os.path.dirname(error_log_file_path), exist_ok=True)
+
+
+def check_and_create_lock_file():
+    lock_file = '/tmp/rclone_bisync_manager.lock'
+    try:
+        lock_fd = open(lock_file, 'w')
+        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except IOError:
+        return None

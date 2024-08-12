@@ -11,6 +11,17 @@ from sync import perform_sync_operations
 from utils import check_tools, ensure_rclone_dir, handle_filter_changes
 from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from config import signal_handler
+import fcntl
+
+
+def check_and_create_lock_file():
+    lock_file = '/tmp/rclone_bisync_manager.lock'
+    try:
+        lock_fd = open(lock_file, 'w')
+        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except IOError:
+        return None
 
 
 def main():
@@ -18,6 +29,7 @@ def main():
     config.load_config()  # Load config first to set up log paths
     set_config(config)  # Set the config for logging_utils
     ensure_log_file_path()
+
     config.daemon_mode = args.command == 'daemon'
     config.daemon_console_log = args.daemon_console_log
     # Pass both console_log and daemon_console_log arguments
@@ -27,8 +39,6 @@ def main():
     check_tools()
     ensure_rclone_dir()
     handle_filter_changes()
-
-    log_message("Warning: This script does not prevent multiple instances from running. Please ensure you don't start it multiple times unintentionally.")
 
     # Log home directory
     home_dir = os.environ.get('HOME')

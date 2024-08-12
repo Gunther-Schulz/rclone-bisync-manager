@@ -46,10 +46,6 @@ def log_error(message):
         print(f"ERROR: {message}")
 
 
-def log_initial_warning():
-    log_message("Warning: This script does not prevent multiple instances from running. Please ensure you don't start it multiple times unintentionally.")
-
-
 def log_home_directory():
     home_dir = os.environ.get('HOME')
     if home_dir:

@@ -103,3 +103,5 @@ def signal_handler(signum, frame):
     from logging_utils import log_message
     log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
     print('SIGINT or SIGTERM received. Initiating graceful shutdown.')
+    if hasattr(config, 'lock_fd'):
+        config.lock_fd.close()

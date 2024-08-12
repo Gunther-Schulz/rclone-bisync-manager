@@ -11,9 +11,18 @@ import signal
 import time
 import threading
 from datetime import datetime, timedelta
+import fcntl
 
 
 def daemon_main():
+    lock_file = '/tmp/rclone_bisync_manager.lock'
+    try:
+        lock_fd = open(lock_file, 'w')
+        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        log_error("Another instance of the daemon is already running. Exiting.")
+        return
+
     log_message("Daemon started")
 
     signal.signal(signal.SIGTERM, signal_handler)
@@ -63,6 +72,9 @@ def daemon_main():
     config.shutdown_complete = True
     log_message('Daemon shutdown complete.')
     status_thread.join(timeout=5)
+
+    lock_fd.close()
+    os.unlink(lock_file)
 
 
 def process_sync_queue():
@@ -128,6 +140,11 @@ def reload_config():
 
 
 def stop_daemon():
+    lock_file = '/tmp/rclone_bisync_manager.lock'
+    if not os.path.exists(lock_file):
+        print("Daemon is not running.")
+        return
+
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
     if os.path.exists(socket_path):
         try:
@@ -146,7 +163,7 @@ def stop_daemon():
         except Exception as e:
             print(f"Error stopping daemon: {e}")
     else:
-        print("Status socket not found. Daemon may not be running.")
+        print("Status socket not found, but lock file exists. Daemon may be in an inconsistent state.")
 
 
 def print_daemon_status():
