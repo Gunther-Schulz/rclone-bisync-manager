@@ -2,26 +2,19 @@ import os
 import logging
 import sys
 from datetime import datetime
-from shared_variables import shared_vars
 
-log_file_path = None
-error_log_file_path = None
-logger = None
-error_logger = None
+config = None  # We'll set this later
 
 
 def ensure_log_file_path():
-    global log_file_path, error_log_file_path
-    log_file_path = shared_vars.log_file_path
-    error_log_file_path = shared_vars.error_log_file_path
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    os.makedirs(os.path.dirname(config.log_file_path), exist_ok=True)
 
 
 def setup_loggers(console_log=False):
     global logger, error_logger
     ensure_log_file_path()
-    logger = FileLogger(log_file_path)
-    error_logger = FileLogger(error_log_file_path)
+    logger = FileLogger(config.log_file_path)
+    error_logger = FileLogger(config.error_log_file_path)
 
 
 class FileLogger:
@@ -43,13 +36,13 @@ class FileLogger:
 
 def log_message(message):
     logger.info(message)
-    if not shared_vars.daemon_mode:
+    if not config.daemon_mode:
         print(message)
 
 
 def log_error(message):
     error_logger.error(message)
-    if not shared_vars.daemon_mode:
+    if not config.daemon_mode:
         print(f"ERROR: {message}")
 
 
@@ -91,3 +84,8 @@ def log_daemon_shutdown_complete():
 
 def log_status_server_error(e):
     log_error(f"Error in status server: {str(e)}")
+
+
+def set_config(cfg):
+    global config
+    config = cfg

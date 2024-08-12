@@ -5,8 +5,7 @@ from logging_utils import log_message, log_error
 from utils import check_config_changed, parse_interval
 from scheduler import scheduler
 from sync import perform_sync_operations
-from config import load_config
-from shared_variables import shared_vars, signal_handler
+from config import config, load_config, signal_handler
 import os
 import signal
 import time
@@ -25,11 +24,11 @@ def daemon_main():
 
     # Perform initial sync for all active paths
     log_message("Starting initial sync for all active sync jobs")
-    for key, value in shared_vars.sync_jobs.items():
+    for key, value in config.sync_jobs.items():
         if value.get('active', True):
             add_to_sync_queue(key)
 
-    while shared_vars.running:
+    while config.running:
         try:
             process_sync_queue()
             check_scheduled_tasks()
@@ -39,7 +38,7 @@ def daemon_main():
             log_error(f"An error occurred in the main loop: {str(e)}")
             time.sleep(1)  # Avoid tight loop in case of persistent errors
 
-        if shared_vars.shutting_down:
+        if config.shutting_down:
             log_message(
                 "Shutdown signal received, initiating graceful shutdown")
             break
@@ -48,43 +47,43 @@ def daemon_main():
     log_message('Daemon shutting down...')
 
     # Wait for current sync to finish
-    while shared_vars.currently_syncing:
+    while config.currently_syncing:
         log_message(f"Waiting for current sync to finish: {
-                    shared_vars.currently_syncing}")
+                    config.currently_syncing}")
         time.sleep(5)  # Log every 5 seconds instead of every second
 
     # Clear remaining queue
-    while not shared_vars.sync_queue.empty():
-        shared_vars.sync_queue.get_nowait()
-    shared_vars.queued_paths.clear()
+    while not config.sync_queue.empty():
+        config.sync_queue.get_nowait()
+    config.queued_paths.clear()
 
-    shared_vars.shutdown_complete = True
+    config.shutdown_complete = True
     log_message('Daemon shutdown complete.')
     status_thread.join(timeout=5)
 
 
 def process_sync_queue():
-    while not shared_vars.sync_queue.empty() and not shared_vars.shutting_down:
-        with shared_vars.sync_lock:
-            if shared_vars.currently_syncing is None:
-                key = shared_vars.sync_queue.get_nowait()
-                shared_vars.currently_syncing = key
-                shared_vars.queued_paths.remove(key)
-                shared_vars.current_sync_start_time = datetime.now()
+    while not config.sync_queue.empty() and not config.shutting_down:
+        with config.sync_lock:
+            if config.currently_syncing is None:
+                key = config.sync_queue.get_nowait()
+                config.currently_syncing = key
+                config.queued_paths.remove(key)
+                config.current_sync_start_time = datetime.now()
             else:
                 break
 
-        if key in shared_vars.sync_jobs and not shared_vars.shutting_down:
+        if key in config.sync_jobs and not config.shutting_down:
             perform_sync_operations(key)
 
-        with shared_vars.sync_lock:
-            shared_vars.currently_syncing = None
-            shared_vars.current_sync_start_time = None
+        with config.sync_lock:
+            config.currently_syncing = None
+            config.current_sync_start_time = None
 
 
 def check_scheduled_tasks():
     next_task = scheduler.get_next_task()
-    if next_task and not shared_vars.shutting_down:
+    if next_task and not config.shutting_down:
         now = datetime.now()
         if now >= next_task.scheduled_time:
             task = scheduler.pop_next_task()
@@ -92,14 +91,14 @@ def check_scheduled_tasks():
 
 
 def check_and_reload_config():
-    if check_config_changed() and not shared_vars.shutting_down:
+    if check_config_changed() and not config.shutting_down:
         reload_config()
 
 
 def add_to_sync_queue(key):
-    if not shared_vars.shutting_down and key not in shared_vars.queued_paths and key != shared_vars.currently_syncing:
-        shared_vars.sync_queue.put_nowait(key)
-        shared_vars.queued_paths.add(key)
+    if not config.shutting_down and key not in config.queued_paths and key != config.currently_syncing:
+        config.sync_queue.put_nowait(key)
+        config.queued_paths.add(key)
 
 
 def reload_config():
@@ -107,7 +106,7 @@ def reload_config():
     log_message("Config reloaded.")
 
     scheduler.clear_tasks()
-    for key, value in shared_vars.sync_jobs.items():
+    for key, value in config.sync_jobs.items():
         if value.get('active', True):
             interval = value.get('interval', '1d')
             interval = parse_interval(interval)

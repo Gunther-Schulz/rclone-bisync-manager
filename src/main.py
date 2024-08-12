@@ -4,31 +4,27 @@ import os
 import signal
 import sys
 import daemon
-from config import load_config, sync_jobs, specific_sync_jobs, config_file
+from config import config
 from cli import parse_args
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
-from utils import check_tools, ensure_rclone_dir, handle_filter_changes, cache_dir, rclone_test_file_name
-from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_file_path, log_config_file_location
-from shared_variables import signal_handler
-
-# Initialize global variables
-last_config_mtime = 0
-exclusion_rules_file = None
-force_resync = False
+from utils import check_tools, ensure_rclone_dir, handle_filter_changes
+from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location
+from config import signal_handler
 
 
 def main():
     global dry_run, daemon_mode
     args = parse_args()
-    load_config()  # Load config first to set up log paths
+    config.load_config()  # Load config first to set up log paths
+    from logging_utils import set_config
+    set_config(config)  # Set the config for logging_utils
     ensure_log_file_path()
     setup_loggers()  # Move this line up
-    log_config_file_location(config_file)
+    log_config_file_location(config.config_file)
 
     check_tools()
     ensure_rclone_dir()
-    print(f"Log file location: {log_file_path}")
     handle_filter_changes()
 
     log_message("Warning: This script does not prevent multiple instances from running. Please ensure you don't start it multiple times unintentionally.")
