@@ -35,10 +35,11 @@ def perform_sync_operations(key):
         resync_result = resync(key, remote_path, local_path, path_dry_run)
         if resync_result == "COMPLETED":
             bisync_result = bisync(key, remote_path, local_path, path_dry_run)
-            write_status(key, bisync_result, resync_result)
+            write_status(key, sync_status=bisync_result,
+                         resync_status=resync_result)
     else:
         bisync_result = bisync(key, remote_path, local_path, path_dry_run)
-        write_sync_status(key, bisync_result)
+        write_status(key, sync_status=bisync_result)
 
     config.last_sync_times[key] = datetime.now()
     interval = parse_interval(value['interval'])
@@ -65,7 +66,7 @@ def bisync(key, remote_path, local_path, path_dry_run):
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Bisync")
     log_message(f"Bisync status for {local_path}: {sync_result}")
-    write_sync_status(key, sync_result)
+    write_status(key, sync_status=sync_result)
 
 
 def resync(key, remote_path, local_path, path_dry_run):
@@ -73,21 +74,21 @@ def resync(key, remote_path, local_path, path_dry_run):
     if config.force_resync:
         log_message("Force resync requested.")
     else:
-        sync_status = read_resync_status(key)
-        if sync_status == "COMPLETED":
+        _, resync_status = read_status(key)
+        if resync_status == "COMPLETED":
             log_message("No resync necessary. Skipping.")
-            return sync_status
-        elif sync_status == "IN_PROGRESS":
+            return resync_status
+        elif resync_status == "IN_PROGRESS":
             log_message("Resuming interrupted resync.")
-        elif sync_status == "FAILED":
-            log_error(f"Previous resync failed. Manual intervention required. Status: {sync_status}. Check the logs to fix the issue and remove the file {
+        elif resync_status == "FAILED":
+            log_error(f"Previous resync failed. Manual intervention required. Status: {resync_status}. Check the logs to fix the issue and remove the file {
                       os.path.join(local_path, '.resync_status')} to start a new resync. Exiting...")
-            return sync_status
+            return resync_status
 
     log_message(f"Resync started for {local_path} at {
                 datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
 
-    write_resync_status(key, "IN_PROGRESS")
+    write_status(key, resync_status="IN_PROGRESS")
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path, '--resync']
     rclone_args.extend(get_rclone_args(config.sync_jobs.get(
@@ -97,13 +98,7 @@ def resync(key, remote_path, local_path, path_dry_run):
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Resync")
     log_message(f"Resync status for {local_path}: {sync_result}")
-    write_resync_status(key, sync_result)
-
-    if sync_result == "COMPLETED" and not path_dry_run:
-        status_file = config.get_status_file_path(key)
-        with open(status_file, 'w') as f:
-            f.write(sync_result)
-        log_message(f"Created status file for {key}")
+    write_status(key, resync_status=sync_result)
 
     return sync_result
 
@@ -197,16 +192,24 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
         return "FAILED"
 
 
-def write_status(job_key, sync_status, resync_status):
+def write_status(job_key, sync_status=None, resync_status=None):
+    if config.dry_run:
+        return  # Don't write status if it's a dry run
     status_file = config.get_status_file_path(job_key)
-    if not config.dry_run:
-        with open(status_file, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            json.dump({
-                "sync_status": "NONE" if sync_status is None else sync_status,
-                "resync_status": "NONE" if resync_status is None else resync_status
-            }, f)
-            fcntl.flock(f, fcntl.LOCK_UN)
+    with open(status_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            status = json.load(f)
+        except json.JSONDecodeError:
+            status = {}
+        if sync_status is not None:
+            status["sync_status"] = sync_status
+        if resync_status is not None:
+            status["resync_status"] = resync_status
+        f.seek(0)
+        f.truncate()
+        json.dump(status, f)
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def read_status(job_key):
@@ -222,46 +225,6 @@ def read_status(job_key):
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
     return "NONE", "NONE"
-
-
-def write_sync_status(job_key, sync_status):
-    status_file = config.get_status_file_path(job_key)
-    with open(status_file, 'r+') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            status = json.load(f)
-        except json.JSONDecodeError:
-            status = {}
-        status["sync_status"] = sync_status
-        f.seek(0)
-        f.truncate()
-        json.dump(status, f)
-        fcntl.flock(f, fcntl.LOCK_UN)
-
-
-def write_resync_status(job_key, resync_status):
-    status_file = config.get_status_file_path(job_key)
-    with open(status_file, 'r+') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            status = json.load(f)
-        except json.JSONDecodeError:
-            status = {}
-        status["resync_status"] = resync_status
-        f.seek(0)
-        f.truncate()
-        json.dump(status, f)
-        fcntl.flock(f, fcntl.LOCK_UN)
-
-
-def read_sync_status(job_key):
-    sync_status, _ = read_status(job_key)
-    return sync_status
-
-
-def read_resync_status(job_key):
-    _, resync_status = read_status(job_key)
-    return resync_status
 
 
 def get_log_file_position():

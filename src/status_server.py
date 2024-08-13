@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 from config import config
 from scheduler import scheduler
-from sync import read_sync_status, read_resync_status
+from sync import read_status
 
 
 def start_status_server():
@@ -66,8 +66,7 @@ def generate_status_report():
         if isinstance(last_sync, datetime):
             last_sync = last_sync.isoformat()
 
-        sync_status = read_sync_status(key)
-        resync_status = read_resync_status(key)
+        sync_status, resync_status = read_status(key)
 
         status["active_syncs"][key] = {
             "local_path": local_path,
