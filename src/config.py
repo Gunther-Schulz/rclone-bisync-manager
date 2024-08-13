@@ -124,8 +124,11 @@ class ConfigSchema(BaseModel):
 
 class Config:
     def __init__(self):
-        self._config: Optional[ConfigSchema] = None
+        self._config = None
         self.args = None
+        self.config_file = None
+        self.config_invalid = False
+        self.config_error_message = None
         self._init_file_paths()
         self._init_logging_paths()
         self.last_sync_times = {}
@@ -138,7 +141,6 @@ class Config:
         self.running = True
         self.shutting_down = False
         self.shutdown_complete = False
-        self.config_invalid = False
 
     def _init_file_paths(self):
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -186,12 +188,16 @@ class Config:
                 print("Sync jobs after validation:")
                 print(json.dumps({k: v.model_dump()
                       for k, v in self._config.sync_jobs.items()}, indent=2))
+            self.config_invalid = False
+            self.config_error_message = None
         except ValidationError as e:
             if debug:
                 print(f"ValidationError caught: {e}")
             error_message = self._format_validation_errors(e)
             if debug:
                 print(f"Formatted error message:\n{error_message}")
+            self.config_invalid = True
+            self.config_error_message = error_message
             raise ValueError(error_message)
 
         self._populate_status_file_paths()

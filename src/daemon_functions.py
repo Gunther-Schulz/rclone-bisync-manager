@@ -2,7 +2,7 @@ import json
 import socket
 from status_server import start_status_server
 from logging_utils import log_message, log_error
-from utils import check_config_changed, check_and_create_lock_file
+from utils import check_and_create_lock_file
 from scheduler import scheduler
 from sync import perform_sync_operations
 from config import config, signal_handler
@@ -12,7 +12,6 @@ import time
 import threading
 from datetime import datetime, timedelta
 import fcntl
-import copy
 from croniter import croniter
 
 
@@ -57,6 +56,8 @@ def daemon_main():
 
         while config.running:
             if config.config_invalid:
+                log_message(
+                    "Daemon in limbo state due to invalid configuration. Waiting for valid config...")
                 time.sleep(5)  # Sleep for 5 seconds when in limbo state
                 continue
 
@@ -144,16 +145,19 @@ def add_to_sync_queue(key):
 
 def reload_config():
     try:
-        config.load_config(config.args)
-        log_message("Config reloaded.")
+        config.load_and_validate_config(config.args)
+        log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
         scheduler.schedule_tasks()
-    except ValueError as e:
-        log_error(f"Error reloading config: {str(e)}")
+        config.config_invalid = False
+        return True
+    except (ValueError, FileNotFoundError) as e:
+        error_message = f"Error reloading config: {str(e)}"
+        log_error(error_message)
         config.config_invalid = True
-    except FileNotFoundError:
-        log_error("Configuration file not found during reload.")
-        config.config_invalid = True
+        config.config_error_message = error_message
+        log_message("Daemon entering limbo state due to invalid configuration.")
+        return False
 
 
 def stop_daemon():

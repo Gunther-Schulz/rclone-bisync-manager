@@ -77,6 +77,21 @@ def main():
             stop_daemon()
         elif args.action == 'status':
             print_daemon_status()
+        elif args.action == 'reload':
+            socket_path = '/tmp/rclone_bisync_manager_status.sock'
+            if not os.path.exists(socket_path):
+                print("Daemon is not running.")
+                return
+
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.connect(socket_path)
+                client.sendall(b"RELOAD")
+                response = client.recv(1024).decode()
+                client.close()
+                print(response)
+            except Exception as e:
+                print(f"Error reloading daemon configuration: {e}")
     elif args.command == 'sync':
         if os.path.exists(lock_file):
             print(

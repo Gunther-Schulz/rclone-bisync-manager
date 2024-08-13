@@ -3,6 +3,7 @@ import socket
 import json
 import threading
 from config import config
+from logging_utils import log_message
 from scheduler import scheduler
 from sync import read_status
 
@@ -36,10 +37,13 @@ def handle_client(conn):
             from daemon_functions import reload_config
             success = reload_config()
             if success:
-                conn.sendall(b"Configuration reloaded successfully")
+                response = "Configuration reloaded successfully"
+                conn.sendall(response.encode())
+                log_message(response)  # Add this line to log the response
             else:
-                conn.sendall(
-                    b"Error reloading configuration. Daemon is in limbo state. Check logs for details.")
+                response = f"Error reloading configuration. Daemon is in limbo state. Error: {
+                    config.config_error_message}"
+                conn.sendall(response.encode())
         elif data == "STOP":
             config.running = False
             config.shutting_down = True
@@ -61,6 +65,7 @@ def generate_status_report():
         "running": config.running,
         "shutting_down": config.shutting_down,
         "config_invalid": config.config_invalid,
+        "config_error_message": getattr(config, 'config_error_message', None),
         "currently_syncing": config.currently_syncing,
         "queued_paths": list(config.queued_paths),
         "sync_jobs": {}

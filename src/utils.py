@@ -84,14 +84,6 @@ def handle_filter_changes():
                     config._config.exclusion_rules_file}")
 
 
-def check_config_changed():
-    current_mtime = os.path.getmtime(config.config_file)
-    if current_mtime > config.last_config_mtime:
-        config.last_config_mtime = current_mtime
-        return True
-    return False
-
-
 def calculate_md5(file_path):
     hash_md5 = hashlib.md5()
     with open(file_path, "rb") as f:
