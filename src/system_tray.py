@@ -21,18 +21,19 @@ def get_daemon_status():
 
 
 def update_menu():
-    status = get_daemon_status()
+    status = dict(get_daemon_status())
     if "error" in status:
         return pystray.Menu(pystray.MenuItem("Daemon not running", lambda: None))
 
     menu_items = [
-        pystray.MenuItem(f"Currently syncing: {
-                         status['currently_syncing'] or 'None'}", lambda: None),
-        pystray.MenuItem("Queued jobs: " +
-                         ", ".join(status['queued_paths']), lambda: None),
+        pystray.MenuItem(f"Currently syncing: {status.get(
+            'currently_syncing', 'None')}", lambda: None),
+        pystray.MenuItem(f"Queued jobs: {', '.join(
+            status.get('queued_paths', [])) or 'None'}", lambda: None),
         pystray.MenuItem("Stop Daemon", stop_daemon),
         pystray.MenuItem("Exit", lambda: icon.stop()),
     ]
+
     return pystray.Menu(*menu_items)
 
 
@@ -59,12 +60,16 @@ def run_tray():
                         image, "RClone BiSync Manager")
     icon.menu = update_menu()
 
-    def update_icon():
+    def check_status_and_update():
+        last_status = None
         while True:
-            icon.menu = update_menu()
+            current_status = get_daemon_status()
+            if current_status != last_status:
+                icon.update_menu()
+                last_status = current_status
             time.sleep(5)
 
-    threading.Thread(target=update_icon, daemon=True).start()
+    threading.Thread(target=check_status_and_update, daemon=True).start()
     icon.run()
 
 
