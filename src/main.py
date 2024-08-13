@@ -14,6 +14,8 @@ from logging_utils import log_message, log_error, ensure_log_file_path, setup_lo
 from config import signal_handler
 import fcntl
 import traceback
+import socket
+import json
 
 
 def main():
@@ -114,6 +116,29 @@ def main():
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()
             os.unlink(lock_file)
+    elif args.command == 'add-sync':
+        add_sync_jobs(args.sync_jobs)
+
+
+def add_sync_jobs(sync_jobs):
+    socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
+    if not os.path.exists(socket_path):
+        print("Error: Daemon is not running.")
+        return
+
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        client.sendall(json.dumps(sync_jobs).encode())
+        response = client.recv(1024).decode()
+        client.close()
+
+        if response == "OK":
+            print(f"Successfully added sync job(s): {', '.join(sync_jobs)}")
+        else:
+            print(f"Error adding sync job(s): {response}")
+    except Exception as e:
+        print(f"Error communicating with daemon: {str(e)}")
 
 
 if __name__ == "__main__":

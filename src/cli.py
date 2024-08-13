@@ -29,6 +29,12 @@ def parse_args():
     sync_parser.add_argument('--force-bisync', action='store_true',
                              help='Force the bisync operation without confirmation.')
 
+    # Add sync job command
+    add_sync_parser = subparsers.add_parser('add-sync', parents=[global_parser],
+                                            help='Add a sync job for immediate execution')
+    add_sync_parser.add_argument(
+        'sync_jobs', nargs='+', help='Names of the sync jobs to add')
+
     args = parser.parse_args()
 
     args.force_resync = args.command == 'sync' and args.resync

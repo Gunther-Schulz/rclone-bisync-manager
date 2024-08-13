@@ -30,6 +30,10 @@ def daemon_main():
             target=start_status_server, daemon=True)
         status_thread.start()
 
+        add_sync_thread = threading.Thread(
+            target=handle_add_sync_request, daemon=True)
+        add_sync_thread.start()
+
         if config.run_initial_sync_on_startup:
             log_message("Starting initial sync for all active sync jobs")
             for key, value in config.sync_jobs.items():
@@ -176,3 +180,35 @@ def print_daemon_status():
             print(f"Error getting daemon status: {e}")
     else:
         print("Daemon is not running.")
+
+
+def handle_add_sync_request():
+    socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
+    if os.path.exists(socket_path):
+        os.unlink(socket_path)
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(socket_path)
+    server.listen(1)
+    server.settimeout(1)
+
+    while config.running and not config.shutting_down:
+        try:
+            conn, addr = server.accept()
+            data = conn.recv(1024).decode()
+            sync_jobs = json.loads(data)
+            for job in sync_jobs:
+                if job in config.sync_jobs:
+                    add_to_sync_queue(job)
+                    log_message(f"Added sync job '{job}' to queue")
+                else:
+                    log_error(f"Sync job '{job}' not found in configuration")
+            conn.sendall(b"OK")
+            conn.close()
+        except socket.timeout:
+            continue
+        except Exception as e:
+            log_error(f"Error handling add-sync request: {str(e)}")
+
+    server.close()
+    os.unlink(socket_path)
