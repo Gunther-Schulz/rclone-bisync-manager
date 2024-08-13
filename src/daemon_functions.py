@@ -107,10 +107,9 @@ def check_scheduled_tasks():
                 task = scheduler.pop_next_task()
                 add_to_sync_queue(task.path_key)
                 # Reschedule the task
-                interval = parse_interval(
-                    config.sync_jobs[task.path_key]['interval'])
-                scheduler.schedule_task(
-                    task.path_key, now + timedelta(seconds=interval))
+                next_run = config.sync_schedules[task.path_key].get_next(
+                    datetime)
+                scheduler.schedule_task(task.path_key, next_run)
             else:
                 break
         else:
@@ -133,12 +132,7 @@ def reload_config():
     log_message("Config reloaded.")
 
     scheduler.clear_tasks()
-    for key, value in config.sync_jobs.items():
-        if value.get('active', True):
-            interval = value.get('interval', '1d')
-            interval = parse_interval(interval)
-            scheduler.schedule_task(
-                key, datetime.now() + timedelta(seconds=interval))
+    scheduler.schedule_tasks()
 
 
 def stop_daemon():

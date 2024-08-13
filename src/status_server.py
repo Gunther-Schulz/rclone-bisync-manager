@@ -53,8 +53,8 @@ def generate_status_report():
         "log_file_path": config.log_file_path
     }
 
-    if config.currently_syncing and 'current_sync_start_time' in globals():
-        sync_duration = current_time - globals()['current_sync_start_time']
+    if config.currently_syncing and config.current_sync_start_time:
+        sync_duration = current_time - config.current_sync_start_time
         status["current_sync_duration"] = str(sync_duration).split('.')[
             0]  # Remove microseconds
 
@@ -68,10 +68,14 @@ def generate_status_report():
 
         sync_status, resync_status = read_status(key)
 
+        next_run = scheduler.get_next_run(key)
+        next_run_str = next_run.isoformat() if next_run else "Not scheduled"
+
         status["active_syncs"][key] = {
             "local_path": local_path,
             "remote_path": remote_path,
-            "interval": value.get('interval', "Not set"),
+            "schedule": value.get('schedule', "Not set"),
+            "next_run": next_run_str,
             "last_sync": last_sync,
             "dry_run": config.dry_run or value.get('dry_run', False),
             "is_active": value.get('active', True),
@@ -82,9 +86,9 @@ def generate_status_report():
             "sync_error": config.sync_errors.get(key)
         }
 
-        if key == config.currently_syncing and 'current_sync_start_time' in globals():
-            sync_duration = current_time - globals()['current_sync_start_time']
+        if key == config.currently_syncing and config.current_sync_start_time:
+            sync_duration = current_time - config.current_sync_start_time
             status["active_syncs"][key]["current_sync_duration"] = str(
                 sync_duration).split('.')[0]  # Remove microseconds
 
-    return json.dumps(status, ensure_ascii=False, indent=2)
+    return json.dumps(status, ensure_ascii=False)

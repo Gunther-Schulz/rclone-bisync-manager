@@ -2,6 +2,7 @@ from datetime import datetime
 import heapq
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
+from config import config
 
 
 @dataclass(order=True)
@@ -14,6 +15,12 @@ class SyncScheduler:
     def __init__(self):
         self.tasks: List[SyncTask] = []
         self.task_map: Dict[str, SyncTask] = {}
+
+    def schedule_tasks(self):
+        now = datetime.now()
+        for key, cron in config.sync_schedules.items():
+            next_run = cron.get_next(datetime)
+            self.schedule_task(key, next_run)
 
     def schedule_task(self, path_key: str, scheduled_time: datetime):
         if path_key in self.task_map:
