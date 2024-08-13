@@ -65,6 +65,13 @@ class ConfigSchema(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    @field_validator('max_cpu_usage_percent')
+    @classmethod
+    def check_cpu_usage(cls, v):
+        if v < 0 or v > 100:
+            raise ValueError('max_cpu_usage_percent must be between 0 and 100')
+        return v
+
     @field_validator('sync_jobs', mode='before')
     @classmethod
     def validate_sync_jobs(cls, v):
@@ -72,26 +79,16 @@ class ConfigSchema(BaseModel):
             print("Entering validate_sync_jobs method")
             print(f"Input value: {v}")
 
-        if not isinstance(v, dict):
-            if debug:
-                print("Error: sync_jobs is not a dictionary")
-            raise ValueError("sync_jobs must be a dictionary")
-
         validated_jobs = {}
         errors = []
 
         for key, job in v.items():
-            if debug:
-                print(f"Validating job: {key}")
-                print(f"Job type: {type(job)}")
-                print(f"Job content: {job}")
-
             if not isinstance(key, str):
                 errors.append(f"Invalid job key: {
                               key}. Job keys must be strings.")
                 continue
 
-            if isinstance(job, dict):
+            try:
                 # Check for required keys
                 required_keys = {
                     'local', 'rclone_remote', 'remote', 'schedule'}
@@ -101,23 +98,20 @@ class ConfigSchema(BaseModel):
                                   key}': {', '.join(missing_keys)}")
 
                 # Check for invalid keys
-                allowed_keys = set(SyncJobConfig.__fields__.keys())
+                allowed_keys = set(SyncJobConfig.model_fields.keys())
                 invalid_keys = set(job.keys()) - allowed_keys
                 if invalid_keys:
                     errors.append(f"Invalid keys found in sync job '{
                                   key}': {', '.join(invalid_keys)}")
 
                 if not missing_keys and not invalid_keys:
-                    try:
-                        validated_jobs[key] = SyncJobConfig(**job)
-                    except ValidationError as e:
-                        errors.append(f"Validation error for sync job '{
-                                      key}': {str(e)}")
-            elif isinstance(job, SyncJobConfig):
-                validated_jobs[key] = job
-            else:
-                errors.append(f"Invalid type for sync job '{
-                              key}': expected dict or SyncJobConfig, got {type(job)}")
+                    validated_jobs[key] = SyncJobConfig(**job)
+            except ValidationError as e:
+                for error in e.errors():
+                    field = '.'.join(str(loc) for loc in error['loc'])
+                    msg = error['msg']
+                    errors.append(f"Validation error for sync job '{
+                                  key}': {field} - {msg}")
 
         if errors:
             raise ValueError("\n".join(errors))

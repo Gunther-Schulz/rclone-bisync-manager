@@ -20,30 +20,29 @@ import json
 
 def main():
     args = parse_args()
-    try:
-        config.load_and_validate_config(args)
-        set_config(config)  # Set the config for logging_utils
-        ensure_log_file_path()
-        setup_loggers(args.console_log)
-        log_config_file_location(config.config_file)
-    except (ValueError, FileNotFoundError) as e:
-        print(f"Configuration error: {str(e)}")
-        sys.exit(1)
-
-    check_tools()
-    ensure_rclone_dir()
-    handle_filter_changes()
-
-    # Log home directory
-    home_dir = os.environ.get('HOME')
-    if not home_dir:
-        log_error("Unable to determine home directory")
-        sys.exit(1)
-
-    lock_file = '/tmp/rclone_bisync_manager.lock'
 
     if args.command == 'daemon':
         if args.action == 'start':
+            try:
+                config.load_and_validate_config(args)
+                set_config(config)  # Set the config for logging_utils
+                ensure_log_file_path()
+                setup_loggers(args.console_log)
+                log_config_file_location(config.config_file)
+            except (ValueError, FileNotFoundError) as e:
+                print(f"Configuration error: {str(e)}")
+                sys.exit(1)
+
+            check_tools()
+            ensure_rclone_dir()
+            handle_filter_changes()
+
+            # Log home directory
+            home_dir = os.environ.get('HOME')
+            if not home_dir:
+                log_error("Unable to determine home directory")
+                sys.exit(1)
+
             lock_fd, error_message = check_and_create_lock_file()
             if error_message:
                 print(f"Error: {error_message}")
