@@ -17,10 +17,24 @@ class SyncScheduler:
         self.task_map: Dict[str, SyncTask] = {}
 
     def schedule_tasks(self):
+        self.check_missed_jobs()
         now = datetime.now()
         for key, cron in config.sync_schedules.items():
-            next_run = cron.get_next(datetime)
+            next_run = cron.get_next(now)
             self.schedule_task(key, next_run)
+
+    def check_missed_jobs(self):
+        if not config.run_missed_jobs:
+            return
+
+        now = datetime.now()
+        for key, cron in config.sync_schedules.items():
+            last_sync = config.last_sync_times.get(
+                key, config.script_start_time)
+            next_run = cron.get_next(last_sync)
+            while next_run < now:
+                self.schedule_task(key, next_run)
+                next_run = cron.get_next(next_run)
 
     def schedule_task(self, path_key: str, scheduled_time: datetime):
         if path_key in self.task_map:

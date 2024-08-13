@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+from scheduler import scheduler
 import signal
 import sys
 import daemon
@@ -61,6 +62,7 @@ def main():
                     stdout=sys.stdout,
                     stderr=sys.stderr
                 ):
+                    scheduler.schedule_tasks()
                     daemon_main()
             except Exception as e:
                 log_error(f"Error starting daemon: {str(e)}")

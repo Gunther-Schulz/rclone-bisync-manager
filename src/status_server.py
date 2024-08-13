@@ -50,7 +50,8 @@ def generate_status_report():
         "queued_paths": list(config.queued_paths),
         "shutting_down": config.shutting_down,
         "cache_dir": config.cache_dir,
-        "log_file_path": config.log_file_path
+        "log_file_path": config.log_file_path,
+        "run_missed_jobs": config.run_missed_jobs
     }
 
     if config.currently_syncing and config.current_sync_start_time:

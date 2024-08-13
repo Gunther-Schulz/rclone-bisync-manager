@@ -6,6 +6,7 @@ from threading import Lock
 from queue import Queue
 from interval_utils import parse_interval
 import hashlib
+from croniter import croniter
 
 
 def _initial_log_error(message):
@@ -42,12 +43,14 @@ class Config:
         self.resync_options = {}
         self.last_sync_times = {}
         self.sync_intervals = {}
+        self.sync_schedules = {}  # New attribute for cron schedules
         self.script_start_time = datetime.now()
         self.last_config_mtime = 0
         self.redirect_rclone_log_output = False
         self.last_log_position = 0
         self.hash_warnings = {}
         self.sync_errors = {}
+        self.run_missed_jobs = False  # New attribute for run_missed_jobs
 
         # File paths
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -85,14 +88,15 @@ class Config:
         self.resync_options = config.get('resync_options', {})
         self.redirect_rclone_log_output = config.get(
             'redirect_rclone_log_output', False)
+        # Load run_missed_jobs from config
+        self.run_missed_jobs = config.get('run_missed_jobs', False)
 
-        # Initialize last_sync_times and sync_intervals
+        # Replace the existing loop with this:
         for key, value in self.sync_jobs.items():
-            if value.get('active', True) and 'interval' in value:
+            if value.get('active', True) and 'schedule' in value:
+                self.sync_schedules[key] = croniter(value['schedule'])
                 if key not in self.last_sync_times:
                     self.last_sync_times[key] = self.script_start_time
-                self.sync_intervals[key] = parse_interval(
-                    value['interval'])
 
         # Update last_config_mtime
         self.last_config_mtime = os.path.getmtime(self.config_file)

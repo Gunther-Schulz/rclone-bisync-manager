@@ -130,7 +130,6 @@ def add_to_sync_queue(key):
 def reload_config():
     config.load_config()
     log_message("Config reloaded.")
-
     scheduler.clear_tasks()
     scheduler.schedule_tasks()
 
