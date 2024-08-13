@@ -20,26 +20,28 @@ class SyncScheduler:
     def schedule_tasks(self):
         self.check_missed_jobs()
         now = datetime.now()
-        for key, cron in config.sync_schedules.items():
-            cron_obj = croniter(cron, now)
+        for key, job in config._config.sync_jobs.items():
+            cron_obj = croniter(job.schedule, now)
             next_run = cron_obj.get_next(datetime)
             self.schedule_task(key, next_run)
 
     def check_missed_jobs(self):
-        if not config.run_missed_jobs:
+        if not config._config.run_missed_jobs:
             return
 
         now = datetime.now()
-        for key, cron in config.sync_schedules.items():
-            last_sync = config.last_sync_times.get(key)
-            if last_sync is None:
-                # If there's no last sync time, schedule it immediately
-                self.schedule_task(key, now)
-            else:
-                next_run = cron.get_next(last_sync)
-                while next_run < now:
-                    self.schedule_task(key, next_run)
-                    next_run = cron.get_next(next_run)
+        for key, job in config._config.sync_jobs.items():
+            if job.active:
+                last_sync = config.last_sync_times.get(key)
+                if last_sync is None:
+                    # If there's no last sync time, schedule it immediately
+                    self.schedule_task(key, now)
+                else:
+                    cron_obj = croniter(job.schedule, last_sync)
+                    next_run = cron_obj.get_next(datetime)
+                    while next_run < now:
+                        self.schedule_task(key, next_run)
+                        next_run = cron_obj.get_next(datetime)
 
     def schedule_task(self, path_key: str, scheduled_time: datetime):
         if path_key in self.task_map:

@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timedelta
 import fcntl
 import copy
+from croniter import croniter
 
 
 def daemon_main():
@@ -22,7 +23,8 @@ def daemon_main():
         return
 
     try:
-        config.load_config()  # This will now validate the configuration
+        # This will now validate the configuration
+        config.load_config(config.args)
     except ValueError as e:
         log_error(f"Configuration error: {str(e)}")
         return
@@ -45,10 +47,10 @@ def daemon_main():
             target=handle_add_sync_request, daemon=True)
         add_sync_thread.start()
 
-        if config.run_initial_sync_on_startup:
+        if config._config.run_initial_sync_on_startup:
             log_message("Starting initial sync for all active sync jobs")
-            for key, value in config.sync_jobs.items():
-                if value.get('active', True):
+            for key, value in config._config.sync_jobs.items():
+                if value.active:
                     add_to_sync_queue(key)
         else:
             log_message("Skipping initial sync as per configuration")
@@ -107,7 +109,7 @@ def process_sync_queue():
             else:
                 break
 
-        if key in config.sync_jobs and not config.shutting_down:
+        if key in config._config.sync_jobs and not config.shutting_down:
             perform_sync_operations(key)
 
         with config.sync_lock:
@@ -124,8 +126,9 @@ def check_scheduled_tasks():
                 task = scheduler.pop_next_task()
                 add_to_sync_queue(task.path_key)
                 # Reschedule the task
-                next_run = config.sync_schedules[task.path_key].get_next(
-                    datetime)
+                job_config = config._config.sync_jobs[task.path_key]
+                cron = croniter(job_config.schedule, now)
+                next_run = cron.get_next(datetime)
                 scheduler.schedule_task(task.path_key, next_run)
             else:
                 break
@@ -140,10 +143,17 @@ def add_to_sync_queue(key):
 
 
 def reload_config():
-    config.load_config()
-    log_message("Config reloaded.")
-    scheduler.clear_tasks()
-    scheduler.schedule_tasks()
+    try:
+        config.load_config(config.args)
+        log_message("Config reloaded.")
+        scheduler.clear_tasks()
+        scheduler.schedule_tasks()
+    except ValueError as e:
+        log_error(f"Error reloading config: {str(e)}")
+        config.config_invalid = True
+    except FileNotFoundError:
+        log_error("Configuration file not found during reload.")
+        config.config_invalid = True
 
 
 def stop_daemon():
@@ -207,7 +217,7 @@ def handle_add_sync_request():
             data = conn.recv(1024).decode()
             sync_jobs = json.loads(data)
             for job in sync_jobs:
-                if job in config.sync_jobs:
+                if job in config._config.sync_jobs:
                     add_to_sync_queue(job)
                     log_message(f"Added sync job '{job}' to queue")
                 else:

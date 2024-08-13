@@ -1,8 +1,17 @@
 import os
 from datetime import datetime
+import sys
 
 config = None  # We'll set this later
 daemon_console_log = False
+
+
+class BasicLogger:
+    def error(self, message):
+        print(f"ERROR: {message}", file=sys.stderr)
+
+
+logger = BasicLogger()
 
 
 def ensure_log_file_path():
@@ -10,10 +19,9 @@ def ensure_log_file_path():
 
 
 def setup_loggers(console_log=False):
-    global logger, error_logger
+    global logger
     ensure_log_file_path()
     logger = FileLogger(config.log_file_path)
-    error_logger = FileLogger(config.error_log_file_path)
     config.console_log = console_log
 
 
@@ -41,7 +49,7 @@ def log_message(message):
 
 
 def log_error(message):
-    error_logger.error(message)
+    logger.error(message)
     if config.console_log:
         print(f"ERROR: {message}")
 

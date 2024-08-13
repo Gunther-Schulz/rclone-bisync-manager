@@ -58,8 +58,8 @@ def generate_status_report():
         "sync_jobs": {}
     }
 
-    for key, value in config.sync_jobs.items():
-        if value.get('active', True):
+    for key, value in config._config.sync_jobs.items():
+        if value.active:
             sync_status, resync_status = read_status(key)
             last_sync = config.last_sync_times.get(key)
             next_task = scheduler.get_next_task()

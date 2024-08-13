@@ -9,50 +9,47 @@ import fcntl
 
 
 def perform_sync_operations(key):
-    value = config.sync_jobs[key]
-    local_path = os.path.join(config.local_base_path, value['local'])
-    remote_path = f"{value['rclone_remote']}:{value['remote']}"
+    value = config._config.sync_jobs[key]
+    local_path = os.path.join(config._config.local_base_path, value.local)
+    remote_path = f"{value.rclone_remote}:{value.remote}"
 
-    status_file = config.get_status_file_path(key)
+    status_file = config._config.status_file_path[key]
     if not os.path.exists(status_file):
         log_message(f"No status file found for {key}. Forcing resync.")
-        config.force_resync = True
+        config._config.force_resync = True
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
         return
 
     ensure_local_directory(local_path)
 
-    # Use the global dry run flag if set, otherwise use the per-job dry run flag
-    path_dry_run = config.dry_run or value.get('dry_run', False)
-
     log_message(f"Performing sync operation for {key}. Force resync: {
-                config.force_resync}, Dry run: {path_dry_run}")
+                config._config.force_resync}, Dry run: {config._config.dry_run}")
 
-    if config.force_resync:
+    if config._config.force_resync:
         log_message("Force resync requested.")
-        resync_result = resync(key, remote_path, local_path, path_dry_run)
+        resync_result = resync(key, remote_path, local_path)
         if resync_result == "COMPLETED":
-            bisync_result = bisync(key, remote_path, local_path, path_dry_run)
+            bisync_result = bisync(key, remote_path, local_path)
             write_status(key, sync_status=bisync_result,
                          resync_status=resync_result)
     else:
-        bisync_result = bisync(key, remote_path, local_path, path_dry_run)
+        bisync_result = bisync(key, remote_path, local_path)
         write_status(key, sync_status=bisync_result)
 
     config.last_sync_times[key] = datetime.now()
 
 
-def bisync(key, remote_path, local_path, path_dry_run):
+def bisync(key, remote_path, local_path):
     log_message(f"Bisync started for {local_path} at {
-                datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
+                datetime.now()}" + (" - Performing a dry run" if config._config.dry_run else ""))
 
     # Set the initial log position
-    config.last_log_position = get_log_file_position()
+    config._last_log_position = get_log_file_position()
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
-    rclone_args.extend(get_rclone_args(config.sync_jobs.get(
-        local_path, {}).get('bisync_options', {}), path_dry_run, 'bisync'))
+    rclone_args.extend(get_rclone_args(
+        config._config.bisync_options, 'bisync'))
 
     result = run_rclone_command(rclone_args)
 
@@ -65,9 +62,10 @@ def bisync(key, remote_path, local_path, path_dry_run):
     write_status(key, sync_status=sync_result)
 
 
-def resync(key, remote_path, local_path, path_dry_run):
-    log_message(f"Resync called with force_resync: {config.force_resync}")
-    if config.force_resync:
+def resync(key, remote_path, local_path):
+    log_message(f"Resync called with force_resync: {
+                config._config.force_resync}")
+    if config._config.force_resync:
         log_message("Force resync requested.")
     else:
         _, resync_status = read_status(key)
@@ -82,13 +80,13 @@ def resync(key, remote_path, local_path, path_dry_run):
             return resync_status
 
     log_message(f"Resync started for {local_path} at {
-                datetime.now()}" + (" - Performing a dry run" if path_dry_run else ""))
+                datetime.now()}" + (" - Performing a dry run" if config._config.dry_run else ""))
 
     write_status(key, resync_status="IN_PROGRESS")
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path, '--resync']
-    rclone_args.extend(get_rclone_args(config.sync_jobs.get(
-        local_path, {}).get('resync_options', {}), path_dry_run, 'resync'))
+    rclone_args.extend(get_rclone_args(
+        config._config.resync_options, 'resync'))
 
     result = run_rclone_command(rclone_args)
     sync_result = handle_rclone_exit_code(
@@ -99,19 +97,20 @@ def resync(key, remote_path, local_path, path_dry_run):
     return sync_result
 
 
-def get_rclone_args(options, path_dry_run, operation_type):
+def get_rclone_args(options, operation_type):
     args = []
 
     # Determine which options to use based on operation type
     if operation_type == 'bisync':
-        default_options = config.bisync_options
+        default_options = config._config.bisync_options
     elif operation_type == 'resync':
-        default_options = config.resync_options
+        default_options = config._config.resync_options
     else:
         default_options = {}
 
     # Merge default options with rclone_options
-    merged_options = {**config.rclone_options, **default_options, **options}
+    merged_options = {**config._config.rclone_options,
+                      **default_options, **options}
 
     for key, value in merged_options.items():
         option_key = f"--{key.replace('_', '-')}"
@@ -126,16 +125,16 @@ def get_rclone_args(options, path_dry_run, operation_type):
         else:
             args.extend([option_key, str(value)])
 
-    if os.path.exists(config.exclusion_rules_file):
-        args.extend(['--exclude-from', config.exclusion_rules_file])
+    if os.path.exists(config._config.exclusion_rules_file):
+        args.extend(['--exclude-from', config._config.exclusion_rules_file])
 
     # Always add --dry-run if path_dry_run is True
-    if path_dry_run:
+    if config._config.dry_run:
         args.append('--dry-run')
-    if config.force_operation:
+    if config._config.force_operation:
         args.append('--force')
-    if config.redirect_rclone_log_output:
-        args.extend(['--log-file', config.log_file_path])
+    if config._config.redirect_rclone_log_output:
+        args.extend(['--log-file', config._config.log_file_path])
 
     if merged_options.get('ignore_size', False):
         args.append('--ignore-size')
@@ -146,7 +145,7 @@ def get_rclone_args(options, path_dry_run, operation_type):
 def run_rclone_command(rclone_args):
     if is_cpulimit_installed():
         cpulimit_command = ['cpulimit',
-                            f'--limit={config.max_cpu_usage_percent}', '--']
+                            f'--limit={config._config.max_cpu_usage_percent}', '--']
         cpulimit_command.extend(rclone_args)
         return subprocess.run(cpulimit_command, capture_output=True, text=True)
     else:
@@ -171,14 +170,14 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
                            result_code}, please check the logs for more information.")
 
     if result_code != 0 and result_code != 9:
-        config.sync_errors[local_path] = {
+        config._config.sync_errors[local_path] = {
             "sync_type": sync_type,
             "error_code": result_code,
             "message": message,
             "timestamp": datetime.now().isoformat()
         }
     else:
-        config.sync_errors.pop(local_path, None)
+        config._config.sync_errors[local_path] = None
 
     if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
@@ -189,11 +188,13 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
 
 
 def write_status(job_key, sync_status=None, resync_status=None):
-    if config.dry_run:
+    if config._config.dry_run:
         return  # Don't write status if it's a dry run
-    status_file = config.get_status_file_path(job_key)
-    with open(status_file, 'r+') as f:
+    status_file = config._config.status_file_path[job_key]
+    os.makedirs(os.path.dirname(status_file), exist_ok=True)
+    with open(status_file, 'a+') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
         try:
             status = json.load(f)
         except json.JSONDecodeError:
@@ -209,7 +210,7 @@ def write_status(job_key, sync_status=None, resync_status=None):
 
 
 def read_status(job_key):
-    status_file = config.get_status_file_path(job_key)
+    status_file = config._config.status_file_path[job_key]
     if os.path.exists(status_file):
         with open(status_file, 'r') as f:
             fcntl.flock(f, fcntl.LOCK_SH)
@@ -224,25 +225,25 @@ def read_status(job_key):
 
 
 def get_log_file_position():
-    if os.path.exists(config.log_file_path):
-        return os.path.getsize(config.log_file_path)
+    if os.path.exists(config._config.log_file_path):
+        return os.path.getsize(config._config.log_file_path)
     return 0
 
 
 def check_for_hash_warnings(key):
-    log_file_path = config.log_file_path
+    log_file_path = config._config.log_file_path
     if os.path.exists(log_file_path):
         current_position = os.path.getsize(log_file_path)
-        if current_position > config.last_log_position:
+        if current_position > config._last_log_position:
             with open(log_file_path, 'r') as log_file:
-                log_file.seek(config.last_log_position)
+                log_file.seek(config._last_log_position)
                 new_content = log_file.read()
                 if "WARNING: hash unexpectedly blank despite Fs support" in new_content:
                     warning_message = f"WARNING: Detected blank hash warnings for {
                         key}. This may indicate issues with Live Photos or other special file types. You should try to resync and if that is not successful you should consider using --ignore-size for future syncs."
                     log_message(warning_message)
-                    config.hash_warnings[key] = warning_message
+                    config._config.hash_warnings[key] = warning_message
                 else:
-                    config.hash_warnings.pop(key, None)
+                    config._config.hash_warnings[key] = None
 
-        config.last_log_position = current_position
+        config._last_log_position = current_position

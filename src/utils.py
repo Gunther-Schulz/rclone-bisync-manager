@@ -63,13 +63,12 @@ def ensure_rclone_dir():
 
 
 def handle_filter_changes():
-    if not config.exclusion_rules_file:
+    if not config._config or not config._config.exclusion_rules_file:
         return
     stored_md5_file = os.path.join(config.cache_dir, '.filter_md5')
-    # Ensure cache directory exists
     os.makedirs(config.cache_dir, exist_ok=True)
-    if os.path.exists(config.exclusion_rules_file):
-        current_md5 = calculate_md5(config.exclusion_rules_file)
+    if os.path.exists(config._config.exclusion_rules_file):
+        current_md5 = calculate_md5(config._config.exclusion_rules_file)
         if os.path.exists(stored_md5_file):
             with open(stored_md5_file, 'r') as f:
                 stored_md5 = f.read().strip()
@@ -79,10 +78,10 @@ def handle_filter_changes():
             with open(stored_md5_file, 'w') as f:
                 f.write(current_md5)
             log_message("Filter file has changed. A resync is required.")
-            config.force_resync = True
+            config._config.force_resync = True
     else:
         log_message(f"Exclusion rules file not found: {
-                    config.exclusion_rules_file}")
+                    config._config.exclusion_rules_file}")
 
 
 def check_config_changed():

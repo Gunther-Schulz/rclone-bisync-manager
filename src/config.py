@@ -1,64 +1,114 @@
 import yaml
 import os
 from datetime import datetime
-import sys
 from threading import Lock
 from queue import Queue
 import hashlib
 from croniter import croniter
 import json
+from typing import Dict, Any, Optional, List
+from pydantic import BaseModel, field_validator
 
 
-def _initial_log_error(message):
-    print(f"ERROR: {message}", file=sys.stderr)
+class SyncJobConfig(BaseModel):
+    local: str
+    rclone_remote: str
+    remote: str
+    schedule: str
+    active: bool = True
+    dry_run: bool = False
+    rclone_options: Dict[str, Any] = {}
+    bisync_options: Dict[str, Any] = {}
+    resync_options: Dict[str, Any] = {}
+
+    @field_validator('schedule')
+    @classmethod
+    def validate_cron(cls, v):
+        try:
+            croniter(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid cron string: {str(e)}")
+        return v
+
+
+class ConfigSchema(BaseModel):
+    local_base_path: str
+    exclusion_rules_file: Optional[str] = None
+    max_cpu_usage_percent: int = 100
+    redirect_rclone_log_output: bool = False
+    run_missed_jobs: bool = False
+    run_initial_sync_on_startup: bool = True
+    rclone_options: Dict[str, Any] = {}
+    bisync_options: Dict[str, Any] = {}
+    resync_options: Dict[str, Any] = {}
+    sync_jobs: Dict[str, SyncJobConfig]
+    dry_run: bool = False
+    force_resync: bool = False
+    console_log: bool = False
+    specific_sync_jobs: Optional[List[str]] = None
+    force_operation: bool = False
+    daemon_mode: bool = False
+
+    @field_validator('max_cpu_usage_percent')
+    @classmethod
+    def check_cpu_usage(cls, v):
+        if v < 0 or v > 100:
+            raise ValueError('max_cpu_usage_percent must be between 0 and 100')
+        return v
+
+    @field_validator('sync_jobs')
+    @classmethod
+    def validate_sync_jobs(cls, v):
+        errors = []
+        for key, job in v.items():
+            try:
+                if isinstance(job, dict):
+                    SyncJobConfig(**job)
+                elif not isinstance(job, SyncJobConfig):
+                    raise ValueError(f"Invalid type for sync job '{
+                                     key}': expected dict or SyncJobConfig")
+            except ValueError as e:
+                for error in e.errors():
+                    field = error['loc'][0]
+                    msg = error['msg']
+                    if field == 'schedule' and msg == 'Field required':
+                        errors.append(f"Sync job '{
+                                      key}' is missing the required 'schedule' field. Please add a valid cron schedule.")
+                    else:
+                        errors.append(f"Invalid configuration for sync job '{
+                                      key}': {field} - {msg}")
+
+        # Check for invalid fields
+        for key, job in v.items():
+            if isinstance(job, dict):
+                invalid_fields = set(job.keys()) - \
+                    set(SyncJobConfig.model_fields.keys())
+                if invalid_fields:
+                    errors.append(f"Sync job '{key}' contains invalid fields: {
+                                  ', '.join(invalid_fields)}")
+
+        if errors:
+            raise ValueError("\n".join(errors))
+        return v
 
 
 class Config:
     def __init__(self):
-        self._init_command_line_options()
-        self._init_daemon_variables()
-        self._init_sync_operations()
+        self._config: Optional[ConfigSchema] = None
+        self.args = None
         self._init_file_paths()
         self._init_logging_paths()
+        self.last_sync_times = {}
         self.load_last_sync_times()
-
-    def _init_command_line_options(self):
-        self.dry_run = False
-        self.force_resync = False
-        self.console_log = False
-        self.specific_sync_jobs = None
-        self.force_operation = False
-
-    def _init_daemon_variables(self):
-        self.daemon_mode = False
-        self.running = True
-        self.shutting_down = False
-        self.shutdown_complete = False
-        self.currently_syncing = None
-        self.current_sync_start_time = None
         self.sync_queue = Queue()
         self.queued_paths = set()
         self.sync_lock = Lock()
+        self.currently_syncing = None
+        self.current_sync_start_time = None
+        self.running = True
+        self.shutting_down = False
+        self.shutdown_complete = False
         self.config_invalid = False
-
-    def _init_sync_operations(self):
-        self.local_base_path = None
-        self.exclusion_rules_file = None
-        self.sync_jobs = {}
-        self.max_cpu_usage_percent = 100
-        self.rclone_options = {}
-        self.bisync_options = {}
-        self.resync_options = {}
-        self.last_sync_times = {}
-        self.sync_schedules = {}
-        self.script_start_time = datetime.now()
-        self.last_config_mtime = 0
-        self.redirect_rclone_log_output = False
-        self.last_log_position = 0
-        self.hash_warnings = {}
-        self.sync_errors = {}
-        self.run_missed_jobs = False
-        self.run_initial_sync_on_startup = True
 
     def _init_file_paths(self):
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -72,10 +122,9 @@ class Config:
             'XDG_STATE_HOME', os.path.expanduser('~/.local/state')), 'rclone-bisync-manager', 'logs')
         self.log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager.log')
-        self.error_log_file_path = os.path.join(
-            self.default_log_dir, 'rclone-bisync-manager-error.log')
 
-    def load_config(self):
+    def load_config(self, args):
+        self.args = args  # Store the args
         if not os.path.exists(self.config_file):
             raise FileNotFoundError(
                 f"Configuration file not found: {self.config_file}")
@@ -83,34 +132,30 @@ class Config:
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
-        self._load_global_options(config_data)
-        self._load_sync_jobs(config_data)
+        # Update config_data with command-line arguments
+        config_data.update({
+            'dry_run': args.dry_run,
+            'force_resync': args.force_resync,
+            'console_log': args.console_log,
+            'specific_sync_jobs': args.specific_sync_jobs,
+            'force_operation': args.force_operation,
+            'daemon_mode': args.daemon_mode
+        })
+
+        try:
+            self._config = ConfigSchema(**config_data)
+            errors = self._validate_sync_jobs()
+            if errors:
+                raise ValueError("\n".join(errors))
+        except ValueError as e:
+            error_messages = []
+            for error in e.errors():
+                field = '.'.join(error['loc'])
+                msg = error['msg']
+                error_messages.append(f"Error in {field}: {msg}")
+            raise ValueError("\n".join(error_messages))
+
         self.validate_config()
-
-    def _load_global_options(self, config_data):
-        self.local_base_path = config_data.get('local_base_path')
-        self.exclusion_rules_file = config_data.get(
-            'exclusion_rules_file', None)
-        self.max_cpu_usage_percent = config_data.get(
-            'max_cpu_usage_percent', 100)
-        self.rclone_options = config_data.get('rclone_options', {})
-        self.bisync_options = config_data.get('bisync_options', {})
-        self.resync_options = config_data.get('resync_options', {})
-        self.redirect_rclone_log_output = config_data.get(
-            'redirect_rclone_log_output', False)
-        self.run_missed_jobs = config_data.get('run_missed_jobs', False)
-        self.run_initial_sync_on_startup = config_data.get(
-            'run_initial_sync_on_startup', True)
-
-    def _load_sync_jobs(self, config_data):
-        self.sync_jobs = config_data.get('sync_jobs', {})
-        for key, value in self.sync_jobs.items():
-            if value.get('active', True) and 'schedule' in value:
-                self.sync_schedules[key] = croniter(value['schedule'])
-            if key not in self.last_sync_times:
-                self.last_sync_times[key] = None
-
-        self.last_config_mtime = os.path.getmtime(self.config_file)
 
     def validate_config(self):
         errors = []
@@ -118,49 +163,54 @@ class Config:
         errors.extend(self._validate_sync_jobs())
 
         if errors:
-            raise ValueError("Configuration errors:\n" + "\n".join(errors))
+            raise ValueError("Configuration errors:\n" +
+                             "\n".join(f"- {error}" for error in errors))
 
     def _get_global_allowed_keys(self):
-        return {attr for attr in dir(self) if not attr.startswith('_') and attr not in self._get_sync_job_allowed_keys()}
+        return set(ConfigSchema.model_fields.keys())
 
-    def _get_sync_job_allowed_keys(self):
-        return {'local', 'rclone_remote', 'remote', 'schedule', 'active', 'dry_run',
-                'rclone_options', 'bisync_options', 'resync_options'}
+    def _get_shared_allowed_keys(self):
+        return {'rclone_options', 'bisync_options', 'resync_options'}
 
     def _validate_global_options(self):
-        allowed_keys = self._get_global_allowed_keys()
-        config_keys = set(yaml.safe_load(open(self.config_file)).keys())
+        allowed_keys = self._get_global_allowed_keys() | self._get_shared_allowed_keys()
+        config_keys = set(self._config.model_dump(
+            exclude={'sync_jobs'}).keys())
         unrecognized_global_keys = config_keys - allowed_keys
         if unrecognized_global_keys:
             return [f"Unrecognized global options: {', '.join(unrecognized_global_keys)}"]
         return []
 
     def _validate_sync_jobs(self):
-        allowed_keys = self._get_sync_job_allowed_keys()
         errors = []
-        for key, job in self.sync_jobs.items():
-            if not all(field in job for field in ['local', 'rclone_remote', 'remote', 'schedule']):
-                errors.append(f"Sync job '{
-                              key}' is missing required fields (local, rclone_remote, remote, or schedule)")
+        for key, job in self._config.sync_jobs.items():
+            try:
+                if isinstance(job, dict):
+                    SyncJobConfig(**job)
+                elif not isinstance(job, SyncJobConfig):
+                    raise ValueError(f"Invalid type for sync job '{
+                                     key}': expected dict or SyncJobConfig")
+            except ValueError as e:
+                for error in e.errors():
+                    field = error['loc'][0]
+                    msg = error['msg']
+                    errors.append(f"Invalid configuration for sync job '{
+                                  key}': {field} - {msg}")
 
-            unrecognized_keys = set(job.keys()) - allowed_keys
-            if unrecognized_keys:
-                errors.append(f"Sync job '{key}' contains unrecognized keys: {
-                              ', '.join(unrecognized_keys)}")
-
-            if 'schedule' in job:
-                try:
-                    croniter(job['schedule'])
-                except ValueError as e:
-                    errors.append(f"Invalid cron string for sync job '{
-                                  key}': {str(e)}")
+            # Check for invalid fields
+            if isinstance(job, dict):
+                invalid_fields = set(job.keys()) - \
+                    set(SyncJobConfig.model_fields.keys())
+                if invalid_fields:
+                    errors.append(f"Sync job '{key}' contains invalid fields: {
+                                  ', '.join(invalid_fields)}")
 
         return errors
 
     def get_status_file_path(self, job_key):
-        local_path = self.sync_jobs[job_key]['local']
-        remote_path = f"{self.sync_jobs[job_key]['rclone_remote']}:{
-            self.sync_jobs[job_key]['remote']}"
+        local_path = self._config.sync_jobs[job_key].local
+        remote_path = f"{self._config.sync_jobs[job_key].rclone_remote}:{
+            self._config.sync_jobs[job_key].remote}"
         unique_id = hashlib.md5(f"{job_key}:{local_path}:{
                                 remote_path}".encode()).hexdigest()
         return os.path.join(self.cache_dir, f'{unique_id}.status')
@@ -180,6 +230,48 @@ class Config:
                     v) for k, v in loaded_times.items()}
         else:
             self.last_sync_times = {}
+
+    def get_sync_jobs(self):
+        return self._config.sync_jobs
+
+    def set_dry_run(self, value):
+        self._config.dry_run = value
+
+    def set_force_resync(self, value):
+        self._config.force_resync = value
+
+    def set_force_operation(self, value):
+        self._config.force_operation = value
+
+    def get_exclusion_rules_file(self):
+        return self._config.exclusion_rules_file
+
+    def get_max_cpu_usage_percent(self):
+        return self._config.max_cpu_usage_percent
+
+    def get_run_missed_jobs(self):
+        return self._config.run_missed_jobs
+
+    def get_run_initial_sync_on_startup(self):
+        return self._config.run_initial_sync_on_startup
+
+    def get_dry_run(self):
+        return self._config.dry_run
+
+    def get_force_resync(self):
+        return self._config.force_resync
+
+    def set_max_cpu_usage_percent(self, value):
+        self._config.max_cpu_usage_percent = value
+
+    def get_hash_warnings(self):
+        return self._config.hash_warnings
+
+    def get_last_sync_times(self):
+        return self._config.last_sync_times
+
+    def get_log_file_path(self):
+        return self.log_file_path
 
 
 config = Config()

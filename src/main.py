@@ -21,7 +21,7 @@ import json
 def main():
     args = parse_args()
     try:
-        config.load_config()  # Load config first to set up log paths
+        config.load_config(args)  # Pass args to load_config
         set_config(config)  # Set the config for logging_utils
         ensure_log_file_path()
         setup_loggers(args.console_log)
@@ -29,10 +29,6 @@ def main():
     except ValueError as e:
         print(f"Configuration error: {str(e)}")
         sys.exit(1)
-
-    config.daemon_mode = args.command == 'daemon'
-    config.console_log = args.console_log
-    config.dry_run = args.dry_run
 
     check_tools()
     ensure_rclone_dir()
@@ -68,9 +64,10 @@ def main():
                     stderr=sys.stderr
                 ):
                     scheduler.schedule_tasks()
-                    if not config.run_initial_sync_on_startup:
+                    if not config._config.run_initial_sync_on_startup:
                         log_message(
                             "Skipping initial sync as per configuration")
+                    config.args = args
                     daemon_main()
             except Exception as e:
                 error_trace = traceback.format_exc()
@@ -97,9 +94,8 @@ def main():
 
         try:
             if args.specific_sync_jobs:
-                # Check if all provided sync job names exist
                 invalid_jobs = [
-                    job for job in args.specific_sync_jobs if job not in config.sync_jobs]
+                    job for job in args.specific_sync_jobs if job not in config._config.sync_jobs]
                 if invalid_jobs:
                     print(f"Error: The following sync job(s) do not exist: {
                           ', '.join(invalid_jobs)}")
@@ -107,11 +103,11 @@ def main():
                 paths_to_sync = args.specific_sync_jobs
             else:
                 paths_to_sync = [
-                    key for key, value in config.sync_jobs.items() if value.get('active', True)]
+                    key for key, value in config._config.sync_jobs.items() if value.active]
 
-            config.dry_run = args.dry_run
-            config.force_resync = args.force_resync
-            config.force_operation = args.force_operation
+            config._config.dry_run = args.dry_run
+            config._config.force_resync = args.force_resync
+            config._config.force_operation = args.force_operation
             for key in paths_to_sync:
                 perform_sync_operations(key)
         finally:
@@ -120,7 +116,7 @@ def main():
             lock_fd.close()
             os.unlink(lock_file)
     elif args.command == 'add-sync':
-        add_sync_jobs(args.sync_jobs)
+        add_sync_jobs(args)
 
 
 def add_sync_jobs(sync_jobs):
