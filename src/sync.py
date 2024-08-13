@@ -12,8 +12,8 @@ def perform_sync_operations(key):
     value = config._config.sync_jobs[key]
     local_path = os.path.join(config._config.local_base_path, value.local)
     remote_path = f"{value.rclone_remote}:{value.remote}"
+    status_file = config.get_status_file_path(key)
 
-    status_file = config._config.status_file_path[key]
     if not os.path.exists(status_file):
         log_message(f"No status file found for {key}. Forcing resync.")
         config._config.force_resync = True
@@ -125,7 +125,7 @@ def get_rclone_args(options, operation_type):
         else:
             args.extend([option_key, str(value)])
 
-    if os.path.exists(config._config.exclusion_rules_file):
+    if hasattr(config._config, 'exclusion_rules_file') and os.path.exists(config._config.exclusion_rules_file):
         args.extend(['--exclude-from', config._config.exclusion_rules_file])
 
     # Always add --dry-run if path_dry_run is True
@@ -133,7 +133,7 @@ def get_rclone_args(options, operation_type):
         args.append('--dry-run')
     if config._config.force_operation:
         args.append('--force')
-    if config._config.redirect_rclone_log_output:
+    if config._config.redirect_rclone_log_output and hasattr(config._config, 'log_file_path'):
         args.extend(['--log-file', config._config.log_file_path])
 
     if merged_options.get('ignore_size', False):
@@ -169,6 +169,8 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
     message = messages.get(result_code, f"failed with an unknown error code {
                            result_code}, please check the logs for more information.")
 
+    if not hasattr(config._config, 'sync_errors'):
+        config._config.sync_errors = {}
     if result_code != 0 and result_code != 9:
         config._config.sync_errors[local_path] = {
             "sync_type": sync_type,
@@ -177,7 +179,8 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
             "timestamp": datetime.now().isoformat()
         }
     else:
-        config._config.sync_errors[local_path] = None
+        if hasattr(config._config, 'sync_errors'):
+            config._config.sync_errors[local_path] = None
 
     if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
@@ -225,8 +228,9 @@ def read_status(job_key):
 
 
 def get_log_file_position():
-    if os.path.exists(config._config.log_file_path):
-        return os.path.getsize(config._config.log_file_path)
+    log_file_path = config._config.log_file_path
+    if os.path.exists(log_file_path):
+        return os.path.getsize(log_file_path)
     return 0
 
 

@@ -7,7 +7,7 @@ import hashlib
 from croniter import croniter
 import json
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class SyncJobConfig(BaseModel):
@@ -48,6 +48,15 @@ class ConfigSchema(BaseModel):
     specific_sync_jobs: Optional[List[str]] = None
     force_operation: bool = False
     daemon_mode: bool = False
+    status_file_path: Dict[str, str] = {}
+    log_file_path: str = Field(default_factory=lambda: os.path.join(
+        os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')),
+        'rclone-bisync-manager',
+        'logs',
+        'rclone-bisync-manager.log'
+    ))
+    hash_warnings: Dict[str, Optional[str]] = {}
+    sync_errors: Dict[str, str] = {}
 
     @field_validator('max_cpu_usage_percent')
     @classmethod
@@ -144,6 +153,8 @@ class Config:
 
         try:
             self._config = ConfigSchema(**config_data)
+            self._config.hash_warnings = {}
+            self._config.sync_errors = {}
             errors = self._validate_sync_jobs()
             if errors:
                 raise ValueError("\n".join(errors))
@@ -156,6 +167,11 @@ class Config:
             raise ValueError("\n".join(error_messages))
 
         self.validate_config()
+
+        # Populate status_file_path dictionary
+        for job_key in self._config.sync_jobs.keys():
+            self._config.status_file_path[job_key] = self.get_status_file_path(
+                job_key)
 
     def validate_config(self):
         errors = []
@@ -208,12 +224,16 @@ class Config:
         return errors
 
     def get_status_file_path(self, job_key):
-        local_path = self._config.sync_jobs[job_key].local
-        remote_path = f"{self._config.sync_jobs[job_key].rclone_remote}:{
-            self._config.sync_jobs[job_key].remote}"
-        unique_id = hashlib.md5(f"{job_key}:{local_path}:{
-                                remote_path}".encode()).hexdigest()
-        return os.path.join(self.cache_dir, f'{unique_id}.status')
+        if job_key in self._config.status_file_path:
+            return self._config.status_file_path[job_key]
+        else:
+            # Calculate the path if it's not in the dictionary (this shouldn't happen in normal operation)
+            local_path = self._config.sync_jobs[job_key].local
+            remote_path = f"{self._config.sync_jobs[job_key].rclone_remote}:{
+                self._config.sync_jobs[job_key].remote}"
+            unique_id = hashlib.md5(f"{job_key}:{local_path}:{
+                                    remote_path}".encode()).hexdigest()
+            return os.path.join(self.cache_dir, f'{unique_id}.status')
 
     def save_last_sync_times(self):
         sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
@@ -230,48 +250,6 @@ class Config:
                     v) for k, v in loaded_times.items()}
         else:
             self.last_sync_times = {}
-
-    def get_sync_jobs(self):
-        return self._config.sync_jobs
-
-    def set_dry_run(self, value):
-        self._config.dry_run = value
-
-    def set_force_resync(self, value):
-        self._config.force_resync = value
-
-    def set_force_operation(self, value):
-        self._config.force_operation = value
-
-    def get_exclusion_rules_file(self):
-        return self._config.exclusion_rules_file
-
-    def get_max_cpu_usage_percent(self):
-        return self._config.max_cpu_usage_percent
-
-    def get_run_missed_jobs(self):
-        return self._config.run_missed_jobs
-
-    def get_run_initial_sync_on_startup(self):
-        return self._config.run_initial_sync_on_startup
-
-    def get_dry_run(self):
-        return self._config.dry_run
-
-    def get_force_resync(self):
-        return self._config.force_resync
-
-    def set_max_cpu_usage_percent(self, value):
-        self._config.max_cpu_usage_percent = value
-
-    def get_hash_warnings(self):
-        return self._config.hash_warnings
-
-    def get_last_sync_times(self):
-        return self._config.last_sync_times
-
-    def get_log_file_path(self):
-        return self.log_file_path
 
 
 config = Config()
