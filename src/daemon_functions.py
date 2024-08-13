@@ -12,6 +12,7 @@ import time
 import threading
 from datetime import datetime, timedelta
 import fcntl
+import copy
 
 
 def daemon_main():
@@ -24,6 +25,10 @@ def daemon_main():
         config.load_config()  # This will now validate the configuration
     except ValueError as e:
         log_error(f"Configuration error: {str(e)}")
+        return
+    except FileNotFoundError:
+        log_error(
+            "Configuration file not found. Please create a valid configuration file.")
         return
 
     try:
@@ -49,15 +54,13 @@ def daemon_main():
             log_message("Skipping initial sync as per configuration")
 
         while config.running:
-            try:
-                process_sync_queue()
-                check_scheduled_tasks()
-                check_and_reload_config()
-                time.sleep(1)
-            except Exception as e:
-                log_error(f"An error occurred in the main loop: {str(e)}")
-                time.sleep(1)  # Avoid tight loop in case of persistent errors
+            if config.config_invalid:
+                time.sleep(5)  # Sleep for 5 seconds when in limbo state
+                continue
 
+            process_sync_queue()
+            check_scheduled_tasks()
+            time.sleep(1)
             if config.shutting_down:
                 log_message(
                     "Shutdown signal received, initiating graceful shutdown")
@@ -128,11 +131,6 @@ def check_scheduled_tasks():
                 break
         else:
             break
-
-
-def check_and_reload_config():
-    if check_config_changed() and not config.shutting_down:
-        reload_config()
 
 
 def add_to_sync_queue(key):

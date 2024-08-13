@@ -16,7 +16,7 @@ def parse_args():
     # Daemon command
     daemon_parser = subparsers.add_parser(
         'daemon', parents=[global_parser], help='Run in daemon mode')
-    daemon_parser.add_argument('action', choices=['start', 'stop', 'status'],
+    daemon_parser.add_argument('action', choices=['start', 'stop', 'status', 'reload'],
                                help='Action to perform on the daemon')
 
     # Sync command

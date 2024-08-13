@@ -31,8 +31,18 @@ def start_status_server():
 
 def handle_client(conn):
     try:
-        status = generate_status_report()
-        conn.sendall(status.encode())
+        data = conn.recv(1024).decode()
+        if data == "RELOAD":
+            from daemon_functions import reload_config
+            success = reload_config()
+            if success:
+                conn.sendall(b"Configuration reloaded successfully")
+            else:
+                conn.sendall(
+                    b"Error reloading configuration. Daemon is in limbo state. Check logs for details.")
+        else:
+            status = generate_status_report()
+            conn.sendall(status.encode())
     finally:
         conn.close()
 
@@ -42,6 +52,7 @@ def generate_status_report():
         "pid": os.getpid(),
         "running": config.running,
         "shutting_down": config.shutting_down,
+        "config_invalid": config.config_invalid,
         "currently_syncing": config.currently_syncing,
         "queued_paths": list(config.queued_paths),
         "sync_jobs": {}
