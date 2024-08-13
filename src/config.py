@@ -7,6 +7,8 @@ from queue import Queue
 from interval_utils import parse_interval
 import hashlib
 from croniter import croniter
+import json
+from timedelta import timedelta
 
 
 def _initial_log_error(message):
@@ -67,6 +69,8 @@ class Config:
         self.error_log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager-error.log')
 
+        self.load_last_sync_times()
+
     def load_config(self):
         if not os.path.exists(os.path.dirname(self.config_file)):
             os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
@@ -96,7 +100,7 @@ class Config:
             if value.get('active', True) and 'schedule' in value:
                 self.sync_schedules[key] = croniter(value['schedule'])
                 if key not in self.last_sync_times:
-                    self.last_sync_times[key] = self.script_start_time
+                    self.last_sync_times[key] = None
 
         # Update last_config_mtime
         self.last_config_mtime = os.path.getmtime(self.config_file)
@@ -108,6 +112,38 @@ class Config:
         unique_id = hashlib.md5(f"{job_key}:{local_path}:{
                                 remote_path}".encode()).hexdigest()
         return os.path.join(self.cache_dir, f'{unique_id}.status')
+
+    def save_last_sync_times(self):
+        sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
+        with open(sync_times_file, 'w') as f:
+            json.dump({k: v.isoformat()
+                      for k, v in self.last_sync_times.items()}, f)
+
+    def load_last_sync_times(self):
+        sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
+        if os.path.exists(sync_times_file):
+            with open(sync_times_file, 'r') as f:
+                loaded_times = json.load(f)
+                self.last_sync_times = {k: datetime.fromisoformat(
+                    v) for k, v in loaded_times.items()}
+        else:
+            self.last_sync_times = {}
+
+    def save_last_sync_times(self):
+        sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
+        with open(sync_times_file, 'w') as f:
+            json.dump({k: v.isoformat()
+                      for k, v in self.last_sync_times.items()}, f)
+
+    def load_last_sync_times(self):
+        sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
+        if os.path.exists(sync_times_file):
+            with open(sync_times_file, 'r') as f:
+                loaded_times = json.load(f)
+                self.last_sync_times = {k: datetime.fromisoformat(
+                    v) for k, v in loaded_times.items()}
+        else:
+            self.last_sync_times = {}
 
 
 config = Config()
