@@ -71,8 +71,20 @@ class Config:
 
     def validate_config(self):
         errors = []
-        allowed_keys = {'local', 'rclone_remote',
-                        'remote', 'schedule', 'active', 'dry_run'}
+        allowed_keys = {'local', 'rclone_remote', 'remote', 'schedule', 'active', 'dry_run',
+                        'rclone_options', 'bisync_options', 'resync_options'}
+        global_allowed_keys = {'local_base_path', 'exclusion_rules_file', 'sync_jobs', 'max_cpu_usage_percent',
+                               'rclone_options', 'bisync_options', 'resync_options',
+                               'redirect_rclone_log_output', 'run_missed_jobs', 'run_initial_sync_on_startup'}
+
+        # Validate global options
+        unrecognized_global_keys = set(
+            self.__dict__.keys()) - global_allowed_keys
+        if unrecognized_global_keys:
+            errors.append(f"Unrecognized global options: {
+                          ', '.join(unrecognized_global_keys)}")
+
+        # Validate sync jobs
         for key, job in self.sync_jobs.items():
             if not all(field in job for field in ['local', 'rclone_remote', 'remote', 'schedule']):
                 errors.append(f"Sync job '{
@@ -82,6 +94,14 @@ class Config:
             if unrecognized_keys:
                 errors.append(f"Sync job '{key}' contains unrecognized keys: {
                               ', '.join(unrecognized_keys)}")
+
+            # Validate cron string
+            if 'schedule' in job:
+                try:
+                    croniter(job['schedule'])
+                except ValueError as e:
+                    errors.append(f"Invalid cron string for sync job '{
+                                  key}': {str(e)}")
 
         if errors:
             raise ValueError("Configuration errors:\n" + "\n".join(errors))
