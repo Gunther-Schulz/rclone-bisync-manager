@@ -157,48 +157,46 @@ def reload_config():
 
 
 def stop_daemon():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
-    if not os.path.exists(lock_file):
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
+    if not os.path.exists(socket_path):
         print("Daemon is not running.")
         return
 
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    if os.path.exists(socket_path):
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect(socket_path)
-            status = json.loads(client.recv(4096).decode())
-            client.close()
-
-            if 'pid' in status:
-                os.kill(status['pid'], signal.SIGTERM)
-                print(f"Sent SIGTERM to daemon (PID: {status['pid']})")
-                print("Daemon is shutting down. Use 'daemon status' to check progress.")
-                log_message("Daemon stop request received. Shutting down.")
-            else:
-                print("Unable to determine daemon PID from status")
-        except Exception as e:
-            print(f"Error stopping daemon: {e}")
-    else:
-        print("Status socket not found, but lock file exists. Daemon may be in an inconsistent state.")
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        client.sendall(b"STOP")
+        response = client.recv(1024).decode()
+        client.close()
+        print(response)
+        print("Daemon is shutting down. Use 'daemon status' to check progress.")
+    except Exception as e:
+        print(f"Error stopping daemon: {e}")
 
 
 def print_daemon_status():
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    if os.path.exists(socket_path):
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect(socket_path)
-            status = json.loads(client.recv(4096).decode())
-            client.close()
-
-            if status.get("shutting_down", False):
-                print("Daemon is shutting down. Current status:")
-            print(json.dumps(status, ensure_ascii=False, indent=2))
-        except Exception as e:
-            print(f"Error getting daemon status: {e}")
-    else:
+    if not os.path.exists(socket_path):
         print("Daemon is not running.")
+        return
+
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(5)  # Set a 5-second timeout
+        client.connect(socket_path)
+        client.sendall(b"STATUS")
+        status = client.recv(4096).decode()
+        client.close()
+
+        if status.startswith("Error:"):
+            print(f"Error getting daemon status: {status}")
+        else:
+            status_dict = json.loads(status)
+            if status_dict.get("shutting_down", False):
+                print("Daemon is shutting down. Current status:")
+            print(json.dumps(status_dict, ensure_ascii=False, indent=2))
+    except Exception as e:
+        print(f"Error communicating with daemon: {e}")
 
 
 def handle_add_sync_request():

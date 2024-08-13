@@ -40,9 +40,17 @@ def handle_client(conn):
             else:
                 conn.sendall(
                     b"Error reloading configuration. Daemon is in limbo state. Check logs for details.")
-        else:
+        elif data == "STOP":
+            config.running = False
+            config.shutting_down = True
+            conn.sendall(b"Shutdown signal sent to daemon")
+        elif data == "STATUS":
             status = generate_status_report()
             conn.sendall(status.encode())
+        else:
+            conn.sendall(b"Invalid command")
+    except Exception as e:
+        conn.sendall(f"Error: {str(e)}".encode())
     finally:
         conn.close()
 
