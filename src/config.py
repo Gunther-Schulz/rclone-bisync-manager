@@ -9,6 +9,8 @@ import json
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, constr, conint, DirectoryPath
 
+debug = False
+
 
 class SyncJobConfig(BaseModel):
     local: str
@@ -41,8 +43,8 @@ class ConfigSchema(BaseModel):
     rclone_options: Dict[str, Any] = Field(default_factory=dict)
     bisync_options: Dict[str, Any] = Field(default_factory=dict)
     resync_options: Dict[str, Any] = Field(default_factory=dict)
-    sync_jobs: Dict[constr(min_length=1), Dict[str, Any]] = Field(...,
-                                                                  description="Sync job configurations")
+    sync_jobs: Dict[constr(min_length=1), SyncJobConfig] = Field(...,
+                                                                 description="Sync job configurations")
     dry_run: bool = False
     force_resync: bool = False
     console_log: bool = False
@@ -63,43 +65,67 @@ class ConfigSchema(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    @field_validator('sync_jobs')
+    @field_validator('sync_jobs', mode='before')
     @classmethod
     def validate_sync_jobs(cls, v):
+        if debug:
+            print("Entering validate_sync_jobs method")
+            print(f"Input value: {v}")
+
+        if not isinstance(v, dict):
+            if debug:
+                print("Error: sync_jobs is not a dictionary")
+            raise ValueError("sync_jobs must be a dictionary")
+
+        validated_jobs = {}
         errors = []
-        required_keys = {'local', 'rclone_remote', 'remote', 'schedule'}
-        allowed_keys = set(SyncJobConfig.model_fields.keys())
 
         for key, job in v.items():
+            if debug:
+                print(f"Validating job: {key}")
+                print(f"Job type: {type(job)}")
+                print(f"Job content: {job}")
+
             if not isinstance(key, str):
                 errors.append(f"Invalid job key: {
                               key}. Job keys must be strings.")
                 continue
 
             if isinstance(job, dict):
-                job_keys = set(job.keys())
+                # Check for required keys
+                required_keys = {
+                    'local', 'rclone_remote', 'remote', 'schedule'}
+                missing_keys = required_keys - set(job.keys())
+                if missing_keys:
+                    errors.append(f"Missing required keys in sync job '{
+                                  key}': {', '.join(missing_keys)}")
+
+                # Check for invalid keys
+                allowed_keys = set(SyncJobConfig.__fields__.keys())
+                invalid_keys = set(job.keys()) - allowed_keys
+                if invalid_keys:
+                    errors.append(f"Invalid keys found in sync job '{
+                                  key}': {', '.join(invalid_keys)}")
+
+                if not missing_keys and not invalid_keys:
+                    try:
+                        validated_jobs[key] = SyncJobConfig(**job)
+                    except ValidationError as e:
+                        errors.append(f"Validation error for sync job '{
+                                      key}': {str(e)}")
             elif isinstance(job, SyncJobConfig):
-                job_keys = set(job.model_fields.keys())
+                validated_jobs[key] = job
             else:
                 errors.append(f"Invalid type for sync job '{
                               key}': expected dict or SyncJobConfig, got {type(job)}")
-                continue
-
-            # Check for missing required keys
-            missing_keys = required_keys - job_keys
-            if missing_keys:
-                errors.append(f"Sync job '{key}' is missing required keys: {
-                              ', '.join(missing_keys)}")
-
-            # Check for invalid keys in the job configuration
-            invalid_keys = job_keys - allowed_keys
-            if invalid_keys:
-                errors.append(f"Sync job '{key}' contains invalid keys: {
-                              ', '.join(invalid_keys)}")
 
         if errors:
             raise ValueError("\n".join(errors))
-        return v
+
+        if debug:
+            print("Exiting validate_sync_jobs method")
+            print(f"Validated jobs: {validated_jobs}")
+        return validated_jobs
 
 
 class Config:
@@ -134,22 +160,49 @@ class Config:
             self.default_log_dir, 'rclone-bisync-manager.log')
 
     def load_and_validate_config(self, args):
+        if debug:
+            print("Entering load_and_validate_config method")
         self.args = args
         if not os.path.exists(self.config_file):
+            if debug:
+                print(f"Error: Configuration file not found: {
+                      self.config_file}")
             raise FileNotFoundError(
                 f"Configuration file not found: {self.config_file}")
 
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
+        if debug:
+            print("Config data loaded from file:")
+            print(json.dumps(config_data, indent=2))
+
         self._update_config_with_args(config_data, args)
 
+        if debug:
+            print("Config data after updating with args:")
+            print(json.dumps(config_data, indent=2))
+
         try:
+            if debug:
+                print("Attempting to create ConfigSchema")
             self._config = ConfigSchema(**config_data)
+            if debug:
+                print("ConfigSchema created successfully")
+                print("Sync jobs after validation:")
+                print(json.dumps({k: v.model_dump()
+                      for k, v in self._config.sync_jobs.items()}, indent=2))
         except ValidationError as e:
-            raise ValueError(self._format_validation_errors(e))
+            if debug:
+                print(f"ValidationError caught: {e}")
+            error_message = self._format_validation_errors(e)
+            if debug:
+                print(f"Formatted error message:\n{error_message}")
+            raise ValueError(error_message)
 
         self._populate_status_file_paths()
+        if debug:
+            print("Exiting load_and_validate_config method")
 
     def _update_config_with_args(self, config_data, args):
         config_data.update({
@@ -213,6 +266,5 @@ def signal_handler(signum, frame):
     config.shutting_down = True
     from logging_utils import log_message
     log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
-    print('SIGINT or SIGTERM received. Initiating graceful shutdown.')
     if hasattr(config, 'lock_fd'):
         config.lock_fd.close()
