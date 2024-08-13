@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import pystray
-from PIL import Image
+from PIL import Image, ImageDraw
 import socket
 import json
 import threading
@@ -20,8 +20,7 @@ def get_daemon_status():
         return {"error": str(e)}
 
 
-def update_menu():
-    status = dict(get_daemon_status())
+def update_menu(status):
     if "error" in status:
         return pystray.Menu(pystray.MenuItem("Daemon not running", lambda: None))
 
@@ -53,18 +52,33 @@ def stop_daemon():
         print(f"Error stopping daemon: {e}")
 
 
+def create_circle_image(color):
+    image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse([0, 0, 64, 64], fill=color)
+    return image
+
+
 def run_tray():
     global icon
-    image = Image.new('RGB', (64, 64), color=(255, 0, 0))
+    red_image = create_circle_image((255, 0, 0))
+    green_image = create_circle_image((0, 255, 0))
+
     icon = pystray.Icon("rclone-bisync-manager",
-                        image, "RClone BiSync Manager")
-    icon.menu = update_menu()
+                        red_image, "RClone BiSync Manager")
+    icon.menu = update_menu({"error": "Initial state"})
 
     def check_status_and_update():
         last_status = None
         while True:
             current_status = get_daemon_status()
             if current_status != last_status:
+                new_menu = update_menu(current_status)
+                icon.menu = new_menu
+                if "error" not in current_status:
+                    icon.icon = green_image
+                else:
+                    icon.icon = red_image
                 icon.update_menu()
                 last_status = current_status
             time.sleep(5)
