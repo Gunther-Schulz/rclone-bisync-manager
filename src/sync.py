@@ -41,8 +41,8 @@ def perform_sync_operations(key):
 
 
 def bisync(key, remote_path, local_path):
-    log_message(f"Bisync started for {local_path} at {
-                datetime.now()}" + (" - Performing a dry run" if config._config.dry_run else ""))
+    log_message(f"Bisync started for {local_path} at {datetime.now(
+    )}" + (" - Performing a dry run" if config._config.dry_run else ""))
 
     # Set the initial log position
     config._last_log_position = get_log_file_position()
@@ -79,8 +79,8 @@ def resync(key, remote_path, local_path):
                       os.path.join(local_path, '.resync_status')} to start a new resync. Exiting...")
             return resync_status
 
-    log_message(f"Resync started for {local_path} at {
-                datetime.now()}" + (" - Performing a dry run" if config._config.dry_run else ""))
+    log_message(f"Resync started for {local_path} at {datetime.now(
+    )}" + (" - Performing a dry run" if config._config.dry_run else ""))
 
     write_status(key, resync_status="IN_PROGRESS")
 

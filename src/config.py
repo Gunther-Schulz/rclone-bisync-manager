@@ -7,7 +7,7 @@ import hashlib
 from croniter import croniter
 import json
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 class SyncJobConfig(BaseModel):
@@ -80,12 +80,8 @@ class ConfigSchema(BaseModel):
                 for error in e.errors():
                     field = error['loc'][0]
                     msg = error['msg']
-                    if field == 'schedule' and msg == 'Field required':
-                        errors.append(f"Sync job '{
-                                      key}' is missing the required 'schedule' field. Please add a valid cron schedule.")
-                    else:
-                        errors.append(f"Invalid configuration for sync job '{
-                                      key}': {field} - {msg}")
+                    errors.append(f"Invalid configuration for sync job '{
+                                  key}': {field} - {msg}")
 
         # Check for invalid fields
         for key, job in v.items():
@@ -132,8 +128,8 @@ class Config:
         self.log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager.log')
 
-    def load_config(self, args):
-        self.args = args  # Store the args
+    def load_and_validate_config(self, args):
+        self.args = args
         if not os.path.exists(self.config_file):
             raise FileNotFoundError(
                 f"Configuration file not found: {self.config_file}")
@@ -141,7 +137,36 @@ class Config:
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
-        # Update config_data with command-line arguments
+        self._validate_global_keys(config_data)
+        self._validate_sync_job_keys(config_data)
+        self._update_config_with_args(config_data, args)
+
+        try:
+            self._config = ConfigSchema(**config_data)
+            self._validate_config_schema()
+        except ValidationError as e:
+            raise ValueError(self._format_validation_errors(e))
+
+        self._populate_status_file_paths()
+
+    def _validate_global_keys(self, config_data):
+        allowed_keys = self._get_global_allowed_keys(
+        ) | self._get_shared_allowed_keys() | {'sync_jobs'}
+        unrecognized_keys = set(config_data.keys()) - allowed_keys
+        if unrecognized_keys:
+            raise ValueError(f"Unrecognized global options: {
+                             ', '.join(unrecognized_keys)}")
+
+    def _validate_sync_job_keys(self, config_data):
+        if 'sync_jobs' in config_data:
+            allowed_keys = set(SyncJobConfig.model_fields.keys())
+            for job_key, job_config in config_data['sync_jobs'].items():
+                unrecognized_keys = set(job_config.keys()) - allowed_keys
+                if unrecognized_keys:
+                    raise ValueError(f"Unrecognized keys in sync job '{
+                                     job_key}': {', '.join(unrecognized_keys)}")
+
+    def _update_config_with_args(self, config_data, args):
         config_data.update({
             'dry_run': args.dry_run,
             'force_resync': args.force_resync,
@@ -151,36 +176,25 @@ class Config:
             'daemon_mode': args.daemon_mode
         })
 
-        try:
-            self._config = ConfigSchema(**config_data)
-            self._config.hash_warnings = {}
-            self._config.sync_errors = {}
-            errors = self._validate_sync_jobs()
-            if errors:
-                raise ValueError("\n".join(errors))
-        except ValueError as e:
-            error_messages = []
-            for error in e.errors():
-                field = '.'.join(error['loc'])
-                msg = error['msg']
-                error_messages.append(f"Error in {field}: {msg}")
-            raise ValueError("\n".join(error_messages))
-
-        self.validate_config()
-
-        # Populate status_file_path dictionary
-        for job_key in self._config.sync_jobs.keys():
-            self._config.status_file_path[job_key] = self.get_status_file_path(
-                job_key)
-
-    def validate_config(self):
+    def _validate_config_schema(self):
         errors = []
         errors.extend(self._validate_global_options())
         errors.extend(self._validate_sync_jobs())
-
         if errors:
-            raise ValueError("Configuration errors:\n" +
-                             "\n".join(f"- {error}" for error in errors))
+            raise ValidationError(errors)
+
+    def _format_validation_errors(self, e):
+        error_messages = []
+        for error in e.errors():
+            field = '.'.join(error['loc'])
+            msg = error['msg']
+            error_messages.append(f"Error in {field}: {msg}")
+        return "\n".join(error_messages)
+
+    def _populate_status_file_paths(self):
+        for job_key in self._config.sync_jobs.keys():
+            self._config.status_file_path[job_key] = self.get_status_file_path(
+                job_key)
 
     def _get_global_allowed_keys(self):
         return set(ConfigSchema.model_fields.keys())
@@ -204,23 +218,14 @@ class Config:
                 if isinstance(job, dict):
                     SyncJobConfig(**job)
                 elif not isinstance(job, SyncJobConfig):
-                    raise ValueError(f"Invalid type for sync job '{
-                                     key}': expected dict or SyncJobConfig")
-            except ValueError as e:
+                    errors.append(f"Invalid type for sync job '{
+                                  key}': expected dict or SyncJobConfig")
+            except ValidationError as e:
                 for error in e.errors():
                     field = error['loc'][0]
                     msg = error['msg']
                     errors.append(f"Invalid configuration for sync job '{
                                   key}': {field} - {msg}")
-
-            # Check for invalid fields
-            if isinstance(job, dict):
-                invalid_fields = set(job.keys()) - \
-                    set(SyncJobConfig.model_fields.keys())
-                if invalid_fields:
-                    errors.append(f"Sync job '{key}' contains invalid fields: {
-                                  ', '.join(invalid_fields)}")
-
         return errors
 
     def get_status_file_path(self, job_key):

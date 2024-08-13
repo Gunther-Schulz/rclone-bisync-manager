@@ -24,7 +24,7 @@ def daemon_main():
 
     try:
         # This will now validate the configuration
-        config.load_config(config.args)
+        config.load_and_validate_config(config.args)
     except ValueError as e:
         log_error(f"Configuration error: {str(e)}")
         return
