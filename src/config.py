@@ -69,6 +69,23 @@ class Config:
 
         self.load_last_sync_times()
 
+    def validate_config(self):
+        errors = []
+        allowed_keys = {'local', 'rclone_remote',
+                        'remote', 'schedule', 'active', 'dry_run'}
+        for key, job in self.sync_jobs.items():
+            if not all(field in job for field in ['local', 'rclone_remote', 'remote', 'schedule']):
+                errors.append(f"Sync job '{
+                              key}' is missing required fields (local, rclone_remote, remote, or schedule)")
+
+            unrecognized_keys = set(job.keys()) - allowed_keys
+            if unrecognized_keys:
+                errors.append(f"Sync job '{key}' contains unrecognized keys: {
+                              ', '.join(unrecognized_keys)}")
+
+        if errors:
+            raise ValueError("Configuration errors:\n" + "\n".join(errors))
+
     def load_config(self):
         if not os.path.exists(os.path.dirname(self.config_file)):
             os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
@@ -90,17 +107,16 @@ class Config:
         self.resync_options = config.get('resync_options', {})
         self.redirect_rclone_log_output = config.get(
             'redirect_rclone_log_output', False)
-        # Load run_missed_jobs from config
         self.run_missed_jobs = config.get('run_missed_jobs', False)
 
-        # Replace the existing loop with this:
+        self.validate_config()  # Call validate_config after loading the configuration
+
         for key, value in self.sync_jobs.items():
             if value.get('active', True) and 'schedule' in value:
                 self.sync_schedules[key] = croniter(value['schedule'])
             if key not in self.last_sync_times:
                 self.last_sync_times[key] = None
 
-        # Update last_config_mtime
         self.last_config_mtime = os.path.getmtime(self.config_file)
 
     def get_status_file_path(self, job_key):

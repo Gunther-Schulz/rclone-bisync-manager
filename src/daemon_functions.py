@@ -21,6 +21,12 @@ def daemon_main():
         return
 
     try:
+        config.load_config()  # This will now validate the configuration
+    except ValueError as e:
+        log_error(f"Configuration error: {str(e)}")
+        return
+
+    try:
         log_message("Daemon started")
 
         signal.signal(signal.SIGTERM, signal_handler)
@@ -60,11 +66,16 @@ def daemon_main():
         # Graceful shutdown
         log_message('Daemon shutting down...')
 
-        # Wait for current sync to finish
-        while config.currently_syncing:
+        # Wait for current sync to finish with a timeout
+        shutdown_start = time.time()
+        while config.currently_syncing and time.time() - shutdown_start < 60:  # 60 seconds timeout
             log_message(f"Waiting for current sync to finish: {
                         config.currently_syncing}")
-            time.sleep(5)  # Log every 5 seconds instead of every second
+            time.sleep(5)
+
+        if config.currently_syncing:
+            log_message(f"Sync operation {
+                        config.currently_syncing} did not finish within timeout. Forcing shutdown.")
 
         # Clear remaining queue
         while not config.sync_queue.empty():

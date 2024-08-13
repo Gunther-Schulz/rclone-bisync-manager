@@ -20,16 +20,19 @@ import json
 
 def main():
     args = parse_args()
-    config.load_config()  # Load config first to set up log paths
-    set_config(config)  # Set the config for logging_utils
-    ensure_log_file_path()
+    try:
+        config.load_config()  # Load config first to set up log paths
+        set_config(config)  # Set the config for logging_utils
+        ensure_log_file_path()
+        setup_loggers(args.console_log)
+        log_config_file_location(config.config_file)
+    except ValueError as e:
+        print(f"Configuration error: {str(e)}")
+        sys.exit(1)
 
     config.daemon_mode = args.command == 'daemon'
     config.console_log = args.console_log
     config.dry_run = args.dry_run
-
-    setup_loggers(config.console_log)
-    log_config_file_location(config.config_file)
 
     check_tools()
     ensure_rclone_dir()

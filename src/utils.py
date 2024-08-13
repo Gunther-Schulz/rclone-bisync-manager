@@ -2,9 +2,7 @@ import os
 import subprocess
 import shutil
 import hashlib
-from datetime import datetime, timedelta
 from logging_utils import log_message, log_error
-from interval_utils import parse_interval
 from config import config
 import fcntl
 import errno

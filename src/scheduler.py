@@ -21,10 +21,7 @@ class SyncScheduler:
         self.check_missed_jobs()
         now = datetime.now()
         for key, cron in config.sync_schedules.items():
-            if isinstance(cron, str):
-                cron_obj = croniter(cron, now)
-            else:
-                cron_obj = cron
+            cron_obj = croniter(cron, now)
             next_run = cron_obj.get_next(datetime)
             self.schedule_task(key, next_run)
 

@@ -1,10 +1,9 @@
 import os
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime
 from config import config
-from utils import is_cpulimit_installed, parse_interval, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
+from utils import is_cpulimit_installed, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
 from logging_utils import log_message, log_error
-from scheduler import scheduler
 import json
 import fcntl
 
