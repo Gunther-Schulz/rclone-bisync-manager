@@ -2,7 +2,7 @@ import json
 import socket
 from status_server import start_status_server
 from logging_utils import log_message, log_error
-from utils import check_config_changed, parse_interval
+from utils import check_config_changed, parse_interval, check_and_create_lock_file
 from scheduler import scheduler
 from sync import perform_sync_operations
 from config import config, signal_handler
@@ -15,66 +15,68 @@ import fcntl
 
 
 def daemon_main():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
-    try:
-        lock_fd = open(lock_file, 'w')
-        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        log_error("Another instance of the daemon is already running. Exiting.")
+    lock_fd, error_message = check_and_create_lock_file()
+    if error_message:
+        log_error(f"Error starting daemon: {error_message}")
         return
 
-    log_message("Daemon started")
+    try:
+        log_message("Daemon started")
 
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
 
-    status_thread = threading.Thread(target=start_status_server, daemon=True)
-    status_thread.start()
+        status_thread = threading.Thread(
+            target=start_status_server, daemon=True)
+        status_thread.start()
 
-    # Perform initial sync for all active paths
-    log_message("Starting initial sync for all active sync jobs")
-    for key, value in config.sync_jobs.items():
-        if value.get('active', True):
-            add_to_sync_queue(key)
-            interval = parse_interval(value['interval'])
-            scheduler.schedule_task(
-                key, datetime.now() + timedelta(seconds=interval))
+        # Perform initial sync for all active paths
+        log_message("Starting initial sync for all active sync jobs")
+        for key, value in config.sync_jobs.items():
+            if value.get('active', True):
+                add_to_sync_queue(key)
+                interval = parse_interval(value['interval'])
+                scheduler.schedule_task(
+                    key, datetime.now() + timedelta(seconds=interval))
 
-    while config.running:
-        try:
-            process_sync_queue()
-            check_scheduled_tasks()
-            check_and_reload_config()
-            time.sleep(1)
-        except Exception as e:
-            log_error(f"An error occurred in the main loop: {str(e)}")
-            time.sleep(1)  # Avoid tight loop in case of persistent errors
+        while config.running:
+            try:
+                process_sync_queue()
+                check_scheduled_tasks()
+                check_and_reload_config()
+                time.sleep(1)
+            except Exception as e:
+                log_error(f"An error occurred in the main loop: {str(e)}")
+                time.sleep(1)  # Avoid tight loop in case of persistent errors
 
-        if config.shutting_down:
-            log_message(
-                "Shutdown signal received, initiating graceful shutdown")
-            break
+            if config.shutting_down:
+                log_message(
+                    "Shutdown signal received, initiating graceful shutdown")
+                break
 
-    # Graceful shutdown
-    log_message('Daemon shutting down...')
+        # Graceful shutdown
+        log_message('Daemon shutting down...')
 
-    # Wait for current sync to finish
-    while config.currently_syncing:
-        log_message(f"Waiting for current sync to finish: {
-                    config.currently_syncing}")
-        time.sleep(5)  # Log every 5 seconds instead of every second
+        # Wait for current sync to finish
+        while config.currently_syncing:
+            log_message(f"Waiting for current sync to finish: {
+                        config.currently_syncing}")
+            time.sleep(5)  # Log every 5 seconds instead of every second
 
-    # Clear remaining queue
-    while not config.sync_queue.empty():
-        config.sync_queue.get_nowait()
-    config.queued_paths.clear()
+        # Clear remaining queue
+        while not config.sync_queue.empty():
+            config.sync_queue.get_nowait()
+        config.queued_paths.clear()
 
-    config.shutdown_complete = True
-    log_message('Daemon shutdown complete.')
-    status_thread.join(timeout=5)
+        config.shutdown_complete = True
+        log_message('Daemon shutdown complete.')
+        status_thread.join(timeout=5)
 
-    lock_fd.close()
-    os.unlink(lock_file)
+    finally:
+        if lock_fd is not None:
+            fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+            os.unlink('/tmp/rclone_bisync_manager.lock')
 
 
 def process_sync_queue():

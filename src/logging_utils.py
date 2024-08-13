@@ -36,13 +36,13 @@ class FileLogger:
 
 def log_message(message):
     logger.info(message)
-    if config.console_log or (config.daemon_mode and config.daemon_console_log):
+    if config.console_log:
         print(message)
 
 
 def log_error(message):
     error_logger.error(message)
-    if config.console_log or (config.daemon_mode and config.daemon_console_log):
+    if config.console_log:
         print(f"ERROR: {message}")
 
 

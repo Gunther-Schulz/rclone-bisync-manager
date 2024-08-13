@@ -7,6 +7,7 @@ from logging_utils import log_message, log_error
 from interval_utils import parse_interval
 from config import config
 import fcntl
+import errno
 
 
 def is_cpulimit_installed():
@@ -52,7 +53,7 @@ def check_tools():
             log_error(
                 f"{tool} is not installed or not in PATH. Please install it and try again.")
             exit(1)
-    log_message("All required tools are available.")
+    # log_message("All required tools are available.")
 
 
 def ensure_rclone_dir():
@@ -60,11 +61,10 @@ def ensure_rclone_dir():
     if not os.access(rclone_dir, os.W_OK):
         os.makedirs(rclone_dir, exist_ok=True)
         os.chmod(rclone_dir, 0o777)
-    log_message(f"Ensured rclone directory: {rclone_dir}")
+    # log_message(f"Ensured rclone directory: {rclone_dir}")
 
 
 def handle_filter_changes():
-    global config
     if not config.exclusion_rules_file:
         return
     stored_md5_file = os.path.join(config.cache_dir, '.filter_md5')
@@ -88,7 +88,6 @@ def handle_filter_changes():
 
 
 def check_config_changed():
-    global config
     current_mtime = os.path.getmtime(config.config_file)
     if current_mtime > config.last_config_mtime:
         config.last_config_mtime = current_mtime
@@ -113,8 +112,19 @@ def ensure_log_file_path():
 def check_and_create_lock_file():
     lock_file = '/tmp/rclone_bisync_manager.lock'
     try:
-        lock_fd = open(lock_file, 'w')
-        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lock_fd
-    except IOError:
-        return None
+        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(fd, str(os.getpid()).encode())
+        return fd, None
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = int(f.read().strip())
+                os.kill(pid, 0)  # Check if process is running
+                return None, f"Daemon is already running (PID: {pid})"
+            except (OSError, ValueError):
+                # Process not running or PID not valid, remove stale lock file
+                os.unlink(lock_file)
+                return check_and_create_lock_file()  # Retry
+        return None, f"Unexpected error: {str(e)}"

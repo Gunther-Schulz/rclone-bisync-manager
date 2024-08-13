@@ -5,6 +5,7 @@ import threading
 from datetime import datetime
 from config import config
 from scheduler import scheduler
+from sync import read_status
 
 
 def start_status_server():
@@ -47,7 +48,9 @@ def generate_status_report():
         "currently_syncing": config.currently_syncing,
         "sync_queue_size": config.sync_queue.qsize(),
         "queued_paths": list(config.queued_paths),
-        "shutting_down": config.shutting_down
+        "shutting_down": config.shutting_down,
+        "cache_dir": config.cache_dir,
+        "log_file_path": config.log_file_path
     }
 
     if config.currently_syncing and 'current_sync_start_time' in globals():
@@ -63,6 +66,8 @@ def generate_status_report():
         if isinstance(last_sync, datetime):
             last_sync = last_sync.isoformat()
 
+        sync_status, resync_status = read_status(key)
+
         status["active_syncs"][key] = {
             "local_path": local_path,
             "remote_path": remote_path,
@@ -71,6 +76,10 @@ def generate_status_report():
             "dry_run": config.dry_run or value.get('dry_run', False),
             "is_active": value.get('active', True),
             "is_currently_syncing": key == config.currently_syncing,
+            "sync_status": sync_status,
+            "resync_status": resync_status,
+            "hash_warning": config.hash_warnings.get(key),
+            "sync_error": config.sync_errors.get(key)
         }
 
         if key == config.currently_syncing and 'current_sync_start_time' in globals():

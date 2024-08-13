@@ -8,20 +8,11 @@ from config import config
 from cli import parse_args
 from daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from sync import perform_sync_operations
-from utils import check_tools, ensure_rclone_dir, handle_filter_changes
+from utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_and_create_lock_file
 from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from config import signal_handler
 import fcntl
-
-
-def check_and_create_lock_file():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
-    try:
-        lock_fd = open(lock_file, 'w')
-        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lock_fd
-    except IOError:
-        return None
+import errno
 
 
 def main():
@@ -31,9 +22,10 @@ def main():
     ensure_log_file_path()
 
     config.daemon_mode = args.command == 'daemon'
-    config.daemon_console_log = args.daemon_console_log
-    # Pass both console_log and daemon_console_log arguments
-    setup_loggers(args.console_log)
+    config.console_log = args.console_log
+    config.dry_run = args.dry_run
+
+    setup_loggers(config.console_log)
     log_config_file_location(config.config_file)
 
     check_tools()
@@ -42,17 +34,20 @@ def main():
 
     # Log home directory
     home_dir = os.environ.get('HOME')
-    if home_dir:
-        log_message(f"Home directory: {home_dir}")
-    else:
+    if not home_dir:
         log_error("Unable to determine home directory")
+        sys.exit(1)
 
     lock_file = '/tmp/rclone_bisync_manager.lock'
 
     if args.command == 'daemon':
         if args.action == 'start':
-            if os.path.exists(lock_file):
-                print("Error: Daemon is already running.")
+            lock_fd, error_message = check_and_create_lock_file()
+            if error_message:
+                print(f"Error: {error_message}")
+                if "Daemon is already running" in error_message:
+                    print(
+                        "Use 'daemon status' to check its status or 'daemon stop' to stop it.")
                 sys.exit(1)
             try:
                 log_message("Starting daemon...")
@@ -89,15 +84,24 @@ def main():
             sys.exit(1)
 
         try:
-            paths_to_sync = args.specific_sync_jobs if args.specific_sync_jobs else [
-                key for key, value in config.sync_jobs.items() if value.get('active', True)]
+            if args.specific_sync_jobs:
+                # Check if all provided sync job names exist
+                invalid_jobs = [
+                    job for job in args.specific_sync_jobs if job not in config.sync_jobs]
+                if invalid_jobs:
+                    print(f"Error: The following sync job(s) do not exist: {
+                          ', '.join(invalid_jobs)}")
+                    sys.exit(1)
+                paths_to_sync = args.specific_sync_jobs
+            else:
+                paths_to_sync = [
+                    key for key, value in config.sync_jobs.items() if value.get('active', True)]
+
+            config.dry_run = args.dry_run
+            config.force_resync = args.force_resync
+            config.force_operation = args.force_operation
             for key in paths_to_sync:
-                if key in config.sync_jobs:
-                    perform_sync_operations(
-                        key, args.dry_run, args.force_resync, args.force_operation)
-                else:
-                    log_error(f"Specified sync job '{
-                              key}' not found in configuration")
+                perform_sync_operations(key)
         finally:
             # Release the lock and remove the lock file
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)

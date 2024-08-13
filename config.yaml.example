@@ -1,7 +1,7 @@
 # Base path for local files to be synced
 local_base_path: /path/to/your/local/base/directory
 
-# File containing rules for excluding certain files/directories from sync
+# If this file is updated then on the next sync run a resync is done. This file applies global to all sync jobs. This is because rclone requires a resync after any filter change.
 exclusion_rules_file: /path/to/your/filter.txt
 
 # Redirect rclone log output
