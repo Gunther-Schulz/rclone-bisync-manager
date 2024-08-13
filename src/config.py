@@ -7,7 +7,7 @@ import hashlib
 from croniter import croniter
 import json
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, constr, conint, DirectoryPath
 
 
 class SyncJobConfig(BaseModel):
@@ -15,11 +15,11 @@ class SyncJobConfig(BaseModel):
     rclone_remote: str
     remote: str
     schedule: str
-    active: bool = True
-    dry_run: bool = False
-    rclone_options: Dict[str, Any] = {}
-    bisync_options: Dict[str, Any] = {}
-    resync_options: Dict[str, Any] = {}
+    active: bool = Field(default=True)
+    dry_run: bool = Field(default=False)
+    rclone_options: Dict[str, Any] = Field(default_factory=dict)
+    bisync_options: Dict[str, Any] = Field(default_factory=dict)
+    resync_options: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('schedule')
     @classmethod
@@ -32,65 +32,70 @@ class SyncJobConfig(BaseModel):
 
 
 class ConfigSchema(BaseModel):
-    local_base_path: str
+    local_base_path: DirectoryPath
     exclusion_rules_file: Optional[str] = None
-    max_cpu_usage_percent: int = 100
+    max_cpu_usage_percent: conint(ge=0, le=100) = 100
     redirect_rclone_log_output: bool = False
     run_missed_jobs: bool = False
     run_initial_sync_on_startup: bool = True
-    rclone_options: Dict[str, Any] = {}
-    bisync_options: Dict[str, Any] = {}
-    resync_options: Dict[str, Any] = {}
-    sync_jobs: Dict[str, SyncJobConfig]
+    rclone_options: Dict[str, Any] = Field(default_factory=dict)
+    bisync_options: Dict[str, Any] = Field(default_factory=dict)
+    resync_options: Dict[str, Any] = Field(default_factory=dict)
+    sync_jobs: Dict[constr(min_length=1), Dict[str, Any]] = Field(...,
+                                                                  description="Sync job configurations")
     dry_run: bool = False
     force_resync: bool = False
     console_log: bool = False
-    specific_sync_jobs: Optional[List[str]] = None
+    specific_sync_jobs: Optional[List[constr(min_length=1)]] = None
     force_operation: bool = False
     daemon_mode: bool = False
-    status_file_path: Dict[str, str] = {}
+    status_file_path: Dict[constr(min_length=1), str] = Field(
+        default_factory=dict)
     log_file_path: str = Field(default_factory=lambda: os.path.join(
         os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')),
         'rclone-bisync-manager',
         'logs',
         'rclone-bisync-manager.log'
     ))
-    hash_warnings: Dict[str, Optional[str]] = {}
-    sync_errors: Dict[str, str] = {}
+    hash_warnings: Dict[constr(min_length=1), Optional[str]] = Field(
+        default_factory=dict)
+    sync_errors: Dict[constr(min_length=1), str] = Field(default_factory=dict)
 
-    @field_validator('max_cpu_usage_percent')
-    @classmethod
-    def check_cpu_usage(cls, v):
-        if v < 0 or v > 100:
-            raise ValueError('max_cpu_usage_percent must be between 0 and 100')
-        return v
+    model_config = ConfigDict(extra='forbid')
 
     @field_validator('sync_jobs')
     @classmethod
     def validate_sync_jobs(cls, v):
         errors = []
-        for key, job in v.items():
-            try:
-                if isinstance(job, dict):
-                    SyncJobConfig(**job)
-                elif not isinstance(job, SyncJobConfig):
-                    raise ValueError(f"Invalid type for sync job '{
-                                     key}': expected dict or SyncJobConfig")
-            except ValueError as e:
-                for error in e.errors():
-                    field = error['loc'][0]
-                    msg = error['msg']
-                    errors.append(f"Invalid configuration for sync job '{
-                                  key}': {field} - {msg}")
+        required_keys = {'local', 'rclone_remote', 'remote', 'schedule'}
+        allowed_keys = set(SyncJobConfig.model_fields.keys())
 
-        # Check for invalid fields
         for key, job in v.items():
+            if not isinstance(key, str):
+                errors.append(f"Invalid job key: {
+                              key}. Job keys must be strings.")
+                continue
+
             if isinstance(job, dict):
-                invalid_fields = set(job.keys()) - \
-                    set(SyncJobConfig.model_fields.keys())
-                if invalid_fields:
-                    errors.append(f"Sync job '{key}' contains invalid fields: {
-                                  ', '.join(invalid_fields)}")
+                job_keys = set(job.keys())
+            elif isinstance(job, SyncJobConfig):
+                job_keys = set(job.model_fields.keys())
+            else:
+                errors.append(f"Invalid type for sync job '{
+                              key}': expected dict or SyncJobConfig, got {type(job)}")
+                continue
+
+            # Check for missing required keys
+            missing_keys = required_keys - job_keys
+            if missing_keys:
+                errors.append(f"Sync job '{key}' is missing required keys: {
+                              ', '.join(missing_keys)}")
+
+            # Check for invalid keys in the job configuration
+            invalid_keys = job_keys - allowed_keys
+            if invalid_keys:
+                errors.append(f"Sync job '{key}' contains invalid keys: {
+                              ', '.join(invalid_keys)}")
 
         if errors:
             raise ValueError("\n".join(errors))
@@ -137,34 +142,14 @@ class Config:
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
-        self._validate_global_keys(config_data)
-        self._validate_sync_job_keys(config_data)
         self._update_config_with_args(config_data, args)
 
         try:
             self._config = ConfigSchema(**config_data)
-            self._validate_config_schema()
         except ValidationError as e:
             raise ValueError(self._format_validation_errors(e))
 
         self._populate_status_file_paths()
-
-    def _validate_global_keys(self, config_data):
-        allowed_keys = self._get_global_allowed_keys(
-        ) | self._get_shared_allowed_keys() | {'sync_jobs'}
-        unrecognized_keys = set(config_data.keys()) - allowed_keys
-        if unrecognized_keys:
-            raise ValueError(f"Unrecognized global options: {
-                             ', '.join(unrecognized_keys)}")
-
-    def _validate_sync_job_keys(self, config_data):
-        if 'sync_jobs' in config_data:
-            allowed_keys = set(SyncJobConfig.model_fields.keys())
-            for job_key, job_config in config_data['sync_jobs'].items():
-                unrecognized_keys = set(job_config.keys()) - allowed_keys
-                if unrecognized_keys:
-                    raise ValueError(f"Unrecognized keys in sync job '{
-                                     job_key}': {', '.join(unrecognized_keys)}")
 
     def _update_config_with_args(self, config_data, args):
         config_data.update({
@@ -176,19 +161,15 @@ class Config:
             'daemon_mode': args.daemon_mode
         })
 
-    def _validate_config_schema(self):
-        errors = []
-        errors.extend(self._validate_global_options())
-        errors.extend(self._validate_sync_jobs())
-        if errors:
-            raise ValidationError(errors)
-
     def _format_validation_errors(self, e):
         error_messages = []
         for error in e.errors():
-            field = '.'.join(error['loc'])
-            msg = error['msg']
-            error_messages.append(f"Error in {field}: {msg}")
+            if isinstance(error, dict):
+                field = '.'.join(str(loc) for loc in error['loc'])
+                msg = error['msg']
+                error_messages.append(f"Error in {field}: {msg}")
+            else:
+                error_messages.append(str(error))
         return "\n".join(error_messages)
 
     def _populate_status_file_paths(self):
@@ -196,43 +177,10 @@ class Config:
             self._config.status_file_path[job_key] = self.get_status_file_path(
                 job_key)
 
-    def _get_global_allowed_keys(self):
-        return set(ConfigSchema.model_fields.keys())
-
-    def _get_shared_allowed_keys(self):
-        return {'rclone_options', 'bisync_options', 'resync_options'}
-
-    def _validate_global_options(self):
-        allowed_keys = self._get_global_allowed_keys() | self._get_shared_allowed_keys()
-        config_keys = set(self._config.model_dump(
-            exclude={'sync_jobs'}).keys())
-        unrecognized_global_keys = config_keys - allowed_keys
-        if unrecognized_global_keys:
-            return [f"Unrecognized global options: {', '.join(unrecognized_global_keys)}"]
-        return []
-
-    def _validate_sync_jobs(self):
-        errors = []
-        for key, job in self._config.sync_jobs.items():
-            try:
-                if isinstance(job, dict):
-                    SyncJobConfig(**job)
-                elif not isinstance(job, SyncJobConfig):
-                    errors.append(f"Invalid type for sync job '{
-                                  key}': expected dict or SyncJobConfig")
-            except ValidationError as e:
-                for error in e.errors():
-                    field = error['loc'][0]
-                    msg = error['msg']
-                    errors.append(f"Invalid configuration for sync job '{
-                                  key}': {field} - {msg}")
-        return errors
-
     def get_status_file_path(self, job_key):
         if job_key in self._config.status_file_path:
             return self._config.status_file_path[job_key]
         else:
-            # Calculate the path if it's not in the dictionary (this shouldn't happen in normal operation)
             local_path = self._config.sync_jobs[job_key].local
             remote_path = f"{self._config.sync_jobs[job_key].rclone_remote}:{
                 self._config.sync_jobs[job_key].remote}"
