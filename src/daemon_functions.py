@@ -2,7 +2,7 @@ import json
 import socket
 from status_server import start_status_server
 from logging_utils import log_message, log_error
-from utils import check_config_changed, parse_interval, check_and_create_lock_file
+from utils import check_config_changed, check_and_create_lock_file
 from scheduler import scheduler
 from sync import perform_sync_operations
 from config import config, signal_handler
@@ -30,14 +30,13 @@ def daemon_main():
             target=start_status_server, daemon=True)
         status_thread.start()
 
-        # Perform initial sync for all active paths
-        log_message("Starting initial sync for all active sync jobs")
-        for key, value in config.sync_jobs.items():
-            if value.get('active', True):
-                add_to_sync_queue(key)
-                interval = parse_interval(value['interval'])
-                scheduler.schedule_task(
-                    key, datetime.now() + timedelta(seconds=interval))
+        if config.run_initial_sync_on_startup:
+            log_message("Starting initial sync for all active sync jobs")
+            for key, value in config.sync_jobs.items():
+                if value.get('active', True):
+                    add_to_sync_queue(key)
+        else:
+            log_message("Skipping initial sync as per configuration")
 
         while config.running:
             try:

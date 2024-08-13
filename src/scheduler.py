@@ -3,6 +3,7 @@ import heapq
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from config import config
+from croniter import croniter
 
 
 @dataclass(order=True)
@@ -20,7 +21,11 @@ class SyncScheduler:
         self.check_missed_jobs()
         now = datetime.now()
         for key, cron in config.sync_schedules.items():
-            next_run = cron.get_next(now)
+            if isinstance(cron, str):
+                cron_obj = croniter(cron, now)
+            else:
+                cron_obj = cron
+            next_run = cron_obj.get_next(datetime)
             self.schedule_task(key, next_run)
 
     def check_missed_jobs(self):

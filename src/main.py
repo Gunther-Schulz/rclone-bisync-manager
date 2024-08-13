@@ -13,7 +13,7 @@ from utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_a
 from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from config import signal_handler
 import fcntl
-import errno
+import traceback
 
 
 def main():
@@ -63,10 +63,15 @@ def main():
                     stderr=sys.stderr
                 ):
                     scheduler.schedule_tasks()
+                    if not config.run_initial_sync_on_startup:
+                        log_message(
+                            "Skipping initial sync as per configuration")
                     daemon_main()
             except Exception as e:
-                log_error(f"Error starting daemon: {str(e)}")
-                print(f"Error starting daemon: {str(e)}")
+                error_trace = traceback.format_exc()
+                log_error(f"Error starting daemon: {str(e)}\n{error_trace}")
+                print(f"Error starting daemon: {
+                      str(e)}\nFull traceback:\n{error_trace}")
         elif args.action == 'stop':
             stop_daemon()
         elif args.action == 'status':

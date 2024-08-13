@@ -2,7 +2,6 @@ import os
 import socket
 import json
 import threading
-from datetime import datetime
 from config import config
 from scheduler import scheduler
 from sync import read_status
@@ -39,57 +38,27 @@ def handle_client(conn):
 
 
 def generate_status_report():
-    current_time = datetime.now()
     status = {
         "pid": os.getpid(),
-        "active_syncs": {},
-        "last_check": current_time.isoformat(),
-        "global_dry_run": config.dry_run,
-        "currently_syncing": config.currently_syncing,
-        "sync_queue_size": config.sync_queue.qsize(),
-        "queued_paths": list(config.queued_paths),
+        "running": config.running,
         "shutting_down": config.shutting_down,
-        "cache_dir": config.cache_dir,
-        "log_file_path": config.log_file_path,
-        "run_missed_jobs": config.run_missed_jobs
+        "currently_syncing": config.currently_syncing,
+        "queued_paths": list(config.queued_paths),
+        "sync_jobs": {}
     }
 
-    if config.currently_syncing and config.current_sync_start_time:
-        sync_duration = current_time - config.current_sync_start_time
-        status["current_sync_duration"] = str(sync_duration).split('.')[
-            0]  # Remove microseconds
-
     for key, value in config.sync_jobs.items():
-        local_path = value['local']
-        remote_path = f"{value['rclone_remote']}:{value['remote']}"
+        if value.get('active', True):
+            sync_status, resync_status = read_status(key)
+            last_sync = config.last_sync_times.get(key)
+            next_task = scheduler.get_next_task()
+            next_run = next_task.scheduled_time if next_task and next_task.path_key == key else None
 
-        last_sync = config.last_sync_times.get(key, "Never")
-        if isinstance(last_sync, datetime):
-            last_sync = last_sync.isoformat()
+            status["sync_jobs"][key] = {
+                "last_sync": last_sync.isoformat() if last_sync else None,
+                "next_run": next_run.isoformat() if next_run else None,
+                "sync_status": sync_status,
+                "resync_status": resync_status
+            }
 
-        sync_status, resync_status = read_status(key)
-
-        next_run = scheduler.get_next_run(key)
-        next_run_str = next_run.isoformat() if next_run else "Not scheduled"
-
-        status["active_syncs"][key] = {
-            "local_path": local_path,
-            "remote_path": remote_path,
-            "schedule": value.get('schedule', "Not set"),
-            "next_run": next_run_str,
-            "last_sync": last_sync,
-            "dry_run": config.dry_run or value.get('dry_run', False),
-            "is_active": value.get('active', True),
-            "is_currently_syncing": key == config.currently_syncing,
-            "sync_status": sync_status,
-            "resync_status": resync_status,
-            "hash_warning": config.hash_warnings.get(key),
-            "sync_error": config.sync_errors.get(key)
-        }
-
-        if key == config.currently_syncing and config.current_sync_start_time:
-            sync_duration = current_time - config.current_sync_start_time
-            status["active_syncs"][key]["current_sync_duration"] = str(
-                sync_duration).split('.')[0]  # Remove microseconds
-
-    return json.dumps(status, ensure_ascii=False)
+    return json.dumps(status)

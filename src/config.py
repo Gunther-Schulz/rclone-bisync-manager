@@ -4,11 +4,9 @@ from datetime import datetime
 import sys
 from threading import Lock
 from queue import Queue
-from interval_utils import parse_interval
 import hashlib
 from croniter import croniter
 import json
-from timedelta import timedelta
 
 
 def _initial_log_error(message):
@@ -44,15 +42,15 @@ class Config:
         self.bisync_options = {}
         self.resync_options = {}
         self.last_sync_times = {}
-        self.sync_intervals = {}
-        self.sync_schedules = {}  # New attribute for cron schedules
+        self.sync_schedules = {}
         self.script_start_time = datetime.now()
         self.last_config_mtime = 0
         self.redirect_rclone_log_output = False
         self.last_log_position = 0
         self.hash_warnings = {}
         self.sync_errors = {}
-        self.run_missed_jobs = False  # New attribute for run_missed_jobs
+        self.run_missed_jobs = False
+        self.run_initial_sync_on_startup = True
 
         # File paths
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -99,8 +97,8 @@ class Config:
         for key, value in self.sync_jobs.items():
             if value.get('active', True) and 'schedule' in value:
                 self.sync_schedules[key] = croniter(value['schedule'])
-                if key not in self.last_sync_times:
-                    self.last_sync_times[key] = None
+            if key not in self.last_sync_times:
+                self.last_sync_times[key] = None
 
         # Update last_config_mtime
         self.last_config_mtime = os.path.getmtime(self.config_file)
