@@ -153,7 +153,7 @@ def add_to_sync_queue(job_key):
 
 def determine_arrow_color(status, bg_color):
     if isinstance(status, str):
-        return "white" if status == "error" else "black"
+        return "black" if status == "error" else "black"
 
     if bg_color == (0, 120, 255):  # Blue background
         return "black"
@@ -180,6 +180,9 @@ def create_status_image(color, status):
     draw.ellipse([0, 0, size, size], fill=color)
 
     arrow_color = determine_arrow_color(status, color)
+    if isinstance(status, str) and status == "error":
+        arrow_color = "black"  # Force black color for error state
+
     if arrow_color != "white":
         draw.arc([8, 8, size-8, size-8], start=0,
                  end=270, fill=arrow_color, width=8)
@@ -268,7 +271,10 @@ def run_tray():
             if current_status != last_status:
                 new_menu = update_menu(current_status)
                 icon.menu = new_menu
-                if "error" not in current_status:
+                if "error" in current_status:
+                    icon.icon = create_status_image(
+                        (255, 0, 0), "error")  # Pass "error" as status
+                else:
                     if current_status.get("currently_syncing"):
                         bg_color = (0, 120, 255)  # Blue for syncing
                     elif current_status.get("config_invalid"):
@@ -276,9 +282,6 @@ def run_tray():
                     else:
                         bg_color = (0, 200, 0)  # Green for running
                     icon.icon = create_status_image(bg_color, current_status)
-                else:
-                    icon.icon = create_status_image(
-                        (255, 0, 0), current_status)  # Red for error
                 icon.update_menu()
                 last_status = current_status
             time.sleep(1)
