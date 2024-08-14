@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
+import tkinter
+from tkinter import ttk
 import pystray
 from PIL import Image, ImageDraw
 import socket
 import json
 import threading
 import time
-import os
 from config import debug
-import tkinter as tk
-from tkinter import ttk, messagebox
 
 
 def get_daemon_status():
@@ -52,7 +51,8 @@ def update_menu(status):
                     f"Sync status: {job_status['sync_status']}", None, enabled=False),
                 pystray.MenuItem(f"Resync status: {
                                  job_status['resync_status']}", None, enabled=False),
-                pystray.MenuItem("Force sync", lambda: force_sync(job_key))
+                pystray.MenuItem("Add to Sync Queue",
+                                 lambda: add_to_sync_queue(job_key))
             )
             menu_items.append(pystray.MenuItem(f"Job: {job_key}", job_submenu))
 
@@ -92,14 +92,11 @@ def reload_config():
             response_data = json.loads(response)
             if response_data["status"] == "success":
                 if debug:
-                    print(response_data["message"])
-                messagebox.showinfo(
-                    "Config Reload", "Configuration reloaded successfully")
+                    print("Configuration reloaded successfully")
             else:
                 if debug:
-                    print(f"Error: {response_data['message']}")
-                messagebox.showerror("Config Reload Error", f"Error reloading configuration: {
-                                     response_data['message']}")
+                    print(f"Error reloading configuration: {
+                          response_data['message']}")
 
             current_status = get_daemon_status()
             icon.menu = update_menu(current_status)
@@ -108,18 +105,14 @@ def reload_config():
         except json.JSONDecodeError:
             if debug:
                 print(f"Error: Invalid JSON response from daemon: {response}")
-            messagebox.showerror("Config Reload Error",
-                                 "Invalid response from daemon")
             return False
     except Exception as e:
         if debug:
             print(f"Error communicating with daemon: {str(e)}")
-        messagebox.showerror("Config Reload Error",
-                             f"Error communicating with daemon: {str(e)}")
         return False
 
 
-def force_sync(job_key):
+def add_to_sync_queue(job_key):
     socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -128,23 +121,26 @@ def force_sync(job_key):
         response = client.recv(1024).decode()
         client.close()
         if debug:
-            print(f"Force sync response: {response}")
-        messagebox.showinfo(
-            "Force Sync", f"Force sync request sent for job: {job_key}")
+            print(f"Add to sync queue response: {response}")
     except Exception as e:
         if debug:
-            print(f"Error sending force sync request: {str(e)}")
-        messagebox.showerror("Force Sync Error",
-                             f"Error sending force sync request: {str(e)}")
+            print(f"Error adding job to sync queue: {str(e)}")
 
 
-def determine_arrow_color(status):
+def determine_arrow_color(status, bg_color):
+    if isinstance(status, str):
+        return "white" if status == "error" else "black"
+
+    if bg_color == (0, 120, 255):  # Blue background
+        return "black"
+
     if status.get("config_invalid") or status.get("config_error_message"):
         return "red"
 
     if "sync_jobs" in status:
         for job_key, job_status in status["sync_jobs"].items():
-            if job_status["sync_status"] != "COMPLETED" or job_status["resync_status"] != "COMPLETED":
+            if (job_status["sync_status"] not in ["COMPLETED", "NONE", None] or
+                    job_status["resync_status"] not in ["COMPLETED", "NONE", None]):
                 return "red"
             if job_status.get("hash_warnings", False):
                 return "red"
@@ -159,8 +155,8 @@ def create_status_image(color, status):
 
     draw.ellipse([0, 0, size, size], fill=color)
 
-    if status != 'error':
-        arrow_color = determine_arrow_color(status)
+    arrow_color = determine_arrow_color(status, color)
+    if arrow_color != "white":
         draw.arc([8, 8, size-8, size-8], start=0,
                  end=270, fill=arrow_color, width=8)
         draw.arc([4, 4, size-4, size-4], start=250,
@@ -180,7 +176,7 @@ def create_status_image(color, status):
 def show_status_window():
     status = get_daemon_status()
 
-    window = tk.Tk()
+    window = tkinter.Tk()
     window.title("RClone BiSync Manager Status")
     window.geometry("400x300")
 
@@ -244,7 +240,8 @@ def run_tray():
                         bg_color = (0, 200, 0)  # Green for running
                     icon.icon = create_status_image(bg_color, current_status)
                 else:
-                    icon.icon = error_image
+                    icon.icon = create_status_image(
+                        (255, 0, 0), current_status)  # Red for error
                 icon.update_menu()
                 last_status = current_status
             time.sleep(1)
