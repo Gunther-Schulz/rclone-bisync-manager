@@ -138,6 +138,20 @@ def force_sync(job_key):
                              f"Error sending force sync request: {str(e)}")
 
 
+def determine_arrow_color(status):
+    if status.get("config_invalid") or status.get("config_error_message"):
+        return "red"
+
+    if "sync_jobs" in status:
+        for job_key, job_status in status["sync_jobs"].items():
+            if job_status["sync_status"] != "COMPLETED" or job_status["resync_status"] != "COMPLETED":
+                return "red"
+            if job_status.get("hash_warnings", False):
+                return "red"
+
+    return "green"
+
+
 def create_status_image(color, status):
     size = 64
     image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
@@ -145,8 +159,8 @@ def create_status_image(color, status):
 
     draw.ellipse([0, 0, size, size], fill=color)
 
-    if status in ['running', 'syncing', 'config_invalid']:
-        arrow_color = 'black'
+    if status != 'error':
+        arrow_color = determine_arrow_color(status)
         draw.arc([8, 8, size-8, size-8], start=0,
                  end=270, fill=arrow_color, width=8)
         draw.arc([4, 4, size-4, size-4], start=250,
@@ -156,7 +170,7 @@ def create_status_image(color, status):
             (size-12, size//2-8),
             (size-12, size//2+8)
         ], fill=arrow_color)
-    elif status == 'error':
+    else:
         draw.line([(16, 16), (48, 48)], fill='white', width=8)
         draw.line([(16, 48), (48, 16)], fill='white', width=8)
 
@@ -208,10 +222,7 @@ def show_status_window():
 
 def run_tray():
     global icon
-    running_image = create_status_image((0, 200, 0), 'running')
-    syncing_image = create_status_image((0, 120, 255), 'syncing')
     error_image = create_status_image((255, 0, 0), 'error')
-    config_invalid_image = create_status_image((255, 200, 0), 'config_invalid')
 
     icon = pystray.Icon("rclone-bisync-manager",
                         error_image, "RClone BiSync Manager")
@@ -226,11 +237,12 @@ def run_tray():
                 icon.menu = new_menu
                 if "error" not in current_status:
                     if current_status.get("currently_syncing"):
-                        icon.icon = syncing_image
+                        bg_color = (0, 120, 255)  # Blue for syncing
                     elif current_status.get("config_invalid"):
-                        icon.icon = config_invalid_image
+                        bg_color = (255, 200, 0)  # Yellow for config invalid
                     else:
-                        icon.icon = running_image
+                        bg_color = (0, 200, 0)  # Green for running
+                    icon.icon = create_status_image(bg_color, current_status)
                 else:
                     icon.icon = error_image
                 icon.update_menu()

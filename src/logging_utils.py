@@ -50,7 +50,7 @@ def log_message(message):
 
 def log_error(message):
     logger.error(message)
-    if config.console_log:
+    if hasattr(config, 'console_log') and config.console_log:
         print(f"ERROR: {message}")
 
 

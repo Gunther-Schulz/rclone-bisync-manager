@@ -83,7 +83,8 @@ def generate_status_report():
                 "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
                 "sync_status": job_state["sync_status"],
                 "resync_status": job_state["resync_status"],
-                "force_resync": value.force_resync
+                "force_resync": value.force_resync,
+                "hash_warnings": config.hash_warnings.get(key, False)
             }
 
     return json.dumps(status)

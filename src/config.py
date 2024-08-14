@@ -122,6 +122,10 @@ class ConfigSchema(BaseModel):
             print("Entering validate_sync_jobs method")
             print(f"Input value: {v}")
 
+        if v is None:
+            raise ValueError(
+                "sync_jobs cannot be None. Please provide at least one sync job.")
+
         validated_jobs = {}
         errors = []
 
@@ -158,6 +162,10 @@ class ConfigSchema(BaseModel):
 
         if errors:
             raise ValueError("\n".join(errors))
+
+        if not validated_jobs:
+            raise ValueError(
+                "No valid sync jobs found. Please provide at least one valid sync job.")
 
         if debug:
             print("Exiting validate_sync_jobs method")
