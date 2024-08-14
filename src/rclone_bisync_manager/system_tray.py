@@ -290,5 +290,9 @@ def run_tray():
     icon.run()
 
 
-if __name__ == "__main__":
+def main():
     run_tray()
+
+
+if __name__ == "__main__":
+    main()

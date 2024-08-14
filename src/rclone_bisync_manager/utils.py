@@ -2,8 +2,8 @@ import os
 import subprocess
 import shutil
 import hashlib
-from logging_utils import log_message, log_error
-from config import config
+from rclone_bisync_manager.logging_utils import log_message, log_error
+from rclone_bisync_manager.config import config
 import fcntl
 import errno
 

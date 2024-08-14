@@ -1,10 +1,9 @@
 import os
 import subprocess
 from datetime import datetime
-from config import config
-from utils import is_cpulimit_installed, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
-from logging_utils import log_message, log_error
-from config import config, sync_state
+from rclone_bisync_manager.utils import is_cpulimit_installed, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
+from rclone_bisync_manager.logging_utils import log_message, log_error
+from rclone_bisync_manager.config import config, sync_state
 
 
 def perform_sync_operations(key):

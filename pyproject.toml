@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rclone_bisync_manager"
+version = "0.1.0"
+description = "RClone BiSync Manager with system tray application"
+requires-python = ">=3.8"
+dependencies = [
+    "pystray",
+    "pillow",
+    "pyyaml",
+    "croniter",
+    "pydantic",
+]
+
+[project.scripts]
+rclone-bisync-manager = "rclone_bisync_manager.main:main"
+rclone-bisync-tray = "rclone_bisync_manager.system_tray:run_tray"
+
+[tool.setuptools.packages.find]
+where = ["src"]
