@@ -126,22 +126,24 @@ def create_status_image(color, status):
     draw.ellipse([0, 0, size, size], fill=color)
 
     # Draw status symbol
-    if status == 'running':
-        # Checkmark
-        draw.line([(16, 32), (28, 44), (48, 24)], fill='white', width=6)
-    elif status == 'syncing':
-        # Rotating arrows
-        draw.arc([8, 8, size-8, size-8], start=45,
-                 end=315, fill='white', width=6)
-        draw.polygon([(56, 14), (56, 26), (44, 20)], fill='white')
+    if status in ['running', 'syncing', 'config_invalid']:
+        arrow_color = 'black'
+        # Arc
+        draw.arc([8, 8, size-8, size-8], start=0,
+                 end=270, fill=arrow_color, width=8)
+        # Curved arrow head
+        draw.arc([4, 4, size-4, size-4], start=250,
+                 end=270, fill=arrow_color, width=16)
+        # Arrow tip
+        draw.polygon([
+            (size-4, size//2),
+            (size-12, size//2-8),
+            (size-12, size//2+8)
+        ], fill=arrow_color)
     elif status == 'error':
         # X mark
-        draw.line([(16, 16), (48, 48)], fill='white', width=6)
-        draw.line([(16, 48), (48, 16)], fill='white', width=6)
-    elif status == 'config_invalid':
-        # Exclamation mark
-        draw.rectangle([28, 12, 36, 40], fill='white')
-        draw.ellipse([28, 44, 36, 52], fill='white')
+        draw.line([(16, 16), (48, 48)], fill='white', width=8)
+        draw.line([(16, 48), (48, 16)], fill='white', width=8)
 
     return image
 
@@ -193,10 +195,11 @@ def show_status_window():
 
 def run_tray():
     global icon
-    running_image = create_status_image((0, 255, 0), 'running')
-    syncing_image = create_status_image((0, 0, 255), 'syncing')
-    error_image = create_status_image((255, 0, 0), 'error')
-    config_invalid_image = create_status_image((255, 255, 0), 'config_invalid')
+    running_image = create_status_image((0, 200, 0), 'running')  # Green
+    syncing_image = create_status_image((0, 120, 255), 'syncing')  # Blue
+    error_image = create_status_image((255, 0, 0), 'error')  # Red
+    config_invalid_image = create_status_image(
+        (255, 200, 0), 'config_invalid')  # Orange
 
     icon = pystray.Icon("rclone-bisync-manager",
                         error_image, "RClone BiSync Manager")
