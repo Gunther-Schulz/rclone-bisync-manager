@@ -24,8 +24,8 @@ def parse_args():
         'sync', parents=[global_parser], help='Perform a sync operation')
     sync_parser.add_argument('sync_jobs', nargs='*',
                              help='Specify sync jobs to run (optional, run all active jobs if not specified)')
-    sync_parser.add_argument('--resync', action='store_true',
-                             help='Force a resynchronization, ignoring previous sync status.')
+    sync_parser.add_argument('--resync', nargs='*', metavar='JOB_KEY',
+                             help='Force a resynchronization for specified job(s), ignoring previous sync status.')
     sync_parser.add_argument('--force-bisync', action='store_true',
                              help='Force the bisync operation without confirmation.')
 

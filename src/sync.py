@@ -20,11 +20,11 @@ def perform_sync_operations(key):
     ensure_local_directory(local_path)
 
     log_message(f"Performing sync operation for {key}. Force resync: {
-                config.force_resync}, Dry run: {config._config.dry_run}")
+                value.force_resync}, Dry run: {config._config.dry_run}")
 
     sync_status, resync_status, _ = read_status(key)
 
-    if config.force_resync or resync_status == "NONE":
+    if value.force_resync or resync_status == "NONE":
         log_message("Force resync requested or initial sync.")
         resync_result = resync(key, remote_path, local_path)
         if resync_result == "COMPLETED":
@@ -74,8 +74,9 @@ def bisync(key, remote_path, local_path):
 
 
 def resync(key, remote_path, local_path):
-    log_message(f"Resync called with force_resync: {config.force_resync}")
-    if config.force_resync:
+    log_message(f"Resync called with force_resync: {
+                config._config.sync_jobs[key].force_resync}")
+    if config._config.sync_jobs[key].force_resync:
         log_message("Force resync requested.")
     else:
         _, resync_status = read_status(key)
@@ -141,7 +142,7 @@ def get_rclone_args(options, operation_type):
     # Always add --dry-run if path_dry_run is True
     if config._config.dry_run:
         args.append('--dry-run')
-    if config.force_operation:
+    if config._config.force_operation:
         args.append('--force')
     if config._config.redirect_rclone_log_output and hasattr(config._config, 'log_file_path'):
         args.extend(['--log-file', config._config.log_file_path])

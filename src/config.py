@@ -19,6 +19,7 @@ class SyncJobConfig(BaseModel):
     schedule: str
     active: bool = Field(default=True)
     dry_run: bool = Field(default=False)
+    force_resync: bool = Field(default=False)
     rclone_options: Dict[str, Any] = Field(default_factory=dict)
     bisync_options: Dict[str, Any] = Field(default_factory=dict)
     resync_options: Dict[str, Any] = Field(default_factory=dict)
@@ -182,7 +183,6 @@ class Config:
         self.running = True
         self.shutting_down = False
         self.shutdown_complete = False
-        self.force_resync = False
         self.console_log = False
         self.specific_sync_jobs = None
         self.force_operation = False
@@ -260,7 +260,6 @@ class Config:
         })
 
     def _update_internal_fields(self, args):
-        self.force_resync = args.force_resync
         self.console_log = args.console_log
         self.specific_sync_jobs = args.specific_sync_jobs
         self.force_operation = args.force_operation

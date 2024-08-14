@@ -82,7 +82,8 @@ def generate_status_report():
                 "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
                 "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
                 "sync_status": job_state["sync_status"],
-                "resync_status": job_state["resync_status"]
+                "resync_status": job_state["resync_status"],
+                "force_resync": value.force_resync
             }
 
     return json.dumps(status)
