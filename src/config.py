@@ -33,6 +33,35 @@ class SyncJobConfig(BaseModel):
         return v
 
 
+class SyncState:
+    def __init__(self):
+        self.sync_status = {}
+        self.resync_status = {}
+        self.last_sync_times = {}
+        self.next_run_times = {}
+
+    def update_job_state(self, job_key, sync_status=None, resync_status=None, last_sync=None, next_run=None):
+        if sync_status is not None:
+            self.sync_status[job_key] = sync_status
+        if resync_status is not None:
+            self.resync_status[job_key] = resync_status
+        if last_sync is not None:
+            self.last_sync_times[job_key] = last_sync
+        if next_run is not None:
+            self.next_run_times[job_key] = next_run
+
+    def get_job_state(self, job_key):
+        return {
+            "sync_status": self.sync_status.get(job_key, "NONE"),
+            "resync_status": self.resync_status.get(job_key, "NONE"),
+            "last_sync": self.last_sync_times.get(job_key),
+            "next_run": self.next_run_times.get(job_key)
+        }
+
+
+sync_state = SyncState()
+
+
 class ConfigSchema(BaseModel):
     # Base path for local files to be synced
     local_base_path: DirectoryPath
@@ -144,8 +173,7 @@ class Config:
         self.LOCK_FILE_PATH = '/tmp/rclone_bisync_manager.lock'
         self._init_file_paths()
         self._init_logging_paths()
-        self.last_sync_times = {}
-        self.load_last_sync_times()
+        self.load_sync_state()
         self.sync_queue = Queue()
         self.queued_paths = set()
         self.sync_lock = Lock()
@@ -264,21 +292,32 @@ class Config:
                                     remote_path}".encode()).hexdigest()
             return os.path.join(self.cache_dir, f'{unique_id}.status')
 
-    def save_last_sync_times(self):
-        sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
-        with open(sync_times_file, 'w') as f:
-            json.dump({k: v.isoformat()
-                      for k, v in self.last_sync_times.items()}, f)
+    def save_sync_state(self):
+        state_file = os.path.join(self.cache_dir, 'sync_state.json')
+        with open(state_file, 'w') as f:
+            json.dump({
+                "sync_status": sync_state.sync_status,
+                "resync_status": sync_state.resync_status,
+                "last_sync_times": {k: v.isoformat() for k, v in sync_state.last_sync_times.items()},
+                "next_run_times": {k: v.isoformat() for k, v in sync_state.next_run_times.items()}
+            }, f)
 
-    def load_last_sync_times(self):
-        sync_times_file = os.path.join(self.cache_dir, 'last_sync_times.json')
-        if os.path.exists(sync_times_file):
-            with open(sync_times_file, 'r') as f:
-                loaded_times = json.load(f)
-                self.last_sync_times = {k: datetime.fromisoformat(
-                    v) for k, v in loaded_times.items()}
+    def load_sync_state(self):
+        state_file = os.path.join(self.cache_dir, 'sync_state.json')
+        if os.path.exists(state_file):
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+                sync_state.sync_status = state.get("sync_status", {})
+                sync_state.resync_status = state.get("resync_status", {})
+                sync_state.last_sync_times = {k: datetime.fromisoformat(
+                    v) for k, v in state.get("last_sync_times", {}).items()}
+                sync_state.next_run_times = {k: datetime.fromisoformat(
+                    v) for k, v in state.get("next_run_times", {}).items()}
         else:
-            self.last_sync_times = {}
+            sync_state.sync_status = {}
+            sync_state.resync_status = {}
+            sync_state.last_sync_times = {}
+            sync_state.next_run_times = {}
 
 
 config = Config()

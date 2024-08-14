@@ -6,17 +6,13 @@ from utils import is_cpulimit_installed, check_local_rclone_test, check_remote_r
 from logging_utils import log_message, log_error
 import json
 import fcntl
+from config import config, sync_state
 
 
 def perform_sync_operations(key):
     value = config._config.sync_jobs[key]
     local_path = os.path.join(config._config.local_base_path, value.local)
     remote_path = f"{value.rclone_remote}:{value.remote}"
-    status_file = config.get_status_file_path(key)
-
-    if not os.path.exists(status_file):
-        log_message(f"No status file found for {key}. Forcing resync.")
-        config.force_resync = True
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
         return
@@ -26,18 +22,22 @@ def perform_sync_operations(key):
     log_message(f"Performing sync operation for {key}. Force resync: {
                 config.force_resync}, Dry run: {config._config.dry_run}")
 
-    if config.force_resync:
-        log_message("Force resync requested.")
+    sync_status, resync_status, _ = read_status(key)
+
+    if config.force_resync or resync_status != "COMPLETED":
+        log_message("Force resync requested or previous resync not completed.")
         resync_result = resync(key, remote_path, local_path)
         if resync_result == "COMPLETED":
             bisync_result = bisync(key, remote_path, local_path)
             write_status(key, sync_status=bisync_result,
                          resync_status=resync_result)
+        else:
+            write_status(key, sync_status=resync_result,
+                         resync_status=resync_result)
     else:
         bisync_result = bisync(key, remote_path, local_path)
-        write_status(key, sync_status=bisync_result)
-
-    config.last_sync_times[key] = datetime.now()
+        write_status(key, sync_status=bisync_result,
+                     resync_status=resync_status)
 
 
 def bisync(key, remote_path, local_path):
@@ -191,39 +191,21 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
 
 def write_status(job_key, sync_status=None, resync_status=None):
     if config._config.dry_run:
-        return  # Don't write status if it's a dry run
-    status_file = config.status_file_path[job_key]
-    os.makedirs(os.path.dirname(status_file), exist_ok=True)
-    with open(status_file, 'a+') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        try:
-            status = json.load(f)
-        except json.JSONDecodeError:
-            status = {}
-        if sync_status is not None:
-            status["sync_status"] = sync_status
-        if resync_status is not None:
-            status["resync_status"] = resync_status
-        f.seek(0)
-        f.truncate()
-        json.dump(status, f)
-        fcntl.flock(f, fcntl.LOCK_UN)
+        return  # Don't update status if it's a dry run
+    if sync_status is not None:
+        sync_state.sync_status[job_key] = sync_status
+    if resync_status is not None:
+        sync_state.resync_status[job_key] = resync_status
+    sync_state.last_sync_times[job_key] = datetime.now()
+    config.save_sync_state()
 
 
 def read_status(job_key):
-    status_file = config.status_file_path[job_key]
-    if os.path.exists(status_file):
-        with open(status_file, 'r') as f:
-            fcntl.flock(f, fcntl.LOCK_SH)
-            try:
-                status = json.load(f)
-                return status.get("sync_status", "NONE"), status.get("resync_status", "NONE")
-            except json.JSONDecodeError:
-                return "NONE", "NONE"
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
-    return "NONE", "NONE"
+    return (
+        sync_state.sync_status.get(job_key, "NONE"),
+        sync_state.resync_status.get(job_key, "NONE"),
+        sync_state.last_sync_times.get(job_key)
+    )
 
 
 def get_log_file_position():

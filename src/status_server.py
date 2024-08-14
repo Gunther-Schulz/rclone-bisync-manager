@@ -3,9 +3,7 @@ import socket
 import json
 import threading
 from config import config
-from logging_utils import log_message
-from scheduler import scheduler
-from sync import read_status
+from config import config, sync_state
 
 
 def start_status_server():
@@ -79,16 +77,12 @@ def generate_status_report():
 
     for key, value in config._config.sync_jobs.items():
         if value.active:
-            sync_status, resync_status = read_status(key)
-            last_sync = config.last_sync_times.get(key)
-            next_task = scheduler.get_next_task()
-            next_run = next_task.scheduled_time if next_task and next_task.path_key == key else None
-
+            job_state = sync_state.get_job_state(key)
             status["sync_jobs"][key] = {
-                "last_sync": last_sync.isoformat() if last_sync else None,
-                "next_run": next_run.isoformat() if next_run else None,
-                "sync_status": sync_status,
-                "resync_status": resync_status
+                "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
+                "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
+                "sync_status": job_state["sync_status"],
+                "resync_status": job_state["resync_status"]
             }
 
     return json.dumps(status)

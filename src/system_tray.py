@@ -9,7 +9,7 @@ import time
 import os
 from config import debug
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 
 def get_daemon_status():
@@ -31,21 +31,16 @@ def update_menu(status):
 
     menu_items = []
 
-    # Add config status item as non-interactive text
     config_status = "Valid" if not status.get(
         "config_invalid", False) else "Invalid"
     menu_items.append(pystray.MenuItem(
         f"Config: {config_status}", None, enabled=False))
 
-    # Add currently syncing item
     menu_items.append(pystray.MenuItem(f"Currently syncing: {
                       status.get('currently_syncing', 'None')}", None, enabled=False))
-
-    # Add queued jobs item
     menu_items.append(pystray.MenuItem(f"Queued jobs: {', '.join(
         status.get('queued_paths', [])) or 'None'}", None, enabled=False))
 
-    # Add sync jobs submenu
     if "sync_jobs" in status:
         for job_key, job_status in status["sync_jobs"].items():
             job_submenu = pystray.Menu(
@@ -56,11 +51,11 @@ def update_menu(status):
                 pystray.MenuItem(
                     f"Sync status: {job_status['sync_status']}", None, enabled=False),
                 pystray.MenuItem(f"Resync status: {
-                                 job_status['resync_status']}", None, enabled=False)
+                                 job_status['resync_status']}", None, enabled=False),
+                pystray.MenuItem("Force sync", lambda: force_sync(job_key))
             )
             menu_items.append(pystray.MenuItem(f"Job: {job_key}", job_submenu))
 
-    # Add interactive menu items
     menu_items.extend([
         pystray.MenuItem("Show Status Window", show_status_window),
         pystray.MenuItem("Reload Config", reload_config),
@@ -98,11 +93,14 @@ def reload_config():
             if response_data["status"] == "success":
                 if debug:
                     print(response_data["message"])
+                messagebox.showinfo(
+                    "Config Reload", "Configuration reloaded successfully")
             else:
                 if debug:
                     print(f"Error: {response_data['message']}")
+                messagebox.showerror("Config Reload Error", f"Error reloading configuration: {
+                                     response_data['message']}")
 
-            # Update the tray icon immediately
             current_status = get_daemon_status()
             icon.menu = update_menu(current_status)
 
@@ -110,11 +108,34 @@ def reload_config():
         except json.JSONDecodeError:
             if debug:
                 print(f"Error: Invalid JSON response from daemon: {response}")
+            messagebox.showerror("Config Reload Error",
+                                 "Invalid response from daemon")
             return False
     except Exception as e:
         if debug:
             print(f"Error communicating with daemon: {str(e)}")
+        messagebox.showerror("Config Reload Error",
+                             f"Error communicating with daemon: {str(e)}")
         return False
+
+
+def force_sync(job_key):
+    socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        client.sendall(json.dumps([job_key]).encode())
+        response = client.recv(1024).decode()
+        client.close()
+        if debug:
+            print(f"Force sync response: {response}")
+        messagebox.showinfo(
+            "Force Sync", f"Force sync request sent for job: {job_key}")
+    except Exception as e:
+        if debug:
+            print(f"Error sending force sync request: {str(e)}")
+        messagebox.showerror("Force Sync Error",
+                             f"Error sending force sync request: {str(e)}")
 
 
 def create_status_image(color, status):
@@ -122,26 +143,20 @@ def create_status_image(color, status):
     image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    # Draw circle
     draw.ellipse([0, 0, size, size], fill=color)
 
-    # Draw status symbol
     if status in ['running', 'syncing', 'config_invalid']:
         arrow_color = 'black'
-        # Arc
         draw.arc([8, 8, size-8, size-8], start=0,
                  end=270, fill=arrow_color, width=8)
-        # Curved arrow head
         draw.arc([4, 4, size-4, size-4], start=250,
                  end=270, fill=arrow_color, width=16)
-        # Arrow tip
         draw.polygon([
             (size-4, size//2),
             (size-12, size//2-8),
             (size-12, size//2+8)
         ], fill=arrow_color)
     elif status == 'error':
-        # X mark
         draw.line([(16, 16), (48, 48)], fill='white', width=8)
         draw.line([(16, 48), (48, 16)], fill='white', width=8)
 
@@ -161,7 +176,6 @@ def show_status_window():
     notebook = ttk.Notebook(window)
     notebook.pack(expand=True, fill='both')
 
-    # General Status Tab
     general_frame = ttk.Frame(notebook)
     notebook.add(general_frame, text='General')
 
@@ -172,7 +186,6 @@ def show_status_window():
     ttk.Label(general_frame, text=f"Queued jobs: {', '.join(
         status.get('queued_paths', [])) or 'None'}").pack(pady=5)
 
-    # Sync Jobs Tab
     jobs_frame = ttk.Frame(notebook)
     notebook.add(jobs_frame, text='Sync Jobs')
 
@@ -195,11 +208,10 @@ def show_status_window():
 
 def run_tray():
     global icon
-    running_image = create_status_image((0, 200, 0), 'running')  # Green
-    syncing_image = create_status_image((0, 120, 255), 'syncing')  # Blue
-    error_image = create_status_image((255, 0, 0), 'error')  # Red
-    config_invalid_image = create_status_image(
-        (255, 200, 0), 'config_invalid')  # Orange
+    running_image = create_status_image((0, 200, 0), 'running')
+    syncing_image = create_status_image((0, 120, 255), 'syncing')
+    error_image = create_status_image((255, 0, 0), 'error')
+    config_invalid_image = create_status_image((255, 200, 0), 'config_invalid')
 
     icon = pystray.Icon("rclone-bisync-manager",
                         error_image, "RClone BiSync Manager")
