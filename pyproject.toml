@@ -6,13 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "rclone_bisync_manager"
 version = "0.1.0"
 description = "RClone BiSync Manager with system tray application"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dependencies = [
-    "pystray",
-    "pillow",
-    "pyyaml",
-    "croniter",
-    "pydantic",
+    "croniter==3.0.3",
+    "Pillow==10.4.0",
+    "pydantic==2.8.2",
+    "pystray==0.19.5",
+    "python_daemon==3.0.1",
+    "PyYAML==6.0.2",
+    "PyGObject==3.46.0",
 ]
 
 [project.scripts]
