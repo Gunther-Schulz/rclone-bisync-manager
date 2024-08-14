@@ -7,6 +7,9 @@ import json
 import threading
 import time
 import os
+from config import debug
+import tkinter as tk
+from tkinter import ttk
 
 
 def get_daemon_status():
@@ -24,32 +27,45 @@ def get_daemon_status():
 
 def update_menu(status):
     if "error" in status:
-        return pystray.Menu(pystray.MenuItem("Daemon not running", lambda: None))
+        return pystray.Menu(pystray.MenuItem("Daemon not running", None, enabled=False))
 
     menu_items = []
 
+    # Add config status item as non-interactive text
+    config_status = "Valid" if not status.get(
+        "config_invalid", False) else "Invalid"
+    menu_items.append(pystray.MenuItem(
+        f"Config: {config_status}", None, enabled=False))
+
+    # Add currently syncing item
+    menu_items.append(pystray.MenuItem(f"Currently syncing: {
+                      status.get('currently_syncing', 'None')}", None, enabled=False))
+
+    # Add queued jobs item
+    menu_items.append(pystray.MenuItem(f"Queued jobs: {', '.join(
+        status.get('queued_paths', [])) or 'None'}", None, enabled=False))
+
+    # Add sync jobs submenu
     if "sync_jobs" in status:
         for job_key, job_status in status["sync_jobs"].items():
             job_submenu = pystray.Menu(
                 pystray.MenuItem(
-                    f"Last sync: {job_status['last_sync'] or 'Never'}", lambda: None),
+                    f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
                 pystray.MenuItem(
-                    f"Next run: {job_status['next_run'] or 'Not scheduled'}", lambda: None),
+                    f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
                 pystray.MenuItem(
-                    f"Sync status: {job_status['sync_status']}", lambda: None),
+                    f"Sync status: {job_status['sync_status']}", None, enabled=False),
                 pystray.MenuItem(f"Resync status: {
-                                 job_status['resync_status']}", lambda: None)
+                                 job_status['resync_status']}", None, enabled=False)
             )
             menu_items.append(pystray.MenuItem(f"Job: {job_key}", job_submenu))
 
+    # Add interactive menu items
     menu_items.extend([
-        pystray.MenuItem(f"Currently syncing: {status.get(
-            'currently_syncing', 'None')}", lambda: None),
-        pystray.MenuItem(f"Queued jobs: {', '.join(
-            status.get('queued_paths', [])) or 'None'}", lambda: None),
+        pystray.MenuItem("Show Status Window", show_status_window),
         pystray.MenuItem("Reload Config", reload_config),
         pystray.MenuItem("Stop Daemon", stop_daemon),
-        pystray.MenuItem("Exit", lambda: icon.stop()),
+        pystray.MenuItem("Exit", lambda: icon.stop())
     ])
 
     return pystray.Menu(*menu_items)
@@ -80,58 +96,110 @@ def reload_config():
         try:
             response_data = json.loads(response)
             if response_data["status"] == "success":
-                print(response_data["message"])
+                if debug:
+                    print(response_data["message"])
             else:
-                print(f"Error: {response_data['message']}")
+                if debug:
+                    print(f"Error: {response_data['message']}")
+
+            # Update the tray icon immediately
+            current_status = get_daemon_status()
+            icon.menu = update_menu(current_status)
+
             return response_data["status"] == "success"
         except json.JSONDecodeError:
-            print(f"Error: Invalid response from daemon: {response}")
+            if debug:
+                print(f"Error: Invalid JSON response from daemon: {response}")
             return False
     except Exception as e:
-        print(f"Error communicating with daemon: {str(e)}")
+        if debug:
+            print(f"Error communicating with daemon: {str(e)}")
         return False
 
 
-def create_arrow_image(color):
+def create_status_image(color, status):
     size = 64
     image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    # Draw two half-circle arrows
-    padding = 8
-    line_width = 6
+    # Draw circle
+    draw.ellipse([0, 0, size, size], fill=color)
 
-    # First arrow (top half)
-    draw.arc((padding, padding, size - padding, size - padding),
-             start=20, end=160, fill=color, width=line_width)
-    # First arrowhead
-    draw.polygon([
-        (size - padding - 5, size // 2 - 13),
-        (size - padding + 5, size // 2 - 3),
-        (size - padding - 7, size // 2 + 2)
-    ], fill=color)
-
-    # Second arrow (bottom half)
-    draw.arc((padding, padding, size - padding, size - padding),
-             start=200, end=340, fill=color, width=line_width)
-    # Second arrowhead
-    draw.polygon([
-        (padding + 5, size // 2 + 13),
-        (padding - 5, size // 2 + 3),
-        (padding + 7, size // 2 - 2)
-    ], fill=color)
+    # Draw status symbol
+    if status == 'running':
+        # Checkmark
+        draw.line([(16, 32), (28, 44), (48, 24)], fill='white', width=6)
+    elif status == 'syncing':
+        # Rotating arrows
+        draw.arc([8, 8, size-8, size-8], start=45,
+                 end=315, fill='white', width=6)
+        draw.polygon([(56, 14), (56, 26), (44, 20)], fill='white')
+    elif status == 'error':
+        # X mark
+        draw.line([(16, 16), (48, 48)], fill='white', width=6)
+        draw.line([(16, 48), (48, 16)], fill='white', width=6)
+    elif status == 'config_invalid':
+        # Exclamation mark
+        draw.rectangle([28, 12, 36, 40], fill='white')
+        draw.ellipse([28, 44, 36, 52], fill='white')
 
     return image
 
 
+def show_status_window():
+    status = get_daemon_status()
+
+    window = tk.Tk()
+    window.title("RClone BiSync Manager Status")
+    window.geometry("400x300")
+
+    style = ttk.Style()
+    style.theme_use('clam')
+
+    notebook = ttk.Notebook(window)
+    notebook.pack(expand=True, fill='both')
+
+    # General Status Tab
+    general_frame = ttk.Frame(notebook)
+    notebook.add(general_frame, text='General')
+
+    ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
+        'config_invalid', False) else 'Invalid'}").pack(pady=5)
+    ttk.Label(general_frame, text=f"Currently syncing: {
+              status.get('currently_syncing', 'None')}").pack(pady=5)
+    ttk.Label(general_frame, text=f"Queued jobs: {', '.join(
+        status.get('queued_paths', [])) or 'None'}").pack(pady=5)
+
+    # Sync Jobs Tab
+    jobs_frame = ttk.Frame(notebook)
+    notebook.add(jobs_frame, text='Sync Jobs')
+
+    if "sync_jobs" in status:
+        for job_key, job_status in status["sync_jobs"].items():
+            job_frame = ttk.LabelFrame(jobs_frame, text=job_key)
+            job_frame.pack(pady=5, padx=5, fill='x')
+
+            ttk.Label(job_frame, text=f"Last sync: {
+                      job_status['last_sync'] or 'Never'}").pack(anchor='w')
+            ttk.Label(job_frame, text=f"Next run: {
+                      job_status['next_run'] or 'Not scheduled'}").pack(anchor='w')
+            ttk.Label(job_frame, text=f"Sync status: {
+                      job_status['sync_status']}").pack(anchor='w')
+            ttk.Label(job_frame, text=f"Resync status: {
+                      job_status['resync_status']}").pack(anchor='w')
+
+    window.mainloop()
+
+
 def run_tray():
     global icon
-    red_image = create_arrow_image((255, 0, 0))
-    green_image = create_arrow_image((0, 255, 0))
-    yellow_image = create_arrow_image((255, 255, 0))
+    running_image = create_status_image((0, 255, 0), 'running')
+    syncing_image = create_status_image((0, 0, 255), 'syncing')
+    error_image = create_status_image((255, 0, 0), 'error')
+    config_invalid_image = create_status_image((255, 255, 0), 'config_invalid')
 
     icon = pystray.Icon("rclone-bisync-manager",
-                        red_image, "RClone BiSync Manager")
+                        error_image, "RClone BiSync Manager")
     icon.menu = update_menu({"error": "Initial state"})
 
     def check_status_and_update():
@@ -143,14 +211,16 @@ def run_tray():
                 icon.menu = new_menu
                 if "error" not in current_status:
                     if current_status.get("currently_syncing"):
-                        icon.icon = yellow_image
+                        icon.icon = syncing_image
+                    elif current_status.get("config_invalid"):
+                        icon.icon = config_invalid_image
                     else:
-                        icon.icon = green_image
+                        icon.icon = running_image
                 else:
-                    icon.icon = red_image
+                    icon.icon = error_image
                 icon.update_menu()
                 last_status = current_status
-            time.sleep(1)  # Changed from 5 to 1 second
+            time.sleep(1)
 
     threading.Thread(target=check_status_and_update, daemon=True).start()
     icon.run()
