@@ -190,7 +190,7 @@ def stop_daemon():
         client.sendall(b"STOP")
         response = client.recv(1024).decode()
         client.close()
-        print("Daemon is shutting down. Use 'daemon status' to check progress.")
+        # print("Daemon is shutting down. Use 'daemon status' to check progress.")
     except Exception as e:
         print(f"Error stopping daemon: {e}")
 
