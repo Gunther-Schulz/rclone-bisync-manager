@@ -30,6 +30,19 @@ def create_sync_now_handler(job_key):
     return handler
 
 
+def stop_daemon():
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        client.sendall(b"STOP")
+        response = client.recv(1024).decode()
+        client.close()
+        print(response)
+    except Exception as e:
+        print(f"Error stopping daemon: {e}")
+
+
 def update_menu(status):
     if "error" in status:
         return pystray.Menu(pystray.MenuItem("Daemon not running", None, enabled=False))
@@ -56,6 +69,7 @@ def update_menu(status):
             "Queued jobs:\n  None", None, enabled=False))
 
     if "sync_jobs" in status:
+        jobs_submenu = []
         for job_key, job_status in status["sync_jobs"].items():
             job_submenu = pystray.Menu(
                 pystray.MenuItem(
@@ -66,9 +80,16 @@ def update_menu(status):
                     f"Sync status: {job_status['sync_status']}", None, enabled=False),
                 pystray.MenuItem(f"Resync status: {
                                  job_status['resync_status']}", None, enabled=False),
-                pystray.MenuItem("Sync now", create_sync_now_handler(job_key))
+                pystray.MenuItem(
+                    "⚡ Sync now", create_sync_now_handler(job_key)),
+                # Empty text field below Sync now
+                pystray.MenuItem("", None, enabled=False)
             )
-            menu_items.append(pystray.MenuItem(f"Job: {job_key}", job_submenu))
+            jobs_submenu.append(pystray.MenuItem(
+                f"Job: {job_key}", job_submenu))
+
+        menu_items.append(pystray.MenuItem(
+            "Sync Jobs", pystray.Menu(*jobs_submenu)))
 
     menu_items.extend([
         pystray.MenuItem("Show Status Window", show_status_window),
@@ -78,19 +99,6 @@ def update_menu(status):
     ])
 
     return pystray.Menu(*menu_items)
-
-
-def stop_daemon():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        client.sendall(b"STOP")
-        response = client.recv(1024).decode()
-        client.close()
-        print(response)
-    except Exception as e:
-        print(f"Error stopping daemon: {e}")
 
 
 def reload_config():
