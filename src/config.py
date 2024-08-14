@@ -20,6 +20,7 @@ class SyncJobConfig(BaseModel):
     active: bool = Field(default=True)
     dry_run: bool = Field(default=False)
     force_resync: bool = Field(default=False)
+    force_operation: bool = Field(default=False)
     rclone_options: Dict[str, Any] = Field(default_factory=dict)
     bisync_options: Dict[str, Any] = Field(default_factory=dict)
     resync_options: Dict[str, Any] = Field(default_factory=dict)

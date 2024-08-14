@@ -60,7 +60,7 @@ def bisync(key, remote_path, local_path):
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
     rclone_args.extend(get_rclone_args(
-        config._config.bisync_options, 'bisync'))
+        config._config.bisync_options, 'bisync', key))
 
     result = run_rclone_command(rclone_args)
 
@@ -74,9 +74,9 @@ def bisync(key, remote_path, local_path):
 
 
 def resync(key, remote_path, local_path):
-    log_message(f"Resync called with force_resync: {
-                config._config.sync_jobs[key].force_resync}")
-    if config._config.sync_jobs[key].force_resync:
+    value = config._config.sync_jobs[key]
+    log_message(f"Resync called with force_resync: {value.force_resync}")
+    if value.force_resync:
         log_message("Force resync requested.")
     else:
         _, resync_status = read_status(key)
@@ -97,7 +97,7 @@ def resync(key, remote_path, local_path):
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path, '--resync']
     rclone_args.extend(get_rclone_args(
-        config._config.resync_options, 'resync'))
+        config._config.resync_options, 'resync', key))
 
     result = run_rclone_command(rclone_args)
     sync_result = handle_rclone_exit_code(
@@ -108,7 +108,7 @@ def resync(key, remote_path, local_path):
     return sync_result
 
 
-def get_rclone_args(options, operation_type):
+def get_rclone_args(options, operation_type, job_key):
     args = []
 
     # Determine which options to use based on operation type
@@ -142,7 +142,7 @@ def get_rclone_args(options, operation_type):
     # Always add --dry-run if path_dry_run is True
     if config._config.dry_run:
         args.append('--dry-run')
-    if config._config.force_operation:
+    if config._config.sync_jobs[job_key].force_operation:
         args.append('--force')
     if config._config.redirect_rclone_log_output and hasattr(config._config, 'log_file_path'):
         args.extend(['--log-file', config._config.log_file_path])
