@@ -122,7 +122,8 @@ def add_to_sync_queue(job_key):
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
-        client.sendall(json.dumps(job_key).encode())
+        # client.sendall(json.dumps(job_key).encode())
+        client.sendall(json.dumps([job_key]).encode())
         response = client.recv(1024).decode()
         client.close()
         if debug:
