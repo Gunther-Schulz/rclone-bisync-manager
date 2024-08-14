@@ -24,6 +24,12 @@ def get_daemon_status():
         return {"error": str(e)}
 
 
+def create_sync_now_handler(job_key):
+    def handler(item):
+        add_to_sync_queue(job_key)
+    return handler
+
+
 def update_menu(status):
     if "error" in status:
         return pystray.Menu(pystray.MenuItem("Daemon not running", None, enabled=False))
@@ -51,8 +57,7 @@ def update_menu(status):
                     f"Sync status: {job_status['sync_status']}", None, enabled=False),
                 pystray.MenuItem(f"Resync status: {
                                  job_status['resync_status']}", None, enabled=False),
-                pystray.MenuItem("Add to Sync Queue",
-                                 lambda: add_to_sync_queue(job_key))
+                pystray.MenuItem("Sync now", create_sync_now_handler(job_key))
             )
             menu_items.append(pystray.MenuItem(f"Job: {job_key}", job_submenu))
 
@@ -117,7 +122,7 @@ def add_to_sync_queue(job_key):
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
-        client.sendall(json.dumps([job_key]).encode())
+        client.sendall(json.dumps(job_key).encode())
         response = client.recv(1024).decode()
         client.close()
         if debug:
