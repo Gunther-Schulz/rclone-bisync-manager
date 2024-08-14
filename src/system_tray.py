@@ -6,6 +6,7 @@ import socket
 import json
 import threading
 import time
+import os
 
 
 def get_daemon_status():
@@ -13,6 +14,7 @@ def get_daemon_status():
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
+        client.sendall(b"STATUS")
         status = json.loads(client.recv(4096).decode())
         client.close()
         return status
@@ -29,6 +31,7 @@ def update_menu(status):
             'currently_syncing', 'None')}", lambda: None),
         pystray.MenuItem(f"Queued jobs: {', '.join(
             status.get('queued_paths', [])) or 'None'}", lambda: None),
+        pystray.MenuItem("Reload Config", reload_config),
         pystray.MenuItem("Stop Daemon", stop_daemon),
         pystray.MenuItem("Exit", lambda: icon.stop()),
     ]
@@ -41,15 +44,25 @@ def stop_daemon():
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
-        status = json.loads(client.recv(4096).decode())
+        client.sendall(b"STOP")
+        response = client.recv(1024).decode()
         client.close()
-        if 'pid' in status:
-            import os
-            import signal
-            os.kill(status['pid'], signal.SIGTERM)
-            print("Sent stop signal to daemon")
+        print(response)
     except Exception as e:
         print(f"Error stopping daemon: {e}")
+
+
+def reload_config():
+    socket_path = '/tmp/rclone_bisync_manager_status.sock'
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        client.sendall(b"RELOAD")
+        response = client.recv(1024).decode()
+        client.close()
+        print(response)
+    except Exception as e:
+        print(f"Error reloading daemon configuration: {e}")
 
 
 def create_circle_image(color):
@@ -63,6 +76,7 @@ def run_tray():
     global icon
     red_image = create_circle_image((255, 0, 0))
     green_image = create_circle_image((0, 255, 0))
+    yellow_image = create_circle_image((255, 255, 0))
 
     icon = pystray.Icon("rclone-bisync-manager",
                         red_image, "RClone BiSync Manager")
@@ -76,12 +90,15 @@ def run_tray():
                 new_menu = update_menu(current_status)
                 icon.menu = new_menu
                 if "error" not in current_status:
-                    icon.icon = green_image
+                    if current_status.get("currently_syncing"):
+                        icon.icon = yellow_image
+                    else:
+                        icon.icon = green_image
                 else:
                     icon.icon = red_image
                 icon.update_menu()
                 last_status = current_status
-            time.sleep(5)
+            time.sleep(1)  # Changed from 5 to 1 second
 
     threading.Thread(target=check_status_and_update, daemon=True).start()
     icon.run()
