@@ -65,18 +65,43 @@ def reload_config():
         print(f"Error reloading daemon configuration: {e}")
 
 
-def create_circle_image(color):
-    image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+def create_arrow_image(color):
+    size = 64
+    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse([0, 0, 64, 64], fill=color)
+
+    # Draw two half-circle arrows
+    padding = 8
+    line_width = 6
+
+    # First arrow (top half)
+    draw.arc((padding, padding, size - padding, size - padding),
+             start=20, end=160, fill=color, width=line_width)
+    # First arrowhead
+    draw.polygon([
+        (size - padding - 5, size // 2 - 13),
+        (size - padding + 5, size // 2 - 3),
+        (size - padding - 7, size // 2 + 2)
+    ], fill=color)
+
+    # Second arrow (bottom half)
+    draw.arc((padding, padding, size - padding, size - padding),
+             start=200, end=340, fill=color, width=line_width)
+    # Second arrowhead
+    draw.polygon([
+        (padding + 5, size // 2 + 13),
+        (padding - 5, size // 2 + 3),
+        (padding + 7, size // 2 - 2)
+    ], fill=color)
+
     return image
 
 
 def run_tray():
     global icon
-    red_image = create_circle_image((255, 0, 0))
-    green_image = create_circle_image((0, 255, 0))
-    yellow_image = create_circle_image((255, 255, 0))
+    red_image = create_arrow_image((255, 0, 0))
+    green_image = create_arrow_image((0, 255, 0))
+    yellow_image = create_arrow_image((255, 255, 0))
 
     icon = pystray.Icon("rclone-bisync-manager",
                         red_image, "RClone BiSync Manager")
