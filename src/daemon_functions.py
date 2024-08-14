@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timedelta
 import fcntl
 from croniter import croniter
+from queue import Queue
 
 
 def daemon_main():
@@ -151,6 +152,19 @@ def add_to_sync_queue(key):
 def reload_config():
     try:
         config.load_and_validate_config(config.args)
+        new_sync_jobs = set(config._config.sync_jobs.keys())
+
+        with config.sync_lock:
+            # Remove jobs from the queue that are no longer in the config
+            config.queued_paths = config.queued_paths.intersection(
+                new_sync_jobs)
+            new_queue = Queue()
+            while not config.sync_queue.empty():
+                job = config.sync_queue.get()
+                if job in new_sync_jobs:
+                    new_queue.put(job)
+            config.sync_queue = new_queue
+
         log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
         scheduler.schedule_tasks()
