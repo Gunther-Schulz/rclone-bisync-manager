@@ -34,18 +34,40 @@ class SyncJobConfig(BaseModel):
 
 
 class ConfigSchema(BaseModel):
+    # Base path for local files to be synced
     local_base_path: DirectoryPath
+
+    # Path to exclusion rules file (optional)
     exclusion_rules_file: Optional[str] = None
-    max_cpu_usage_percent: conint(ge=0, le=100) = 100
+
+    # CPU usage limit as a percentage
+    max_cpu_usage_percent: int = Field(default=100, ge=0, le=100)
+
+    # Whether to redirect rclone log output
     redirect_rclone_log_output: bool = False
+
+    # Whether to run missed jobs
     run_missed_jobs: bool = False
+
+    # Whether to run initial sync on startup
     run_initial_sync_on_startup: bool = True
+
+    # Global rclone options
     rclone_options: Dict[str, Any] = Field(default_factory=dict)
+
+    # Global bisync options
     bisync_options: Dict[str, Any] = Field(default_factory=dict)
+
+    # Global resync options
     resync_options: Dict[str, Any] = Field(default_factory=dict)
-    sync_jobs: Dict[constr(min_length=1), SyncJobConfig] = Field(...,
-                                                                 description="Sync job configurations")
+
+    # Sync job configurations
+    sync_jobs: Dict[str, SyncJobConfig]
+
+    # Whether to run in dry-run mode
     dry_run: bool = False
+
+    # Path to log file
     log_file_path: str = Field(default_factory=lambda: os.path.join(
         os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')),
         'rclone-bisync-manager',
@@ -131,8 +153,6 @@ class Config:
         self.running = True
         self.shutting_down = False
         self.shutdown_complete = False
-
-        # Internal fields not allowed in YAML config
         self.force_resync = False
         self.console_log = False
         self.specific_sync_jobs = None
