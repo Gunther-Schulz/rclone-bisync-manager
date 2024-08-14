@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 import os
-from scheduler import scheduler
 import signal
 import sys
 import daemon
+from rclone_bisync_manager.scheduler import scheduler
 from rclone_bisync_manager.cli import parse_args
 from rclone_bisync_manager.daemon_functions import daemon_main, stop_daemon, print_daemon_status
 from rclone_bisync_manager.sync import perform_sync_operations

@@ -4,3 +4,7 @@ build/
 d.sh
 
 src/__pycache__/
+
+src/rclone_bisync_manager.egg-info/
+
+*.pyc
