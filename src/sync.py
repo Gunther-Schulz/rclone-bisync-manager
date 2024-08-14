@@ -16,7 +16,7 @@ def perform_sync_operations(key):
 
     if not os.path.exists(status_file):
         log_message(f"No status file found for {key}. Forcing resync.")
-        config._config.force_resync = True
+        config.force_resync = True
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
         return
@@ -24,9 +24,9 @@ def perform_sync_operations(key):
     ensure_local_directory(local_path)
 
     log_message(f"Performing sync operation for {key}. Force resync: {
-                config._config.force_resync}, Dry run: {config._config.dry_run}")
+                config.force_resync}, Dry run: {config._config.dry_run}")
 
-    if config._config.force_resync:
+    if config.force_resync:
         log_message("Force resync requested.")
         resync_result = resync(key, remote_path, local_path)
         if resync_result == "COMPLETED":
@@ -63,9 +63,8 @@ def bisync(key, remote_path, local_path):
 
 
 def resync(key, remote_path, local_path):
-    log_message(f"Resync called with force_resync: {
-                config._config.force_resync}")
-    if config._config.force_resync:
+    log_message(f"Resync called with force_resync: {config.force_resync}")
+    if config.force_resync:
         log_message("Force resync requested.")
     else:
         _, resync_status = read_status(key)
@@ -131,7 +130,7 @@ def get_rclone_args(options, operation_type):
     # Always add --dry-run if path_dry_run is True
     if config._config.dry_run:
         args.append('--dry-run')
-    if config._config.force_operation:
+    if config.force_operation:
         args.append('--force')
     if config._config.redirect_rclone_log_output and hasattr(config._config, 'log_file_path'):
         args.extend(['--log-file', config._config.log_file_path])
@@ -169,18 +168,18 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
     message = messages.get(result_code, f"failed with an unknown error code {
                            result_code}, please check the logs for more information.")
 
-    if not hasattr(config._config, 'sync_errors'):
-        config._config.sync_errors = {}
+    if not hasattr(config, 'sync_errors'):
+        config.sync_errors = {}
     if result_code != 0 and result_code != 9:
-        config._config.sync_errors[local_path] = {
+        config.sync_errors[local_path] = {
             "sync_type": sync_type,
             "error_code": result_code,
             "message": message,
             "timestamp": datetime.now().isoformat()
         }
     else:
-        if hasattr(config._config, 'sync_errors'):
-            config._config.sync_errors[local_path] = None
+        if hasattr(config, 'sync_errors'):
+            config.sync_errors[local_path] = None
 
     if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
@@ -193,7 +192,7 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
 def write_status(job_key, sync_status=None, resync_status=None):
     if config._config.dry_run:
         return  # Don't write status if it's a dry run
-    status_file = config._config.status_file_path[job_key]
+    status_file = config.status_file_path[job_key]
     os.makedirs(os.path.dirname(status_file), exist_ok=True)
     with open(status_file, 'a+') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -213,7 +212,7 @@ def write_status(job_key, sync_status=None, resync_status=None):
 
 
 def read_status(job_key):
-    status_file = config._config.status_file_path[job_key]
+    status_file = config.status_file_path[job_key]
     if os.path.exists(status_file):
         with open(status_file, 'r') as f:
             fcntl.flock(f, fcntl.LOCK_SH)
@@ -246,8 +245,8 @@ def check_for_hash_warnings(key):
                     warning_message = f"WARNING: Detected blank hash warnings for {
                         key}. This may indicate issues with Live Photos or other special file types. You should try to resync and if that is not successful you should consider using --ignore-size for future syncs."
                     log_message(warning_message)
-                    config._config.hash_warnings[key] = warning_message
+                    config.hash_warnings[key] = warning_message
                 else:
-                    config._config.hash_warnings[key] = None
+                    config.hash_warnings[key] = None
 
         config._last_log_position = current_position

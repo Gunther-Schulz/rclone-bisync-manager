@@ -46,22 +46,12 @@ class ConfigSchema(BaseModel):
     sync_jobs: Dict[constr(min_length=1), SyncJobConfig] = Field(...,
                                                                  description="Sync job configurations")
     dry_run: bool = False
-    force_resync: bool = False
-    console_log: bool = False
-    specific_sync_jobs: Optional[List[constr(min_length=1)]] = None
-    force_operation: bool = False
-    daemon_mode: bool = False
-    status_file_path: Dict[constr(min_length=1), str] = Field(
-        default_factory=dict)
     log_file_path: str = Field(default_factory=lambda: os.path.join(
         os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')),
         'rclone-bisync-manager',
         'logs',
         'rclone-bisync-manager.log'
     ))
-    hash_warnings: Dict[constr(min_length=1), Optional[str]] = Field(
-        default_factory=dict)
-    sync_errors: Dict[constr(min_length=1), str] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra='forbid')
 
@@ -142,6 +132,16 @@ class Config:
         self.shutting_down = False
         self.shutdown_complete = False
 
+        # Internal fields not allowed in YAML config
+        self.force_resync = False
+        self.console_log = False
+        self.specific_sync_jobs = None
+        self.force_operation = False
+        self.daemon_mode = False
+        self.status_file_path = {}
+        self.hash_warnings = {}
+        self.sync_errors = {}
+
     def _init_file_paths(self):
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
             '~/.config')), 'rclone-bisync-manager', 'config.yaml')
@@ -201,18 +201,21 @@ class Config:
             raise ValueError(error_message)
 
         self._populate_status_file_paths()
+        self._update_internal_fields(args)
         if debug:
             print("Exiting load_and_validate_config method")
 
     def _update_config_with_args(self, config_data, args):
         config_data.update({
             'dry_run': args.dry_run,
-            'force_resync': args.force_resync,
-            'console_log': args.console_log,
-            'specific_sync_jobs': args.specific_sync_jobs,
-            'force_operation': args.force_operation,
-            'daemon_mode': args.daemon_mode
         })
+
+    def _update_internal_fields(self, args):
+        self.force_resync = args.force_resync
+        self.console_log = args.console_log
+        self.specific_sync_jobs = args.specific_sync_jobs
+        self.force_operation = args.force_operation
+        self.daemon_mode = args.daemon_mode
 
     def _format_validation_errors(self, e):
         error_messages = []
@@ -227,12 +230,11 @@ class Config:
 
     def _populate_status_file_paths(self):
         for job_key in self._config.sync_jobs.keys():
-            self._config.status_file_path[job_key] = self.get_status_file_path(
-                job_key)
+            self.status_file_path[job_key] = self.get_status_file_path(job_key)
 
     def get_status_file_path(self, job_key):
-        if job_key in self._config.status_file_path:
-            return self._config.status_file_path[job_key]
+        if job_key in self.status_file_path:
+            return self.status_file_path[job_key]
         else:
             local_path = self._config.sync_jobs[job_key].local
             remote_path = f"{self._config.sync_jobs[job_key].rclone_remote}:{
@@ -262,9 +264,10 @@ config = Config()
 
 
 def signal_handler(signum, frame):
-    config.running = False
-    config.shutting_down = True
-    from logging_utils import log_message
-    log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
-    if hasattr(config, 'lock_fd'):
-        config.lock_fd.close()
+    if config._config is not None:
+        config.running = False
+        config.shutting_down = True
+        from logging_utils import log_message
+        log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
+        if hasattr(config, 'lock_fd'):
+            config.lock_fd.close()
