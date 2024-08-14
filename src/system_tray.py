@@ -41,10 +41,19 @@ def update_menu(status):
     menu_items.append(pystray.MenuItem(
         f"Config: {config_status}", None, enabled=False))
 
-    menu_items.append(pystray.MenuItem(f"Currently syncing: {
-                      status.get('currently_syncing', 'None')}", None, enabled=False))
-    menu_items.append(pystray.MenuItem(f"Queued jobs: {', '.join(
-        status.get('queued_paths', [])) or 'None'}", None, enabled=False))
+    currently_syncing = status.get('currently_syncing', 'None')
+    menu_items.append(pystray.MenuItem(f"Currently syncing:\n  {
+                      currently_syncing}", None, enabled=False))
+
+    queued_jobs = status.get('queued_paths', [])
+    if queued_jobs:
+        queued_jobs_str = "Queued jobs:\n" + \
+            "\n".join(f"  {job}" for job in queued_jobs)
+        menu_items.append(pystray.MenuItem(
+            queued_jobs_str, None, enabled=False))
+    else:
+        menu_items.append(pystray.MenuItem(
+            "Queued jobs:\n  None", None, enabled=False))
 
     if "sync_jobs" in status:
         for job_key, job_status in status["sync_jobs"].items():
@@ -197,10 +206,23 @@ def show_status_window():
 
     ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
         'config_invalid', False) else 'Invalid'}").pack(pady=5)
-    ttk.Label(general_frame, text=f"Currently syncing: {
-              status.get('currently_syncing', 'None')}").pack(pady=5)
-    ttk.Label(general_frame, text=f"Queued jobs: {', '.join(
-        status.get('queued_paths', [])) or 'None'}").pack(pady=5)
+
+    currently_syncing = status.get('currently_syncing', 'None')
+    ttk.Label(general_frame, text="Currently syncing:").pack(
+        anchor='w', padx=5, pady=(5, 0))
+    ttk.Label(general_frame, text=currently_syncing).pack(
+        anchor='w', padx=20, pady=(0, 5))
+
+    queued_jobs = status.get('queued_paths', [])
+    ttk.Label(general_frame, text="Queued jobs:").pack(
+        anchor='w', padx=5, pady=(5, 0))
+    if queued_jobs:
+        for job in queued_jobs:
+            ttk.Label(general_frame, text=job).pack(
+                anchor='w', padx=20, pady=(0, 2))
+    else:
+        ttk.Label(general_frame, text="None").pack(
+            anchor='w', padx=20, pady=(0, 5))
 
     jobs_frame = ttk.Frame(notebook)
     notebook.add(jobs_frame, text='Sync Jobs')
