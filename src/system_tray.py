@@ -49,11 +49,6 @@ def update_menu(status):
 
     menu_items = []
 
-    config_status = "Valid" if not status.get(
-        "config_invalid", False) else "Invalid"
-    menu_items.append(pystray.MenuItem(
-        f"Config: {config_status}", None, enabled=False))
-
     currently_syncing = status.get('currently_syncing', 'None')
     menu_items.append(pystray.MenuItem(f"Currently syncing:\n  {
                       currently_syncing}", None, enabled=False))
@@ -97,6 +92,12 @@ def update_menu(status):
         pystray.MenuItem("Stop Daemon", stop_daemon),
         pystray.MenuItem("Exit", lambda: icon.stop())
     ])
+
+    # Add config status at the bottom
+    config_status = "Valid" if not status.get(
+        "config_invalid", False) else "Invalid"
+    menu_items.append(pystray.MenuItem(
+        f"Config:\n  {config_status}", None, enabled=False))
 
     return pystray.Menu(*menu_items)
 
