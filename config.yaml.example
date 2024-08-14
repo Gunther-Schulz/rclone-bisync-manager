@@ -10,17 +10,25 @@ redirect_rclone_log_output: true
 # CPU usage limit as a percentage
 max_cpu_usage_percent: 100
 
+# Run missed jobs
+run_missed_jobs: true
+
+# Run initial sync on startup
+run_initial_sync_on_startup: true
+
 # Define the paths to be synchronized
 sync_jobs:
   example_job:
     local: example_folder
     rclone_remote: your_remote
     remote: path/on/remote/storage
-    interval: 30m
-    dry_run: true
+    schedule: "*/30 * * * *" # Every 30 minutes
+    dry_run: false
 
 # Rclone options
 rclone_options:
+  recover: null
+  resilient: null
   max_delete: 5
   log_level: INFO
   max_lock: 15m

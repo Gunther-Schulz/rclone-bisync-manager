@@ -16,7 +16,7 @@ def parse_args():
     # Daemon command
     daemon_parser = subparsers.add_parser(
         'daemon', parents=[global_parser], help='Run in daemon mode')
-    daemon_parser.add_argument('action', choices=['start', 'stop', 'status'],
+    daemon_parser.add_argument('action', choices=['start', 'stop', 'status', 'reload'],
                                help='Action to perform on the daemon')
 
     # Sync command
@@ -24,10 +24,16 @@ def parse_args():
         'sync', parents=[global_parser], help='Perform a sync operation')
     sync_parser.add_argument('sync_jobs', nargs='*',
                              help='Specify sync jobs to run (optional, run all active jobs if not specified)')
-    sync_parser.add_argument('--resync', action='store_true',
-                             help='Force a resynchronization, ignoring previous sync status.')
+    sync_parser.add_argument('--resync', nargs='*', metavar='JOB_KEY',
+                             help='Force a resynchronization for specified job(s), ignoring previous sync status.')
     sync_parser.add_argument('--force-bisync', action='store_true',
                              help='Force the bisync operation without confirmation.')
+
+    # Add sync job command
+    add_sync_parser = subparsers.add_parser('add-sync', parents=[global_parser],
+                                            help='Add a sync job for immediate execution')
+    add_sync_parser.add_argument(
+        'sync_jobs', nargs='+', help='Names of the sync jobs to add')
 
     args = parser.parse_args()
 

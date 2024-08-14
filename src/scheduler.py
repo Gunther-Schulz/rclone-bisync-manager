@@ -2,6 +2,9 @@ from datetime import datetime
 import heapq
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
+from config import config
+from croniter import croniter
+from config import config, sync_state
 
 
 @dataclass(order=True)
@@ -15,12 +18,40 @@ class SyncScheduler:
         self.tasks: List[SyncTask] = []
         self.task_map: Dict[str, SyncTask] = {}
 
+    def schedule_tasks(self):
+        self.check_missed_jobs()
+        now = datetime.now()
+        for key, job in config._config.sync_jobs.items():
+            if job.active:
+                cron_obj = croniter(job.schedule, now)
+                next_run = cron_obj.get_next(datetime)
+                self.schedule_task(key, next_run)
+
+    def check_missed_jobs(self):
+        if not config._config.run_missed_jobs:
+            return
+
+        now = datetime.now()
+        for key, job in config._config.sync_jobs.items():
+            if job.active:
+                last_sync = sync_state.last_sync_times.get(key)
+                if last_sync is None:
+                    self.schedule_task(key, now)
+                else:
+                    cron_obj = croniter(job.schedule, last_sync)
+                    next_run = cron_obj.get_next(datetime)
+                    while next_run < now:
+                        self.schedule_task(key, next_run)
+                        next_run = cron_obj.get_next(datetime)
+
     def schedule_task(self, path_key: str, scheduled_time: datetime):
         if path_key in self.task_map:
             self.remove_task(path_key)
         task = SyncTask(scheduled_time, path_key)
         heapq.heappush(self.tasks, task)
         self.task_map[path_key] = task
+        sync_state.update_job_state(path_key, next_run=scheduled_time)
+        config.save_sync_state()
 
     def remove_task(self, path_key: str):
         if path_key in self.task_map:

@@ -2,10 +2,8 @@ import os
 import socket
 import json
 import threading
-from datetime import datetime
 from config import config
-from scheduler import scheduler
-from sync import read_status
+from config import config, sync_state
 
 
 def start_status_server():
@@ -32,59 +30,61 @@ def start_status_server():
 
 def handle_client(conn):
     try:
-        status = generate_status_report()
-        conn.sendall(status.encode())
+        data = conn.recv(1024).decode()
+        if data == "RELOAD":
+            from daemon_functions import reload_config
+            success = reload_config()
+            response = json.dumps({
+                "status": "success" if success else "error",
+                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {config.config_error_message}"
+            })
+        elif data == "STOP":
+            config.running = False
+            config.shutting_down = True
+            response = json.dumps({
+                "status": "success",
+                "message": "Shutdown signal sent to daemon"
+            })
+        elif data == "STATUS":
+            response = generate_status_report()  # This is already JSON
+        else:
+            response = json.dumps({
+                "status": "error",
+                "message": "Invalid command"
+            })
+        conn.sendall(response.encode())
+    except Exception as e:
+        error_response = json.dumps({
+            "status": "error",
+            "message": f"Error: {str(e)}"
+        })
+        conn.sendall(error_response.encode())
     finally:
         conn.close()
 
 
 def generate_status_report():
-    current_time = datetime.now()
     status = {
         "pid": os.getpid(),
-        "active_syncs": {},
-        "last_check": current_time.isoformat(),
-        "global_dry_run": config.dry_run,
-        "currently_syncing": config.currently_syncing,
-        "sync_queue_size": config.sync_queue.qsize(),
-        "queued_paths": list(config.queued_paths),
+        "running": config.running,
         "shutting_down": config.shutting_down,
-        "cache_dir": config.cache_dir,
-        "log_file_path": config.log_file_path
+        "config_invalid": config.config_invalid,
+        "config_error_message": getattr(config, 'config_error_message', None),
+        "currently_syncing": config.currently_syncing,
+        "queued_paths": list(config.queued_paths),
+        "sync_jobs": {}
     }
 
-    if config.currently_syncing and 'current_sync_start_time' in globals():
-        sync_duration = current_time - globals()['current_sync_start_time']
-        status["current_sync_duration"] = str(sync_duration).split('.')[
-            0]  # Remove microseconds
+    for key, value in config._config.sync_jobs.items():
+        if value.active:
+            job_state = sync_state.get_job_state(key)
+            status["sync_jobs"][key] = {
+                "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
+                "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
+                "sync_status": job_state["sync_status"],
+                "resync_status": job_state["resync_status"],
+                "force_resync": value.force_resync,
+                "hash_warnings": config.hash_warnings.get(key, False)
+            }
 
-    for key, value in config.sync_jobs.items():
-        local_path = value['local']
-        remote_path = f"{value['rclone_remote']}:{value['remote']}"
-
-        last_sync = config.last_sync_times.get(key, "Never")
-        if isinstance(last_sync, datetime):
-            last_sync = last_sync.isoformat()
-
-        sync_status, resync_status = read_status(key)
-
-        status["active_syncs"][key] = {
-            "local_path": local_path,
-            "remote_path": remote_path,
-            "interval": value.get('interval', "Not set"),
-            "last_sync": last_sync,
-            "dry_run": config.dry_run or value.get('dry_run', False),
-            "is_active": value.get('active', True),
-            "is_currently_syncing": key == config.currently_syncing,
-            "sync_status": sync_status,
-            "resync_status": resync_status,
-            "hash_warning": config.hash_warnings.get(key),
-            "sync_error": config.sync_errors.get(key)
-        }
-
-        if key == config.currently_syncing and 'current_sync_start_time' in globals():
-            sync_duration = current_time - globals()['current_sync_start_time']
-            status["active_syncs"][key]["current_sync_duration"] = str(
-                sync_duration).split('.')[0]  # Remove microseconds
-
-    return json.dumps(status, ensure_ascii=False, indent=2)
+    return json.dumps(status)

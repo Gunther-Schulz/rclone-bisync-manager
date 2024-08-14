@@ -2,9 +2,7 @@ import os
 import subprocess
 import shutil
 import hashlib
-from datetime import datetime, timedelta
 from logging_utils import log_message, log_error
-from interval_utils import parse_interval
 from config import config
 import fcntl
 import errno
@@ -65,13 +63,12 @@ def ensure_rclone_dir():
 
 
 def handle_filter_changes():
-    if not config.exclusion_rules_file:
+    if not config._config or not config._config.exclusion_rules_file:
         return
     stored_md5_file = os.path.join(config.cache_dir, '.filter_md5')
-    # Ensure cache directory exists
     os.makedirs(config.cache_dir, exist_ok=True)
-    if os.path.exists(config.exclusion_rules_file):
-        current_md5 = calculate_md5(config.exclusion_rules_file)
+    if os.path.exists(config._config.exclusion_rules_file):
+        current_md5 = calculate_md5(config._config.exclusion_rules_file)
         if os.path.exists(stored_md5_file):
             with open(stored_md5_file, 'r') as f:
                 stored_md5 = f.read().strip()
@@ -81,18 +78,10 @@ def handle_filter_changes():
             with open(stored_md5_file, 'w') as f:
                 f.write(current_md5)
             log_message("Filter file has changed. A resync is required.")
-            config.force_resync = True
+            config._config.force_resync = True
     else:
         log_message(f"Exclusion rules file not found: {
-                    config.exclusion_rules_file}")
-
-
-def check_config_changed():
-    current_mtime = os.path.getmtime(config.config_file)
-    if current_mtime > config.last_config_mtime:
-        config.last_config_mtime = current_mtime
-        return True
-    return False
+                    config._config.exclusion_rules_file}")
 
 
 def calculate_md5(file_path):
@@ -110,21 +99,20 @@ def ensure_log_file_path():
 
 
 def check_and_create_lock_file():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
     try:
-        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        fd = os.open(config.LOCK_FILE_PATH, os.O_CREAT | os.O_EXCL | os.O_RDWR)
         fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         os.write(fd, str(os.getpid()).encode())
         return fd, None
     except OSError as e:
         if e.errno == errno.EEXIST:
             try:
-                with open(lock_file, 'r') as f:
+                with open(config.LOCK_FILE_PATH, 'r') as f:
                     pid = int(f.read().strip())
                 os.kill(pid, 0)  # Check if process is running
                 return None, f"Daemon is already running (PID: {pid})"
             except (OSError, ValueError):
                 # Process not running or PID not valid, remove stale lock file
-                os.unlink(lock_file)
+                os.unlink(config.LOCK_FILE_PATH)
                 return check_and_create_lock_file()  # Retry
         return None, f"Unexpected error: {str(e)}"
