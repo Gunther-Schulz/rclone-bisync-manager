@@ -24,20 +24,31 @@ def perform_sync_operations(key):
 
     sync_status, resync_status, _ = read_status(key)
 
-    if config.force_resync or resync_status != "COMPLETED":
-        log_message("Force resync requested or previous resync not completed.")
+    if config.force_resync or resync_status == "NONE":
+        log_message("Force resync requested or initial sync.")
         resync_result = resync(key, remote_path, local_path)
         if resync_result == "COMPLETED":
             bisync_result = bisync(key, remote_path, local_path)
             write_status(key, sync_status=bisync_result,
                          resync_status=resync_result)
         else:
-            write_status(key, sync_status=resync_result,
+            write_status(key, sync_status="FAILED",
                          resync_status=resync_result)
-    else:
+            log_error(f"Resync failed for {
+                      key}. Manual intervention or force resync required.")
+            return
+    elif resync_status == "COMPLETED":
         bisync_result = bisync(key, remote_path, local_path)
         write_status(key, sync_status=bisync_result,
                      resync_status=resync_status)
+    else:
+        log_error(f"Previous resync failed for {
+                  key}. Manual intervention or force resync required.")
+        return
+
+    sync_state.update_job_state(key, sync_status=bisync_result if 'bisync_result' in locals() else "FAILED",
+                                resync_status=resync_status, last_sync=datetime.now())
+    config.save_sync_state()
 
 
 def bisync(key, remote_path, local_path):
