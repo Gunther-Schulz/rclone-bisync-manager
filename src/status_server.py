@@ -36,25 +36,31 @@ def handle_client(conn):
         if data == "RELOAD":
             from daemon_functions import reload_config
             success = reload_config()
-            if success:
-                response = "Configuration reloaded successfully"
-                conn.sendall(response.encode())
-                log_message(response)  # Add this line to log the response
-            else:
-                response = f"Error reloading configuration. Daemon is in limbo state. Error: {
-                    config.config_error_message}"
-                conn.sendall(response.encode())
+            response = json.dumps({
+                "status": "success" if success else "error",
+                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {config.config_error_message}"
+            })
         elif data == "STOP":
             config.running = False
             config.shutting_down = True
-            conn.sendall(b"Shutdown signal sent to daemon")
+            response = json.dumps({
+                "status": "success",
+                "message": "Shutdown signal sent to daemon"
+            })
         elif data == "STATUS":
-            status = generate_status_report()
-            conn.sendall(status.encode())
+            response = generate_status_report()  # This is already JSON
         else:
-            conn.sendall(b"Invalid command")
+            response = json.dumps({
+                "status": "error",
+                "message": "Invalid command"
+            })
+        conn.sendall(response.encode())
     except Exception as e:
-        conn.sendall(f"Error: {str(e)}".encode())
+        error_response = json.dumps({
+            "status": "error",
+            "message": f"Error: {str(e)}"
+        })
+        conn.sendall(error_response.encode())
     finally:
         conn.close()
 

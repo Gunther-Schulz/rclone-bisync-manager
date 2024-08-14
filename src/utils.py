@@ -99,21 +99,20 @@ def ensure_log_file_path():
 
 
 def check_and_create_lock_file():
-    lock_file = '/tmp/rclone_bisync_manager.lock'
     try:
-        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        fd = os.open(config.LOCK_FILE_PATH, os.O_CREAT | os.O_EXCL | os.O_RDWR)
         fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         os.write(fd, str(os.getpid()).encode())
         return fd, None
     except OSError as e:
         if e.errno == errno.EEXIST:
             try:
-                with open(lock_file, 'r') as f:
+                with open(config.LOCK_FILE_PATH, 'r') as f:
                     pid = int(f.read().strip())
                 os.kill(pid, 0)  # Check if process is running
                 return None, f"Daemon is already running (PID: {pid})"
             except (OSError, ValueError):
                 # Process not running or PID not valid, remove stale lock file
-                os.unlink(lock_file)
+                os.unlink(config.LOCK_FILE_PATH)
                 return check_and_create_lock_file()  # Retry
         return None, f"Unexpected error: {str(e)}"

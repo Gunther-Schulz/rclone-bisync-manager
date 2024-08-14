@@ -93,13 +93,13 @@ def main():
             except Exception as e:
                 print(f"Error reloading daemon configuration: {e}")
     elif args.command == 'sync':
-        if os.path.exists(lock_file):
+        if os.path.exists(config.LOCK_FILE_PATH):
             print(
                 "Error: Daemon is running. Use 'daemon stop' to stop it before running sync manually.")
             sys.exit(1)
 
         # Create a lock file for non-daemon mode
-        lock_fd = open(lock_file, 'w')
+        lock_fd = open(config.LOCK_FILE_PATH, 'w')
         try:
             fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except IOError:
@@ -128,7 +128,7 @@ def main():
             # Release the lock and remove the lock file
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()
-            os.unlink(lock_file)
+            os.unlink(config.LOCK_FILE_PATH)
     elif args.command == 'add-sync':
         add_sync_jobs(args)
 

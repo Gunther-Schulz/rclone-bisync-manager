@@ -96,7 +96,7 @@ def daemon_main():
         if lock_fd is not None:
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
-            os.unlink('/tmp/rclone_bisync_manager.lock')
+            os.unlink(config.LOCK_FILE_PATH)
 
 
 def process_sync_queue():
@@ -161,14 +161,13 @@ def reload_config():
 
 
 def stop_daemon():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    if not os.path.exists(socket_path):
+    if not os.path.exists(config.LOCK_FILE_PATH):
         print("Daemon is not running.")
         return
 
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
+        client.connect('/tmp/rclone_bisync_manager_status.sock')
         client.sendall(b"STOP")
         response = client.recv(1024).decode()
         client.close()

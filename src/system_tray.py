@@ -26,7 +26,23 @@ def update_menu(status):
     if "error" in status:
         return pystray.Menu(pystray.MenuItem("Daemon not running", lambda: None))
 
-    menu_items = [
+    menu_items = []
+
+    if "sync_jobs" in status:
+        for job_key, job_status in status["sync_jobs"].items():
+            job_submenu = pystray.Menu(
+                pystray.MenuItem(
+                    f"Last sync: {job_status['last_sync'] or 'Never'}", lambda: None),
+                pystray.MenuItem(
+                    f"Next run: {job_status['next_run'] or 'Not scheduled'}", lambda: None),
+                pystray.MenuItem(
+                    f"Sync status: {job_status['sync_status']}", lambda: None),
+                pystray.MenuItem(f"Resync status: {
+                                 job_status['resync_status']}", lambda: None)
+            )
+            menu_items.append(pystray.MenuItem(f"Job: {job_key}", job_submenu))
+
+    menu_items.extend([
         pystray.MenuItem(f"Currently syncing: {status.get(
             'currently_syncing', 'None')}", lambda: None),
         pystray.MenuItem(f"Queued jobs: {', '.join(
@@ -34,7 +50,7 @@ def update_menu(status):
         pystray.MenuItem("Reload Config", reload_config),
         pystray.MenuItem("Stop Daemon", stop_daemon),
         pystray.MenuItem("Exit", lambda: icon.stop()),
-    ]
+    ])
 
     return pystray.Menu(*menu_items)
 
@@ -60,9 +76,20 @@ def reload_config():
         client.sendall(b"RELOAD")
         response = client.recv(1024).decode()
         client.close()
-        print(response)
+
+        try:
+            response_data = json.loads(response)
+            if response_data["status"] == "success":
+                print(response_data["message"])
+            else:
+                print(f"Error: {response_data['message']}")
+            return response_data["status"] == "success"
+        except json.JSONDecodeError:
+            print(f"Error: Invalid response from daemon: {response}")
+            return False
     except Exception as e:
-        print(f"Error reloading daemon configuration: {e}")
+        print(f"Error communicating with daemon: {str(e)}")
+        return False
 
 
 def create_arrow_image(color):

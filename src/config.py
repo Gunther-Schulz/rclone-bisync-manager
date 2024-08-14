@@ -141,6 +141,7 @@ class Config:
         self.config_file = None
         self.config_invalid = False
         self.config_error_message = None
+        self.LOCK_FILE_PATH = '/tmp/rclone_bisync_manager.lock'
         self._init_file_paths()
         self._init_logging_paths()
         self.last_sync_times = {}
