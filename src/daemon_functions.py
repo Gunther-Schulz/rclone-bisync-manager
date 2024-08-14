@@ -54,12 +54,17 @@ def daemon_main():
         else:
             log_message("Skipping initial sync as per configuration")
 
+        limbo_message_logged = False
         while config.running:
             if config.config_invalid:
-                log_message(
-                    "Daemon in limbo state due to invalid configuration. Waiting for valid config...")
+                if not limbo_message_logged:
+                    log_message(
+                        "Daemon in limbo state due to invalid configuration. Waiting for valid config...")
+                    limbo_message_logged = True
                 time.sleep(5)  # Sleep for 5 seconds when in limbo state
                 continue
+            else:
+                limbo_message_logged = False  # Reset the flag when config is valid
 
             process_sync_queue()
             check_scheduled_tasks()
