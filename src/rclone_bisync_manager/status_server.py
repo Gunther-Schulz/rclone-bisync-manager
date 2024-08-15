@@ -31,7 +31,7 @@ def handle_client(conn):
     try:
         data = conn.recv(1024).decode()
         if data == "RELOAD":
-            from daemon_functions import reload_config
+            from rclone_bisync_manager.daemon_functions import reload_config
             success = reload_config()
             response = json.dumps({
                 "status": "success" if success else "error",
