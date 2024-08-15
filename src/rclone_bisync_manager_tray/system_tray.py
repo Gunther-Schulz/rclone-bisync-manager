@@ -59,7 +59,8 @@ def update_menu(status):
     if "error" in status:
         return pystray.Menu(
             pystray.MenuItem("Daemon not running", None, enabled=False),
-            pystray.MenuItem("Start Daemon", start_daemon)
+            pystray.MenuItem("Start Daemon", start_daemon),
+            pystray.MenuItem("Exit", lambda: icon.stop())  # Add this line
         )
 
     menu_items = []
@@ -296,29 +297,29 @@ def run_tray():
                 icon.menu = new_menu
                 if "error" in current_status:
                     icon.icon = create_status_image(
-                        (128, 128, 128), current_status)  # Gray for error
+                        (158, 158, 158), "error")  # Gray for not running
                 elif current_status.get("shutting_down", False):
                     icon.icon = create_status_image(
                         # Purple for shutting down
-                        (147, 112, 219), current_status)
+                        (156, 39, 176), current_status)
                 elif current_status.get("currently_syncing"):
                     icon.icon = create_status_image(
                         (33, 150, 243), current_status)  # Blue for syncing
+                elif current_status.get("config_invalid"):
+                    icon.icon = create_status_image(
+                        # Red for config invalid
+                        (244, 67, 54), current_status)
+                elif any(job["sync_status"] not in ["COMPLETED", "NONE", None] or
+                         job["resync_status"] not in ["COMPLETED", "NONE", None] or
+                         job.get("hash_warnings", False)
+                         for job in current_status.get("sync_jobs", {}).values()):
+                    icon.icon = create_status_image(
+                        # Orange for sync issues
+                        (255, 152, 0), current_status)
                 else:
-                    if current_status.get("config_invalid"):
-                        icon.icon = create_status_image(
-                            # Red for invalid config
-                            (244, 67, 54), current_status)
-                    elif any(job["sync_status"] not in ["COMPLETED", "NONE", None] or
-                             job["resync_status"] not in ["COMPLETED", "NONE", None] or
-                             job.get("hash_warnings", False)
-                             for job in current_status.get("sync_jobs", {}).values()):
-                        icon.icon = create_status_image(
-                            # Orange for sync issues
-                            (255, 165, 0), current_status)
-                    else:
-                        icon.icon = create_status_image(
-                            (76, 175, 80), current_status)  # Green for running
+                    icon.icon = create_status_image(
+                        # Green for running normally
+                        (76, 175, 80), current_status)
                 icon.update_menu()
                 last_status = current_status
             time.sleep(1)
