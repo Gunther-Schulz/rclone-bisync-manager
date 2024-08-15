@@ -9,6 +9,9 @@ import json
 import threading
 import time
 import subprocess
+import os
+import cairosvg
+import io
 
 
 def get_daemon_status():
@@ -169,56 +172,55 @@ def add_to_sync_queue(job_key):
 
 
 def determine_arrow_color(status, bg_color):
-    if isinstance(status, str):
-        return "black" if status == "error" else "black"
+    if isinstance(status, str) and status == "error":
+        return "#FFFFFF"  # White for error (daemon not running)
 
-    if bg_color == (0, 120, 255):  # Blue background
-        return "black"
+    if bg_color == (33, 150, 243):  # Blue (syncing)
+        return "#FFFFFF"  # White
 
     if status.get("config_invalid") or status.get("config_error_message"):
-        return "red"
+        return "#FFFFFF"  # White for invalid config
 
-    has_sync_issues = False
-    if "sync_jobs" in status:
-        for job_key, job_status in status["sync_jobs"].items():
-            if (job_status["sync_status"] not in ["COMPLETED", "NONE", None] or
-                    job_status["resync_status"] not in ["COMPLETED", "NONE", None] or
-                    job_status.get("hash_warnings", False)):
-                has_sync_issues = True
-                break
+    has_sync_issues = any(
+        job["sync_status"] not in ["COMPLETED", "NONE", None] or
+        job["resync_status"] not in ["COMPLETED", "NONE", None] or
+        job.get("hash_warnings", False)
+        for job in status.get("sync_jobs", {}).values()
+    )
 
     if has_sync_issues:
-        return "yellow"  # New warning state for sync issues
+        return "#000000"  # Black for sync issues
 
-    return "green"
+    return "#FFFFFF"  # White for normal operation
 
 
 def create_status_image(color, status):
     size = 64
-    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-
+    background = Image.new('RGBA', (size, size), color)
+    draw = ImageDraw.Draw(background)
     draw.ellipse([0, 0, size, size], fill=color)
 
+    # Load SVG content from file
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    svg_path = os.path.join(script_dir, 'rclone-bisync-manager.svg')
+
+    with open(svg_path, 'r') as svg_file:
+        svg_content = svg_file.read()
+
     arrow_color = determine_arrow_color(status, color)
-    if isinstance(status, str) and status == "error":
-        arrow_color = "black"  # Force black color for error state
+    svg_content = svg_content.replace(
+        'fill="#000000"', f'fill="{arrow_color}"')
+    svg_content = svg_content.replace(
+        'stroke="#000000"', f'stroke="{arrow_color}"')
 
-    if arrow_color != "white":
-        draw.arc([8, 8, size-8, size-8], start=0,
-                 end=270, fill=arrow_color, width=8)
-        draw.arc([4, 4, size-4, size-4], start=250,
-                 end=270, fill=arrow_color, width=16)
-        draw.polygon([
-            (size-4, size//2),
-            (size-12, size//2-8),
-            (size-12, size//2+8)
-        ], fill=arrow_color)
-    else:
-        draw.line([(16, 16), (48, 48)], fill='white', width=8)
-        draw.line([(16, 48), (48, 16)], fill='white', width=8)
+    # Convert SVG to PNG
+    png_data = cairosvg.svg2png(bytestring=svg_content.encode(
+        'utf-8'), output_width=size, output_height=size)
+    icon = Image.open(io.BytesIO(png_data))
 
-    return image
+    # Composite the icon onto the background
+    result = Image.alpha_composite(background, icon)
+    return result
 
 
 def show_status_window():
@@ -294,29 +296,29 @@ def run_tray():
                 icon.menu = new_menu
                 if "error" in current_status:
                     icon.icon = create_status_image(
-                        (255, 0, 0), "error")  # Red for error
+                        (128, 128, 128), current_status)  # Gray for error
                 elif current_status.get("shutting_down", False):
                     icon.icon = create_status_image(
-                        # Orange for shutting down
-                        (255, 165, 0), "shutting_down")
+                        # Purple for shutting down
+                        (147, 112, 219), current_status)
                 elif current_status.get("currently_syncing"):
                     icon.icon = create_status_image(
-                        (0, 120, 255), current_status)  # Blue for syncing
+                        (33, 150, 243), current_status)  # Blue for syncing
                 else:
                     if current_status.get("config_invalid"):
-                        # Light yellow for config invalid
                         icon.icon = create_status_image(
-                            (255, 200, 0), current_status)
+                            # Red for invalid config
+                            (244, 67, 54), current_status)
                     elif any(job["sync_status"] not in ["COMPLETED", "NONE", None] or
                              job["resync_status"] not in ["COMPLETED", "NONE", None] or
                              job.get("hash_warnings", False)
                              for job in current_status.get("sync_jobs", {}).values()):
                         icon.icon = create_status_image(
-                            # Yellow for sync issues
-                            (255, 255, 0), current_status)
+                            # Orange for sync issues
+                            (255, 165, 0), current_status)
                     else:
                         icon.icon = create_status_image(
-                            (0, 200, 0), current_status)  # Green for running
+                            (76, 175, 80), current_status)  # Green for running
                 icon.update_menu()
                 last_status = current_status
             time.sleep(1)
