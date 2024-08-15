@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=RClone BiSync Manager Tray
+GenericName=File Synchronization Manager
+Comment=System tray application for RClone BiSync Manager
+Exec=rclone-bisync-manager-tray
+Icon=rclone-bisync-manager
+Terminal=false
+Categories=Utility;FileTools;
+StartupNotify=true

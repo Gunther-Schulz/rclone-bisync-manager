@@ -1,286 +1,194 @@
 # RClone BiSync Manager
 
-RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files between local directories and remote storage supported by RClone. This Python script runs in the background, providing continuous synchronization with features such as periodic syncing, detailed logging, and real-time status reporting.
+RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files using RClone. It provides a flexible and configurable way to manage multiple sync jobs with customizable schedules and options.
 
-## Key Features
+## Features
 
-- **Daemon-based Operation**: Runs continuously in the background, managing synchronization tasks without user intervention.
-- **Periodic Synchronization**: Automatically syncs files based on user-defined schedules for each sync job.
-- **Real-time Status Reporting**: Provides up-to-date information on sync operations and daemon status.
-- **Dynamic Configuration Reloading**: Automatically detects and applies configuration changes without restarting the daemon.
-- **Graceful Shutdown Handling**: Ensures clean termination of sync operations when stopping the daemon.
-- **Flexible Sync Options**: Supports both bisync and resync operations with customizable options.
-- **Dry Run Option**: Test synchronization without making actual changes.
-- **Detailed Logging**: Separate logs for general operations and errors.
-- **CPU Usage Limiting**: Option to limit CPU usage during sync operations (requires cpulimit).
-- **Hash Warning Detection**: Identifies and logs hash warnings during sync operations.
-- **Conflict Resolution**: Supports automatic conflict resolution for sync conflicts.
-- **Recovery Mode**: Allows robust recovery from interruptions without requiring a full resync.
+- Daemon-based operation for continuous background syncing
+- Support for multiple sync jobs with individual configurations
+- Customizable sync schedules using cron syntax
+- Global and per-job RClone options
+- System tray application for easy status monitoring and control
+- Dry-run mode for testing configurations
+- CPU usage limiting to prevent system overload
+- Configurable exclusion rules
+- Automatic handling of missed sync jobs
 
-## Prerequisites
+## Requirements
 
-- Python 3.6+
-- `rclone` (required)
-- `cpulimit` (optional, for CPU usage limiting)
-- Required Python packages (install via `pip install rclone-bisync-manager`):
-  - pyyaml
-  - python-daemon
-  - croniter
-  - pydantic
+- Python 3.12 or higher
+- RClone installed and configured on your system
 
 ## Installation
 
-For users:
+You can install RClone BiSync Manager using pip:
 
-```bash
+```
 pip install rclone-bisync-manager
-```
-
-For development:
-
-```bash
-git clone https://github.com/yourusername/rclone-bisync-manager.git
-cd rclone-bisync-manager
-```
-
-## Usage
-
-RClone BiSync Manager can operate in three modes: daemon mode, sync mode, and add-sync mode.
-
-### Global Options
-
-These options can be used with any command:
-
-- **-d, --dry-run**: Perform a dry run without making actual changes.
-- **--console-log**: Enable logging to the console in addition to log files.
-
-### Daemon Mode
-
-To manage the RClone BiSync Manager daemon:
-
-```bash
-./rclone_bisync_manager.py daemon [start|stop|status|reload]
-```
-
-Examples:
-
-- Start the daemon: `./rclone_bisync_manager.py daemon start`
-- Stop the daemon: `./rclone_bisync_manager.py daemon stop`
-- Get daemon status: `./rclone_bisync_manager.py daemon status`
-- Reload daemon configuration: `./rclone_bisync_manager.py daemon reload`
-
-### Sync Mode
-
-In sync mode, the script performs a single sync operation and then exits:
-
-```bash
-./rclone_bisync_manager.py sync [sync_jobs] [options]
-```
-
-Options:
-
-- **sync_jobs**: Specify particular sync jobs to run (optional, syncs all if not specified).
-- **--resync**: Force a resynchronization of specified sync jobs.
-- **--force-bisync**: Force a bisync operation without confirmation.
-
-Examples:
-
-- Sync all jobs: `./rclone_bisync_manager.py sync`
-- Sync specific jobs: `./rclone_bisync_manager.py sync job1 job2`
-- Force resync of a job: `./rclone_bisync_manager.py sync job1 --resync`
-
-### Add Sync Job
-
-To add a sync job for immediate execution while the daemon is running:
-
-```bash
-./rclone_bisync_manager.py add-sync job1 [job2 ...]
 ```
 
 ## Configuration
 
-The configuration file (`~/.config/rclone-bisync-manager/config.yaml`) contains all necessary settings for the synchronization process. Key configuration options include:
-
-- `local_base_path`: Base path for local files to be synced
-- `exclusion_rules_file`: File containing rules for excluding files/directories from sync
-- `redirect_rclone_log_output`: Redirect rclone log output to the main log file
-- `max_cpu_usage_percent`: CPU usage limit as a percentage
-- `run_missed_jobs`: Whether to run missed jobs on startup
-- `run_initial_sync_on_startup`: Whether to perform an initial sync when the daemon starts
-- `sync_jobs`: Define the paths to be synchronized
-- `rclone_options`: Customize global rclone options
-- `bisync_options`: Customize global bisync-specific options
-- `resync_options`: Customize global resync-specific options
-
-### Sync Job Configuration
-
-Each sync job in the `sync_jobs` section of the configuration file should have the following structure:
+1. Create a configuration file at `~/.config/rclone-bisync-manager/config.yaml`
+2. Use the example configuration file as a template:
 
 ```yaml
+local_base_path: /path/to/your/local/base/directory
+exclusion_rules_file: /path/to/your/filter.txt
+redirect_rclone_log_output: true
+max_cpu_usage_percent: 100
+run_missed_jobs: true
+run_initial_sync_on_startup: true
+
 sync_jobs:
-  job_name:
-    local: "local_folder_name"
-    rclone_remote: "remote_name"
-    remote: "path/on/remote/storage"
+  example_job:
+    local: example_folder
+    rclone_remote: your_remote
+    remote: path/on/remote/storage
     schedule: "*/30 * * * *"
-    active: true
     dry_run: false
-    force_resync: false
-    force_operation: false
     rclone_options:
-      option1: value1
-    bisync_options:
-      option2: value2
-    resync_options:
-      option3: value3
+      log_level: Notice
+
+rclone_options:
+  recover: null
+  resilient: null
+  max_delete: 5
+  log_level: INFO
+  max_lock: 15m
+  retries: 3
+  low_level_retries: 10
+  compare: "size,modtime,checksum"
+  create_empty_src_dirs: null
+  check_access: null
+  exclude:
+    - "*.tmp"
+    - "*.log"
+
+bisync_options:
+  conflict_resolve: newer
+  conflict_loser: num
+  conflict_suffix: rc-conflict
+  track_renames: null
+
+resync_options:
+  error_on_no_transfer: null
 ```
 
-- `job_name`: A unique identifier for the sync job
-- `local`: The name of the local folder to sync (relative to `local_base_path`)
-- `rclone_remote`: The name of the rclone remote to use
-- `remote`: The path on the remote storage
-- `schedule`: A cron-style schedule for when to run the sync job
-- `active`: Whether the job is active (true/false)
-- `dry_run`: Whether to perform a dry run for this job (true/false)
-- `force_resync`: Whether to force a resync for this job (true/false)
-- `force_operation`: Whether to force the operation without confirmation (true/false)
-- `rclone_options`, `bisync_options`, `resync_options`: Job-specific options that override global settings
+Adjust the configuration to match your specific sync requirements.
 
-## Logs
+## Usage
 
-Logs are stored in the default log directory:
+### Starting the Daemon
+
+To start the RClone BiSync Manager daemon:
 
 ```
-~/.local/state/rclone-bisync-manager/logs/rclone-bisync-manager.log
+rclone-bisync-manager daemon start
 ```
 
-## Advanced Usage
+### Stopping the Daemon
 
-### Reloading Configuration
+To stop the daemon:
 
-You can reload the configuration without restarting the daemon:
-
-```bash
-./rclone_bisync_manager.py daemon reload
+```
+rclone-bisync-manager daemon stop
 ```
 
 ### Checking Daemon Status
 
-To get detailed status information about the running daemon:
+To check the status of the daemon:
 
-```bash
-./rclone_bisync_manager.py daemon status
+```
+rclone-bisync-manager daemon status
 ```
 
-This will provide information about running jobs, queued jobs, and any configuration errors.
+### Running a Manual Sync
 
-### Managing Sync Jobs
+To run a manual sync for specific jobs:
 
-You can add new sync jobs to a running daemon:
-
-```bash
-./rclone_bisync_manager.py add-sync new_job_name
+```
+rclone-bisync-manager sync [job1] [job2] ...
 ```
 
-This will trigger an immediate sync for the new job and add it to the scheduled tasks.
+If no job names are specified, all active jobs will be synced.
 
-## Setting Up a New Share
+### System Tray Application
 
-To set up a new share for synchronization, follow these steps:
+To start the system tray application:
 
-1. Ensure you have rclone configured with the remote you want to use. If not, set it up using `rclone config`.
+```
+rclone-bisync-manager-tray
+```
 
-2. Add a new sync job to your configuration file (`~/.config/rclone-bisync-manager/config.yaml`):
+This provides a convenient way to monitor sync status and control the daemon.
 
-   ```yaml
-   sync_jobs:
-     new_share:
-       local: "LocalFolderName"
-       rclone_remote: "YourRemoteName"
-       remote: "path/on/remote/storage"
-       schedule: "*/30 * * * *"
-       active: true
+## Desktop Integration
+
+A desktop file is provided for easy integration with desktop environments. To install it:
+
+1. Copy the `rclone-bisync-manager-tray.desktop` file to `/usr/share/applications/` (system-wide) or `~/.local/share/applications/` (single user).
+2. Make the file executable:
+   ```
+   chmod +x /path/to/rclone-bisync-manager-tray.desktop
+   ```
+3. Ensure you have an icon file named `rclone-bisync-manager.png` or `rclone-bisync-manager.svg` in an appropriate icon directory (e.g., `/usr/share/icons/hicolor/scalable/apps/` for SVG).
+
+After installation, you should be able to find and launch the RClone BiSync Manager Tray application from your desktop environment's application menu.
+
+## Systemd Service
+
+RClone BiSync Manager can be run as a user service, which is recommended for most users. This allows the service to run under your user account without requiring root privileges.
+
+To set up RClone BiSync Manager as a user service:
+
+1. Create a directory for user services if it doesn't exist:
+
+   ```
+   mkdir -p ~/.config/systemd/user/
    ```
 
-3. Create the RCLONE_TEST file in both the local and remote locations. This file is used to verify the connection and permissions. Replace `<path>` with your actual paths:
+2. Create a file named `rclone-bisync-manager.service` in `~/.config/systemd/user/` with the following content:
 
-   For local:
+   ```ini
+   [Unit]
+   Description=RClone BiSync Manager Daemon
+   After=network.target
 
-   ```bash
-   rclone touch "/path/to/your/local/base/directory/LocalFolderName/RCLONE_TEST"
-   ```
+   [Service]
+   ExecStart=/usr/bin/rclone-bisync-manager daemon start
+   ExecStop=/usr/bin/rclone-bisync-manager daemon stop
+   Restart=on-failure
 
-   For remote:
-
-   ```bash
-   rclone touch "YourRemoteName:path/on/remote/storage/RCLONE_TEST"
-   ```
-
-4. Perform an initial sync to ensure everything is set up correctly:
-
-   ```bash
-   ./rclone_bisync_manager.py sync new_share --resync
-   ```
-
-5. If the initial sync is successful, you can start the daemon (if it's not already running) to begin automatic synchronization:
-
-   ```bash
-   ./rclone_bisync_manager.py daemon start
-   ```
-
-Remember to replace "LocalFolderName", "YourRemoteName", and "path/on/remote/storage" with your actual folder names and paths.
-
-### Troubleshooting RCLONE_TEST File Issues
-
-If you encounter issues with the RCLONE_TEST file:
-
-1. Ensure you have write permissions on both the local and remote locations.
-2. Check if the file exists using `rclone lsf`:
-   ```bash
-   rclone lsf "/path/to/your/local/base/directory/LocalFolderName"
-   rclone lsf "YourRemoteName:path/on/remote/storage"
-   ```
-3. If the file doesn't exist or you can't create it, check your rclone configuration and permissions for the remote storage.
-
-For more detailed information on rclone commands and troubleshooting, refer to the [official rclone documentation](https://rclone.org/docs/).
-
-## Troubleshooting
-
-- If you encounter "hash unexpectedly blank" warnings, you may need to use the `--ignore-size` option in your rclone configuration for the affected job.
-- Check the log file for detailed error messages and sync operation statuses.
-- Use the `--dry-run` option to test your configuration without making actual changes.
-
-## Contributing
-
-Contributions to the script are welcome. Please fork the repository, make your changes, and submit a pull request.
-
-## License
-
-[Specify the license under which the script is released]
-
----
-
-For more details on `rclone` and its capabilities, visit the [official RClone documentation](https://rclone.org/docs/).
-
-## Systemd Service (Optional)
-
-To run RClone BiSync Manager as a systemd service:
-
-1. Copy the service file to the systemd directory:
-
-   ```bash
-   sudo cp systemd/rclone-bisync-manager.service /etc/systemd/system/
-   ```
-
-2. Reload the systemd daemon:
-
-   ```bash
-   sudo systemctl daemon-reload
+   [Install]
+   WantedBy=default.target
    ```
 
 3. Enable and start the service:
 
-   ```bash
-   sudo systemctl enable rclone-bisync-manager.service
-   sudo systemctl start rclone-bisync-manager.service
    ```
+   systemctl --user enable rclone-bisync-manager.service
+   systemctl --user start rclone-bisync-manager.service
+   ```
+
+4. To check the status of the service:
+
+   ```
+   systemctl --user status rclone-bisync-manager.service
+   ```
+
+5. To view the logs:
+
+   ```
+   journalctl --user -u rclone-bisync-manager.service
+   ```
+
+By running RClone BiSync Manager as a user service, it will start automatically when you log in and run with your user permissions.
+
+### Running as a System Service (Alternative)
+
+If you prefer to run RClone BiSync Manager as a system-wide service, you can create the service file in `/etc/systemd/system/` instead and use `sudo` with the systemctl commands. However, this is generally not recommended unless you have a specific reason to run it system-wide.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
