@@ -112,16 +112,15 @@ def update_menu(status):
 
     menu_items.extend([
         pystray.MenuItem("Show Status Window", show_status_window),
-        pystray.MenuItem("Reload Config", reload_config),
-        pystray.MenuItem("Stop Daemon", stop_daemon),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Reload Config", reload_config,
+                         enabled=not status.get("config_invalid", False) and
+                         status.get('currently_syncing') == None),
+        pystray.MenuItem(f"Config: {'Valid' if not status.get('config_invalid', False) else 'Invalid'}",
+                         None, enabled=False),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", lambda: icon.stop())
     ])
-
-    # Add config status at the bottom
-    config_status = "Valid" if not status.get(
-        "config_invalid", False) else "Invalid"
-    menu_items.append(pystray.MenuItem(
-        f"Config:\n  {config_status}", None, enabled=False))
 
     return pystray.Menu(*menu_items)
 
