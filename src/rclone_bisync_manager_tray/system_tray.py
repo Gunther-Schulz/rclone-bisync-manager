@@ -105,7 +105,7 @@ def update_menu(status):
                 pystray.MenuItem(f"Resync status: {
                                  job_status['resync_status']}", None, enabled=False),
                 pystray.MenuItem(
-                    "⚡ Sync now", create_sync_now_handler(job_key)),
+                    "⚡ Sync Now", create_sync_now_handler(job_key)),
                 pystray.MenuItem("", None, enabled=False)
             )
             jobs_submenu.append(pystray.MenuItem(
