@@ -8,6 +8,7 @@ import socket
 import json
 import threading
 import time
+import subprocess
 
 
 def get_daemon_status():
@@ -42,9 +43,21 @@ def stop_daemon():
         print(f"Error stopping daemon: {e}")
 
 
+def start_daemon():
+    try:
+        subprocess.run(
+            ["rclone-bisync-manager", "daemon", "start"], check=True)
+        print("Daemon started successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"Error starting daemon: {e}")
+
+
 def update_menu(status):
     if "error" in status:
-        return pystray.Menu(pystray.MenuItem("Daemon not running", None, enabled=False))
+        return pystray.Menu(
+            pystray.MenuItem("Daemon not running", None, enabled=False),
+            pystray.MenuItem("Start Daemon", start_daemon)
+        )
 
     menu_items = []
 
