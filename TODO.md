@@ -1,9 +1,16 @@
 # TODO
 
-- test what happens when ssupending the pc
+## Testing
 
-- internal python cpu limiter
-- no need for "global' keyword because of config ?
-- test per sync job options override
-- exclude rule file change shoudl trigger a resync (needs testing)
-- sparate filter files per job
+- [ ] Test behavior when suspending the PC
+- [ ] Test per-sync job options override
+- [ ] Verify exclude rule file changes trigger a resync
+
+## Development
+
+- [ ] Implement internal Python CPU limiter
+- [ ] Implement separate filter files per job
+
+## Improvements
+
+- [ ] Refactor code to eliminate 'global' keyword (if possible)
