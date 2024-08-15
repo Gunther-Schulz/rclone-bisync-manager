@@ -100,9 +100,15 @@ def daemon_main():
 
     finally:
         if lock_fd is not None:
-            fcntl.lockf(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
-            os.unlink(config.LOCK_FILE_PATH)
+            try:
+                fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            except IOError:
+                pass  # Ignore errors during shutdown
+            try:
+                os.unlink(config.LOCK_FILE_PATH)
+            except OSError:
+                pass  # Ignore if the file is already gone
 
 
 def process_sync_queue():
@@ -190,7 +196,7 @@ def stop_daemon():
         client.sendall(b"STOP")
         response = client.recv(1024).decode()
         client.close()
-        # print("Daemon is shutting down. Use 'daemon status' to check progress.")
+        print("Daemon is shutting down. Use 'daemon status' to check progress.")
     except Exception as e:
         print(f"Error stopping daemon: {e}")
 

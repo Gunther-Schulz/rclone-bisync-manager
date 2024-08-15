@@ -2,6 +2,8 @@ import os
 import subprocess
 import shutil
 import hashlib
+
+import psutil
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import config
 import fcntl
@@ -99,20 +101,27 @@ def ensure_log_file_path():
 
 
 def check_and_create_lock_file():
+    lock_file_path = '/tmp/rclone_bisync_manager.lock'
+
+    if os.path.exists(lock_file_path):
+        try:
+            with open(lock_file_path, 'r') as lock_file:
+                pid = int(lock_file.read().strip())
+            if psutil.pid_exists(pid):
+                process = psutil.Process(pid)
+                if any('rclone-bisync-manager' in arg for arg in process.cmdline()):
+                    return None, f"Daemon is already running (PID: {pid})"
+            # If we reach here, the PID doesn't exist or isn't our process
+            os.remove(lock_file_path)
+        except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+            os.remove(lock_file_path)
+
     try:
-        fd = os.open(config.LOCK_FILE_PATH, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        os.write(fd, str(os.getpid()).encode())
-        return fd, None
-    except OSError as e:
+        lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(lock_fd, str(os.getpid()).encode())
+        return lock_fd, None
+    except IOError as e:
         if e.errno == errno.EEXIST:
-            try:
-                with open(config.LOCK_FILE_PATH, 'r') as f:
-                    pid = int(f.read().strip())
-                os.kill(pid, 0)  # Check if process is running
-                return None, f"Daemon is already running (PID: {pid})"
-            except (OSError, ValueError):
-                # Process not running or PID not valid, remove stale lock file
-                os.unlink(config.LOCK_FILE_PATH)
-                return check_and_create_lock_file()  # Retry
-        return None, f"Unexpected error: {str(e)}"
+            return None, "Unable to create lock file. Another instance might be starting."
+        return None, f"Unexpected error creating lock file: {str(e)}"
