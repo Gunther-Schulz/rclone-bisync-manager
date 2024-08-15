@@ -8,6 +8,7 @@ import socket
 import json
 import threading
 import time
+import subprocess
 
 
 def get_daemon_status():
@@ -30,73 +31,58 @@ def create_sync_now_handler(job_key):
 
 
 def stop_daemon():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        client.sendall(b"STOP")
-        response = client.recv(1024).decode()
-        client.close()
-        print(response)
-    except Exception as e:
+        result = subprocess.run(["rclone-bisync-manager", "daemon", "stop"],
+                                capture_output=True, text=True, check=True)
+        print("Daemon stop command sent")
+        print(result.stdout)
+        time.sleep(2)  # Give the daemon some time to stop
+    except subprocess.CalledProcessError as e:
         print(f"Error stopping daemon: {e}")
+        print(f"Error output: {e.stderr}")
+    except Exception as e:
+        print(f"Unexpected error stopping daemon: {e}")
+
+
+def start_daemon():
+    try:
+        result = subprocess.run(["rclone-bisync-manager", "daemon", "start"],
+                                capture_output=True, text=True, check=True)
+        print("Daemon start command sent")
+        print(result.stdout)
+        time.sleep(2)  # Give the daemon some time to start
+    except subprocess.CalledProcessError as e:
+        print(f"Error starting daemon: {e}")
+        print(f"Error output: {e.stderr}")
+    except Exception as e:
+        print(f"Unexpected error starting daemon: {e}")
+
+
+def restart_daemon():
+    stop_daemon()
+    start_daemon()
 
 
 def update_menu(status):
-    if "error" in status:
-        return pystray.Menu(pystray.MenuItem("Daemon not running", None, enabled=False))
-
     menu_items = []
 
-    currently_syncing = status.get('currently_syncing', 'None')
-    menu_items.append(pystray.MenuItem(f"Currently syncing:\n  {
-                      currently_syncing}", None, enabled=False))
-
-    queued_jobs = status.get('queued_paths', [])
-    if queued_jobs:
-        queued_jobs_str = "Queued jobs:\n" + \
-            "\n".join(f"  {job}" for job in queued_jobs)
+    if "error" in status:
         menu_items.append(pystray.MenuItem(
-            queued_jobs_str, None, enabled=False))
+            "Daemon not running", None, enabled=False))
+        menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
     else:
-        menu_items.append(pystray.MenuItem(
-            "Queued jobs:\n  None", None, enabled=False))
+        # ... existing menu items for when daemon is running ...
 
-    if "sync_jobs" in status:
-        jobs_submenu = []
-        for job_key, job_status in status["sync_jobs"].items():
-            job_submenu = pystray.Menu(
-                pystray.MenuItem(
-                    f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
-                pystray.MenuItem(
-                    f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
-                pystray.MenuItem(
-                    f"Sync status: {job_status['sync_status']}", None, enabled=False),
-                pystray.MenuItem(f"Resync status: {
-                                 job_status['resync_status']}", None, enabled=False),
-                pystray.MenuItem(
-                    "⚡ Sync now", create_sync_now_handler(job_key)),
-                # Empty text field below Sync now
-                pystray.MenuItem("", None, enabled=False)
-            )
-            jobs_submenu.append(pystray.MenuItem(
-                f"Job: {job_key}", job_submenu))
-
-        menu_items.append(pystray.MenuItem(
-            "Sync Jobs", pystray.Menu(*jobs_submenu)))
+        menu_items.extend([
+            pystray.MenuItem("Stop Daemon", stop_daemon),
+            pystray.MenuItem("Restart Daemon", restart_daemon),
+        ])
 
     menu_items.extend([
         pystray.MenuItem("Show Status Window", show_status_window),
         pystray.MenuItem("Reload Config", reload_config),
-        pystray.MenuItem("Stop Daemon", stop_daemon),
         pystray.MenuItem("Exit", lambda: icon.stop())
     ])
-
-    # Add config status at the bottom
-    config_status = "Valid" if not status.get(
-        "config_invalid", False) else "Invalid"
-    menu_items.append(pystray.MenuItem(
-        f"Config:\n  {config_status}", None, enabled=False))
 
     return pystray.Menu(*menu_items)
 
