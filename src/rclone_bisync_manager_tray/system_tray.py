@@ -9,9 +9,6 @@ import json
 import threading
 import time
 import subprocess
-import os
-import cairosvg
-import io
 
 
 def get_daemon_status():
@@ -197,31 +194,41 @@ def determine_arrow_color(status, bg_color):
 
 def create_status_image(color, status):
     size = 64
-    background = Image.new('RGBA', (size, size), color)
-    draw = ImageDraw.Draw(background)
+    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+
+    # Draw background circle
     draw.ellipse([0, 0, size, size], fill=color)
 
-    # Load SVG content from file
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    svg_path = os.path.join(script_dir, 'rclone-bisync-manager.svg')
-
-    with open(svg_path, 'r') as svg_file:
-        svg_content = svg_file.read()
-
+    # Determine arrow color
     arrow_color = determine_arrow_color(status, color)
-    svg_content = svg_content.replace(
-        'fill="#000000"', f'fill="{arrow_color}"')
-    svg_content = svg_content.replace(
-        'stroke="#000000"', f'stroke="{arrow_color}"')
 
-    # Convert SVG to PNG
-    png_data = cairosvg.svg2png(bytestring=svg_content.encode(
-        'utf-8'), output_width=size, output_height=size)
-    icon = Image.open(io.BytesIO(png_data))
+    # Draw arrows
+    arrow_width = 4
+    arrow_padding = 12
+    arrow_size = size - 2 * arrow_padding
 
-    # Composite the icon onto the background
-    result = Image.alpha_composite(background, icon)
-    return result
+    # Top arrow (pointing right)
+    draw.line((arrow_padding, size//2 - arrow_size//4,
+               size - arrow_padding, size//2 - arrow_size//4),
+              fill=arrow_color, width=arrow_width)
+    draw.polygon([(size - arrow_padding, size//2 - arrow_size//4),
+                  (size - arrow_padding - arrow_size//6,
+                   size//2 - arrow_size//4 - arrow_size//6),
+                  (size - arrow_padding - arrow_size//6, size//2 - arrow_size//4 + arrow_size//6)],
+                 fill=arrow_color)
+
+    # Bottom arrow (pointing left)
+    draw.line((size - arrow_padding, size//2 + arrow_size//4,
+               arrow_padding, size//2 + arrow_size//4),
+              fill=arrow_color, width=arrow_width)
+    draw.polygon([(arrow_padding, size//2 + arrow_size//4),
+                  (arrow_padding + arrow_size//6, size //
+                   2 + arrow_size//4 - arrow_size//6),
+                  (arrow_padding + arrow_size//6, size//2 + arrow_size//4 + arrow_size//6)],
+                 fill=arrow_color)
+
+    return image
 
 
 def show_status_window():
