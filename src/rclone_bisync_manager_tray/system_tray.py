@@ -38,7 +38,7 @@ def stop_daemon():
         client.sendall(b"STOP")
         response = client.recv(1024).decode()
         client.close()
-        print(response)
+        print("Daemon is shutting down. Use 'daemon status' to check progress.")
     except Exception as e:
         print(f"Error stopping daemon: {e}")
 
@@ -280,14 +280,21 @@ def run_tray():
                 if "error" in current_status:
                     icon.icon = create_status_image(
                         (255, 0, 0), "error")  # Pass "error" as status
+                elif current_status.get("shutting_down", False):
+                    icon.icon = create_status_image(
+                        # Yellow for shutting down
+                        (255, 255, 0), "shutting_down")
+                elif current_status.get("currently_syncing"):
+                    icon.icon = create_status_image(
+                        (0, 120, 255), current_status)  # Blue for syncing
                 else:
-                    if current_status.get("currently_syncing"):
-                        bg_color = (0, 120, 255)  # Blue for syncing
-                    elif current_status.get("config_invalid"):
-                        bg_color = (255, 200, 0)  # Yellow for config invalid
+                    if current_status.get("config_invalid"):
+                        icon.icon = create_status_image(
+                            # Yellow for config invalid
+                            (255, 200, 0), current_status)
                     else:
-                        bg_color = (0, 200, 0)  # Green for running
-                    icon.icon = create_status_image(bg_color, current_status)
+                        icon.icon = create_status_image(
+                            (0, 200, 0), current_status)  # Green for running
                 icon.update_menu()
                 last_status = current_status
             time.sleep(1)
