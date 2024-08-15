@@ -59,9 +59,12 @@ def daemon_main():
         last_config_check = time.time()
         last_config_status = None
 
+        config.reset_config_changed_flag()  # Reset the flag after initial load
+
         while config.running:
             current_time = time.time()
             if current_time - last_config_check >= config_check_interval:
+                config.check_config_changed()
                 if config.config_invalid:
                     if last_config_status != "invalid":
                         log_message(
@@ -161,36 +164,6 @@ def add_to_sync_queue(key):
         config.queued_paths.add(key)
 
 
-def reload_config():
-    try:
-        config.load_and_validate_config(config.args)
-        new_sync_jobs = set(config._config.sync_jobs.keys())
-
-        with config.sync_lock:
-            # Remove jobs from the queue that are no longer in the config
-            config.queued_paths = config.queued_paths.intersection(
-                new_sync_jobs)
-            new_queue = Queue()
-            while not config.sync_queue.empty():
-                job = config.sync_queue.get()
-                if job in new_sync_jobs:
-                    new_queue.put(job)
-            config.sync_queue = new_queue
-
-        log_message("Config reloaded successfully.")
-        scheduler.clear_tasks()
-        scheduler.schedule_tasks()
-        config.config_invalid = False
-        return True
-    except (ValueError, FileNotFoundError) as e:
-        error_message = f"Error reloading config: {str(e)}"
-        log_error(error_message)
-        config.config_invalid = True
-        config.config_error_message = error_message
-        log_message("Daemon entering limbo state due to invalid configuration.")
-        return False
-
-
 def stop_daemon():
     if not os.path.exists(config.LOCK_FILE_PATH):
         print("Daemon is not running.")
@@ -262,3 +235,34 @@ def handle_add_sync_request():
 
     server.close()
     os.unlink(socket_path)
+
+
+def reload_config():
+    try:
+        config.load_and_validate_config(config.args)
+        new_sync_jobs = set(config._config.sync_jobs.keys())
+
+        with config.sync_lock:
+            # Remove jobs from the queue that are no longer in the config
+            config.queued_paths = config.queued_paths.intersection(
+                new_sync_jobs)
+            new_queue = Queue()
+            while not config.sync_queue.empty():
+                job = config.sync_queue.get()
+                if job in new_sync_jobs:
+                    new_queue.put(job)
+            config.sync_queue = new_queue
+
+        log_message("Config reloaded successfully.")
+        scheduler.clear_tasks()
+        scheduler.schedule_tasks()
+        config.config_invalid = False
+        config.reset_config_changed_flag()  # Reset the flag after successful reload
+        return True
+    except (ValueError, FileNotFoundError) as e:
+        error_message = f"Error reloading config: {str(e)}"
+        log_error(error_message)
+        config.config_invalid = True
+        config.config_error_message = error_message
+        log_message("Daemon entering limbo state due to invalid configuration.")
+        return False

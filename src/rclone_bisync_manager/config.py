@@ -201,6 +201,8 @@ class Config:
         self.hash_warnings = {}
         self.sync_errors = {}
         self.last_config_status = None
+        self.config_changed_on_disk = False
+        self.last_config_mtime = None
 
     def _init_file_paths(self):
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -335,6 +337,18 @@ class Config:
             sync_state.resync_status = {}
             sync_state.last_sync_times = {}
             sync_state.next_run_times = {}
+
+    def check_config_changed(self):
+        current_mtime = os.path.getmtime(self.config_file)
+        if self.last_config_mtime is None:
+            self.last_config_mtime = current_mtime
+        elif current_mtime > self.last_config_mtime:
+            self.config_changed_on_disk = True
+            self.last_config_mtime = current_mtime
+
+    def reset_config_changed_flag(self):
+        self.config_changed_on_disk = False
+        self.last_config_mtime = os.path.getmtime(self.config_file)
 
 
 config = Config()
