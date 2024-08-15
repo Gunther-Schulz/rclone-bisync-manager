@@ -117,9 +117,11 @@ def check_and_create_lock_file():
             os.remove(lock_file_path)
 
     try:
-        with open(lock_file_path, 'w') as lock_file:
-            fcntl.lockf(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            lock_file.write(str(os.getpid()))
-        return lock_file, None
-    except IOError:
-        return None, "Unable to create lock file. Another instance might be starting."
+        lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(lock_fd, str(os.getpid()).encode())
+        return lock_fd, None
+    except IOError as e:
+        if e.errno == errno.EEXIST:
+            return None, "Unable to create lock file. Another instance might be starting."
+        return None, f"Unexpected error creating lock file: {str(e)}"
