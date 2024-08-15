@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from PIL import ImageFont
+from pystray import MenuItem as item
 import tkinter
 from tkinter import ttk
 import pystray
@@ -9,6 +11,7 @@ import json
 import threading
 import time
 import subprocess
+import os
 
 
 def get_daemon_status():
@@ -105,7 +108,7 @@ def update_menu(status):
                 pystray.MenuItem(f"Resync status: {
                                  job_status['resync_status']}", None, enabled=False),
                 pystray.MenuItem(
-                    "⚡ Sync now", create_sync_now_handler(job_key)),
+                    "⚡ Sync Now", create_sync_now_handler(job_key)),
                 pystray.MenuItem("", None, enabled=False)
             )
             jobs_submenu.append(pystray.MenuItem(
@@ -118,16 +121,21 @@ def update_menu(status):
             "Sync Jobs", None, enabled=False))
 
     menu_items.extend([
-        pystray.MenuItem("Show Status Window", show_status_window,
-                         enabled=not is_shutting_down),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Reload Config", reload_config,
-                         enabled=status.get('currently_syncing') == None and not is_shutting_down),
-        pystray.MenuItem("Config: Invalid",
+        pystray.MenuItem("Config & Logs", pystray.Menu(
+            pystray.MenuItem("Reload Config", reload_config,
+                             enabled=status.get('currently_syncing') == None and not is_shutting_down),
+            pystray.MenuItem("Open Config Folder", open_config_file),
+            pystray.MenuItem("Open Log Folder", open_log_folder)
+        )),
+        pystray.MenuItem("⚠️ Config file is invalid",
                          None, enabled=False, visible=status.get('config_invalid', False)),
-        pystray.MenuItem("Config changed on disk",
+        pystray.MenuItem("⚠️ Config changed on disk",
                          None, enabled=False,
                          visible=not status.get('config_invalid', False) and status.get('config_changed_on_disk', False)),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Show Status Window", show_status_window,
+                         enabled=not is_shutting_down),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Shutting down..." if is_shutting_down else "Stop Daemon",
                          stop_daemon, enabled=not is_shutting_down),
@@ -301,6 +309,40 @@ def show_status_window():
                       job_status['resync_status']}").pack(anchor='w')
 
     window.mainloop()
+
+
+def open_config_file():
+    config_file_path = get_config_file_path()
+    if config_file_path:
+        config_dir = os.path.dirname(config_file_path)
+        if os.name == 'nt':  # For Windows
+            os.startfile(config_dir)
+        elif os.name == 'posix':  # For macOS and Linux
+            subprocess.call(('xdg-open', config_dir))
+    else:
+        print("Config file path not found")
+
+
+def open_log_folder():
+    log_file_path = get_log_file_path()
+    if log_file_path:
+        log_dir = os.path.dirname(log_file_path)
+        if os.name == 'nt':  # For Windows
+            os.startfile(log_dir)
+        elif os.name == 'posix':  # For macOS and Linux
+            subprocess.call(('xdg-open', log_dir))
+    else:
+        print("Log file path not found")
+
+
+def get_config_file_path():
+    status = get_daemon_status()
+    return status.get('config_file_location')
+
+
+def get_log_file_path():
+    status = get_daemon_status()
+    return status.get('log_file_location')
 
 
 def run_tray():
