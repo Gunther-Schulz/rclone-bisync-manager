@@ -57,7 +57,7 @@ def update_menu(status):
         return pystray.Menu(
             pystray.MenuItem("Daemon not running", None, enabled=False),
             pystray.MenuItem("Start Daemon", start_daemon),
-            pystray.MenuItem("Exit", lambda: icon.stop())  # Add this line
+            pystray.MenuItem("Exit", lambda: icon.stop())
         )
 
     menu_items = []
@@ -87,7 +87,12 @@ def update_menu(status):
         menu_items.append(pystray.MenuItem(
             "Queued jobs:\n  None", None, enabled=False))
 
-    if "sync_jobs" in status:
+    # Add a separator before "Sync Jobs"
+    menu_items.append(pystray.Menu.SEPARATOR)
+
+    is_shutting_down = status.get('shutting_down', False)
+
+    if "sync_jobs" in status and not status.get('config_invalid', False) and not is_shutting_down:
         jobs_submenu = []
         for job_key, job_status in status["sync_jobs"].items():
             job_submenu = pystray.Menu(
@@ -101,7 +106,6 @@ def update_menu(status):
                                  job_status['resync_status']}", None, enabled=False),
                 pystray.MenuItem(
                     "⚡ Sync now", create_sync_now_handler(job_key)),
-                # Empty text field below Sync now
                 pystray.MenuItem("", None, enabled=False)
             )
             jobs_submenu.append(pystray.MenuItem(
@@ -109,19 +113,23 @@ def update_menu(status):
 
         menu_items.append(pystray.MenuItem(
             "Sync Jobs", pystray.Menu(*jobs_submenu)))
+    else:
+        menu_items.append(pystray.MenuItem(
+            "Sync Jobs", None, enabled=False))
 
     menu_items.extend([
-        pystray.MenuItem("Show Status Window", show_status_window),
-        pystray.MenuItem("Reload Config", reload_config),
-        pystray.MenuItem("Stop Daemon", stop_daemon),
+        pystray.MenuItem("Show Status Window", show_status_window,
+                         enabled=not is_shutting_down),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Reload Config", reload_config,
+                         enabled=status.get('currently_syncing') == None and not is_shutting_down),
+        pystray.MenuItem(f"Config: {'Valid' if not status.get('config_invalid', False) else 'Invalid'}",
+                         None, enabled=False),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Shutting down..." if is_shutting_down else "Stop Daemon",
+                         stop_daemon, enabled=not is_shutting_down),
         pystray.MenuItem("Exit", lambda: icon.stop())
     ])
-
-    # Add config status at the bottom
-    config_status = "Valid" if not status.get(
-        "config_invalid", False) else "Invalid"
-    menu_items.append(pystray.MenuItem(
-        f"Config:\n  {config_status}", None, enabled=False))
 
     return pystray.Menu(*menu_items)
 
