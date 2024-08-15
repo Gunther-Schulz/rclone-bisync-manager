@@ -3,34 +3,26 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rclone_bisync_manager"
+name = "rclone_bisync_manager_tray"
 version = "0.1.0"
-description = "A daemon-based solution for automated, bidirectional synchronization of files using RClone"
+description = "System tray application for RClone BiSync Manager"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.6"
 dependencies = [
-    "croniter==3.0.3",
-    "pydantic==2.8.2",
-    "python_daemon==3.0.1",
-    "PyYAML==6.0.2",
-    "setuptools==69.5.1",
-]
-
-[project.scripts]
-rclone-bisync-manager = "rclone_bisync_manager.main:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["rclone_bisync_manager*"]
-
-[project.optional-dependencies]
-tray = [
+    "rclone_bisync_manager",
     "Pillow==10.4.0",
     "pystray==0.19.5",
     "PyGObject==3.46.0",
 ]
+
+[project.scripts]
+rclone_bisync_manager_tray = "rclone_bisync_manager_tray.system_tray:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["rclone_bisync_manager_tray*"]
 
 [project.urls]
 "Homepage" = "https://github.com/yourusername/rclone-bisync-manager"
