@@ -61,6 +61,17 @@ def update_menu(status):
 
     menu_items = []
 
+    # Add warning state at the top of the menu
+    has_sync_issues = any(
+        job["sync_status"] not in ["COMPLETED", "NONE", None] or
+        job["resync_status"] not in ["COMPLETED", "NONE", None] or
+        job.get("hash_warnings", False)
+        for job in status.get("sync_jobs", {}).values()
+    )
+    if has_sync_issues:
+        menu_items.append(pystray.MenuItem(
+            "⚠️ Sync issues detected", None, enabled=False))
+
     currently_syncing = status.get('currently_syncing', 'None')
     menu_items.append(pystray.MenuItem(f"Currently syncing:\n  {
                       currently_syncing}", None, enabled=False))
@@ -167,13 +178,17 @@ def determine_arrow_color(status, bg_color):
     if status.get("config_invalid") or status.get("config_error_message"):
         return "red"
 
+    has_sync_issues = False
     if "sync_jobs" in status:
         for job_key, job_status in status["sync_jobs"].items():
             if (job_status["sync_status"] not in ["COMPLETED", "NONE", None] or
-                    job_status["resync_status"] not in ["COMPLETED", "NONE", None]):
-                return "red"
-            if job_status.get("hash_warnings", False):
-                return "red"
+                    job_status["resync_status"] not in ["COMPLETED", "NONE", None] or
+                    job_status.get("hash_warnings", False)):
+                has_sync_issues = True
+                break
+
+    if has_sync_issues:
+        return "yellow"  # New warning state for sync issues
 
     return "green"
 
@@ -279,19 +294,26 @@ def run_tray():
                 icon.menu = new_menu
                 if "error" in current_status:
                     icon.icon = create_status_image(
-                        (255, 0, 0), "error")  # Pass "error" as status
+                        (255, 0, 0), "error")  # Red for error
                 elif current_status.get("shutting_down", False):
                     icon.icon = create_status_image(
-                        # Yellow for shutting down
-                        (255, 255, 0), "shutting_down")
+                        # Orange for shutting down
+                        (255, 165, 0), "shutting_down")
                 elif current_status.get("currently_syncing"):
                     icon.icon = create_status_image(
                         (0, 120, 255), current_status)  # Blue for syncing
                 else:
                     if current_status.get("config_invalid"):
+                        # Light yellow for config invalid
                         icon.icon = create_status_image(
-                            # Yellow for config invalid
                             (255, 200, 0), current_status)
+                    elif any(job["sync_status"] not in ["COMPLETED", "NONE", None] or
+                             job["resync_status"] not in ["COMPLETED", "NONE", None] or
+                             job.get("hash_warnings", False)
+                             for job in current_status.get("sync_jobs", {}).values()):
+                        icon.icon = create_status_image(
+                            # Yellow for sync issues
+                            (255, 255, 0), current_status)
                     else:
                         icon.icon = create_status_image(
                             (0, 200, 0), current_status)  # Green for running
