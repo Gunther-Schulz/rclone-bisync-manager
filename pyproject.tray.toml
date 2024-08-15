@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rclone_bisync_manager_tray"
+name = "rclone-bisync-manager-tray"
 version = "0.1.0"
 description = "System tray application for RClone BiSync Manager"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
@@ -11,14 +11,14 @@ license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.6"
 dependencies = [
-    "rclone_bisync_manager",
+    "rclone-bisync-manager",
     "Pillow==10.4.0",
     "pystray==0.19.5",
     "PyGObject==3.46.0",
 ]
 
 [project.scripts]
-rclone_bisync_manager_tray = "rclone_bisync_manager_tray.system_tray:main"
+rclone-bisync-manager-tray = "rclone_bisync_manager_tray.system_tray:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

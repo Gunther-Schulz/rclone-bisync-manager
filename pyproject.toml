@@ -20,10 +20,11 @@ dependencies = [
 
 [project.scripts]
 rclone-bisync-manager = "rclone_bisync_manager.main:main"
+rclone-bisync-manager-tray = "rclone_bisync_manager_tray.system_tray:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["rclone_bisync_manager*"]
+include = ["rclone_bisync_manager*", "rclone_bisync_manager_tray*"]
 
 [project.optional-dependencies]
 tray = [
