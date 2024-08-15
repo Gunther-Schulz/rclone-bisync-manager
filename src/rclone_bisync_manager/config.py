@@ -7,7 +7,8 @@ import hashlib
 from croniter import croniter
 import json
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, constr, conint, DirectoryPath
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, DirectoryPath
+from rclone_bisync_manager.logging_utils import log_message, log_error
 
 debug = False
 
@@ -199,6 +200,7 @@ class Config:
         self.status_file_path = {}
         self.hash_warnings = {}
         self.sync_errors = {}
+        self.last_config_status = None
 
     def _init_file_paths(self):
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -240,12 +242,16 @@ class Config:
         try:
             if debug:
                 print("Attempting to create ConfigSchema")
-            self._config = ConfigSchema(**config_data)
+            new_config = ConfigSchema(**config_data)
             if debug:
                 print("ConfigSchema created successfully")
                 print("Sync jobs after validation:")
                 print(json.dumps({k: v.model_dump()
-                      for k, v in self._config.sync_jobs.items()}, indent=2))
+                      for k, v in new_config.sync_jobs.items()}, indent=2))
+
+            if self._config != new_config:
+                self._config = new_config
+                log_message("Configuration loaded and validated successfully.")
             self.config_invalid = False
             self.config_error_message = None
         except ValidationError as e:
@@ -254,6 +260,9 @@ class Config:
             error_message = self._format_validation_errors(e)
             if debug:
                 print(f"Formatted error message:\n{error_message}")
+
+            if not self.config_invalid or self.config_error_message != error_message:
+                log_error(f"Configuration on disk is invalid: {error_message}")
             self.config_invalid = True
             self.config_error_message = error_message
             raise ValueError(error_message)
@@ -335,7 +344,6 @@ def signal_handler(signum, frame):
     if config._config is not None:
         config.running = False
         config.shutting_down = True
-        from logging_utils import log_message
         log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
         if hasattr(config, 'lock_fd'):
             config.lock_fd.close()

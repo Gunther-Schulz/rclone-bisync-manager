@@ -10,18 +10,23 @@ class BasicLogger:
     def error(self, message):
         print(f"ERROR: {message}", file=sys.stderr)
 
+    def info(self, message):
+        print(f"INFO: {message}")
+
 
 logger = BasicLogger()
 
 
 def ensure_log_file_path():
-    os.makedirs(os.path.dirname(config.log_file_path), exist_ok=True)
+    if config and hasattr(config, 'log_file_path'):
+        os.makedirs(os.path.dirname(config.log_file_path), exist_ok=True)
 
 
 def setup_loggers(console_log=False):
-    global logger
-    ensure_log_file_path()
-    logger = FileLogger(config.log_file_path)
+    global logger, config
+    if config:
+        ensure_log_file_path()
+        logger = FileLogger(config.log_file_path)
     config.console_log = console_log
 
 
@@ -44,14 +49,14 @@ class FileLogger:
 
 def log_message(message):
     logger.info(message)
-    if config.console_log:
+    if config and hasattr(config, 'console_log') and config.console_log:
         print(message)
 
 
 def log_error(message):
     logger.error(message)
-    if hasattr(config, 'console_log') and config.console_log:
-        print(f"ERROR: {message}")
+    if config and hasattr(config, 'console_log') and config.console_log:
+        print(f"ERROR: {message}", file=sys.stderr)
 
 
 def log_home_directory():
