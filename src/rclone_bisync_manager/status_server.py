@@ -71,6 +71,7 @@ def generate_status_report():
         "config_error_message": getattr(config, 'config_error_message', None),
         "currently_syncing": config.currently_syncing,
         "queued_paths": list(config.queued_paths),
+        "config_changed_on_disk": config.config_changed_on_disk,
         "sync_jobs": {}
     }
 

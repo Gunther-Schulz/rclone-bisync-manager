@@ -123,8 +123,11 @@ def update_menu(status):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Reload Config", reload_config,
                          enabled=status.get('currently_syncing') == None and not is_shutting_down),
-        pystray.MenuItem(f"Config: {'Valid' if not status.get('config_invalid', False) else 'Invalid'}",
-                         None, enabled=False),
+        pystray.MenuItem("Config: Invalid",
+                         None, enabled=False, visible=status.get('config_invalid', False)),
+        pystray.MenuItem("Config changed on disk",
+                         None, enabled=False,
+                         visible=not status.get('config_invalid', False) and status.get('config_changed_on_disk', False)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Shutting down..." if is_shutting_down else "Stop Daemon",
                          stop_daemon, enabled=not is_shutting_down),
@@ -186,6 +189,9 @@ def determine_arrow_color(status, bg_color):
 
     if status.get("config_invalid") or status.get("config_error_message"):
         return "#FFFFFF"  # White for invalid config
+
+    if status.get("config_changed_on_disk", False):
+        return "#000000"  # Black for config changed on disk
 
     has_sync_issues = any(
         job["sync_status"] not in ["COMPLETED", "NONE", None] or
@@ -257,6 +263,8 @@ def show_status_window():
 
     ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
         'config_invalid', False) else 'Invalid'}").pack(pady=5)
+    ttk.Label(general_frame, text=f"Config changed on disk: {
+              'Yes' if status.get('config_changed_on_disk', False) else 'No'}").pack(pady=5)
 
     currently_syncing = status.get('currently_syncing', 'None')
     ttk.Label(general_frame, text="Currently syncing:").pack(
@@ -324,6 +332,10 @@ def run_tray():
                     icon.icon = create_status_image(
                         # Red for config invalid
                         (244, 67, 54), current_status)
+                elif current_status.get("config_changed_on_disk", False):
+                    icon.icon = create_status_image(
+                        # Amber for config changed on disk
+                        (255, 193, 7), current_status)
                 elif any(job["sync_status"] not in ["COMPLETED", "NONE", None] or
                          job["resync_status"] not in ["COMPLETED", "NONE", None] or
                          job.get("hash_warnings", False)
