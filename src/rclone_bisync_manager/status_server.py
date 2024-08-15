@@ -2,8 +2,7 @@ import os
 import socket
 import json
 import threading
-from config import config
-from config import config, sync_state
+from rclone_bisync_manager.config import config, sync_state
 
 
 def start_status_server():

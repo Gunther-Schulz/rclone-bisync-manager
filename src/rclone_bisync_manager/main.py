@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 
 import os
-from scheduler import scheduler
 import signal
 import sys
 import daemon
-from config import config
-from cli import parse_args
-from daemon_functions import daemon_main, stop_daemon, print_daemon_status
-from sync import perform_sync_operations
-from utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_and_create_lock_file
-from logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
-from config import signal_handler
+from rclone_bisync_manager.scheduler import scheduler
+from rclone_bisync_manager.cli import parse_args
+from rclone_bisync_manager.daemon_functions import daemon_main, stop_daemon, print_daemon_status
+from rclone_bisync_manager.sync import perform_sync_operations
+from rclone_bisync_manager.utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_and_create_lock_file
+from rclone_bisync_manager.logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
+from rclone_bisync_manager.config import config, signal_handler
 import fcntl
 import traceback
 import socket

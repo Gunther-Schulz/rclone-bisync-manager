@@ -1,11 +1,11 @@
 import json
 import socket
-from status_server import start_status_server
-from logging_utils import log_message, log_error
-from utils import check_and_create_lock_file
-from scheduler import scheduler
-from sync import perform_sync_operations
-from config import config, signal_handler
+from rclone_bisync_manager.status_server import start_status_server
+from rclone_bisync_manager.logging_utils import log_message, log_error
+from rclone_bisync_manager.utils import check_and_create_lock_file
+from rclone_bisync_manager.scheduler import scheduler
+from rclone_bisync_manager.sync import perform_sync_operations
+from rclone_bisync_manager.config import config, signal_handler
 import os
 import signal
 import time

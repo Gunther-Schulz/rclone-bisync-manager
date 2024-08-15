@@ -2,9 +2,8 @@ from datetime import datetime
 import heapq
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
-from config import config
 from croniter import croniter
-from config import config, sync_state
+from rclone_bisync_manager.config import config, sync_state
 
 
 @dataclass(order=True)

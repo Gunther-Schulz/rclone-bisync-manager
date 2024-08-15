@@ -24,6 +24,16 @@ sync_jobs:
     remote: path/on/remote/storage
     schedule: "*/30 * * * *" # Every 30 minutes
     dry_run: false
+    rclone_options:
+      log_level: Notice
+  example_job_2:
+    local: another_folder
+    rclone_remote: second_remote
+    remote: another/path/on/remote
+    schedule: "0 */2 * * *" # Every 2 hours
+    dry_run: false
+    rclone_options: # Overriding the default options
+      log_level: Notice
 
 # Rclone options
 rclone_options:

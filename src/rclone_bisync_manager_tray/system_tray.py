@@ -8,7 +8,6 @@ import socket
 import json
 import threading
 import time
-from config import debug
 
 
 def get_daemon_status():
@@ -114,24 +113,20 @@ def reload_config():
         try:
             response_data = json.loads(response)
             if response_data["status"] == "success":
-                if debug:
-                    print("Configuration reloaded successfully")
+                print("Configuration reloaded successfully")
             else:
-                if debug:
-                    print(f"Error reloading configuration: {
-                          response_data['message']}")
+                print(f"Error reloading configuration: {
+                      response_data['message']}")
 
             current_status = get_daemon_status()
             icon.menu = update_menu(current_status)
 
             return response_data["status"] == "success"
         except json.JSONDecodeError:
-            if debug:
-                print(f"Error: Invalid JSON response from daemon: {response}")
+            print(f"Error: Invalid JSON response from daemon: {response}")
             return False
     except Exception as e:
-        if debug:
-            print(f"Error communicating with daemon: {str(e)}")
+        print(f"Error communicating with daemon: {str(e)}")
         return False
 
 
@@ -144,11 +139,9 @@ def add_to_sync_queue(job_key):
         client.sendall(json.dumps([job_key]).encode())
         response = client.recv(1024).decode()
         client.close()
-        if debug:
-            print(f"Add to sync queue response: {response}")
+        print(f"Add to sync queue response: {response}")
     except Exception as e:
-        if debug:
-            print(f"Error adding job to sync queue: {str(e)}")
+        print(f"Error adding job to sync queue: {str(e)}")
 
 
 def determine_arrow_color(status, bg_color):
@@ -290,5 +283,9 @@ def run_tray():
     icon.run()
 
 
-if __name__ == "__main__":
+def main():
     run_tray()
+
+
+if __name__ == "__main__":
+    main()
