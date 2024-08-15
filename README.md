@@ -22,7 +22,7 @@ RClone BiSync Manager is a daemon-based solution for automated, bidirectional sy
 - Python 3.6+
 - `rclone` (required)
 - `cpulimit` (optional, for CPU usage limiting)
-- Required Python packages (install via `pip install -r requirements.txt`):
+- Required Python packages (install via `pip install rclone-bisync-manager`):
   - pyyaml
   - python-daemon
   - croniter
@@ -30,31 +30,18 @@ RClone BiSync Manager is a daemon-based solution for automated, bidirectional sy
 
 ## Installation
 
-1. Clone the repository:
+For users:
 
-   ```bash
-   git clone https://github.com/yourusername/rclone-bisync-manager.git
-   cd rclone-bisync-manager
-   ```
+```bash
+pip install rclone-bisync-manager
+```
 
-2. Install required Python packages:
+For development:
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Copy the example configuration:
-
-   ```bash
-   mkdir -p ~/.config/rclone-bisync-manager
-   cp config.yaml.example ~/.config/rclone-bisync-manager/config.yaml
-   ```
-
-4. Edit the configuration file to suit your needs:
-
-   ```bash
-   nano ~/.config/rclone-bisync-manager/config.yaml
-   ```
+```bash
+git clone https://github.com/yourusername/rclone-bisync-manager.git
+cd rclone-bisync-manager
+```
 
 ## Usage
 
@@ -274,3 +261,26 @@ Contributions to the script are welcome. Please fork the repository, make your c
 ---
 
 For more details on `rclone` and its capabilities, visit the [official RClone documentation](https://rclone.org/docs/).
+
+## Systemd Service (Optional)
+
+To run RClone BiSync Manager as a systemd service:
+
+1. Copy the service file to the systemd directory:
+
+   ```bash
+   sudo cp systemd/rclone-bisync-manager.service /etc/systemd/system/
+   ```
+
+2. Reload the systemd daemon:
+
+   ```bash
+   sudo systemctl daemon-reload
+   ```
+
+3. Enable and start the service:
+
+   ```bash
+   sudo systemctl enable rclone-bisync-manager.service
+   sudo systemctl start rclone-bisync-manager.service
+   ```
