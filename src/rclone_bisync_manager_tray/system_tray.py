@@ -33,6 +33,7 @@ class DaemonState(enum.Enum):
     SYNC_ISSUES = "sync_issues"
     CONFIG_INVALID = "config_invalid"
     CONFIG_CHANGED = "config_changed"
+    LIMBO = "limbo"
 
 
 @dataclass
@@ -67,6 +68,7 @@ class DaemonManager:
             DaemonState.SYNC_ISSUES: StateInfo(Colors.ORANGE, self._get_running_menu_items, "WARN"),
             DaemonState.CONFIG_INVALID: StateInfo(Colors.RED, self._get_running_menu_items, "CFG!"),
             DaemonState.CONFIG_CHANGED: StateInfo(Colors.AMBER, self._get_running_menu_items, "CFG?"),
+            DaemonState.LIMBO: StateInfo(Colors.YELLOW, self._get_limbo_menu_items, "LIMBO"),
         }
 
     def update_state(self, status):
@@ -75,8 +77,8 @@ class DaemonManager:
             self.state = DaemonState.SHUTTING_DOWN
         elif "error" in status:
             self.state = DaemonState.ERROR
-        elif status.get("starting_up"):
-            self.state = DaemonState.STARTING
+        elif status.get("in_limbo"):
+            self.state = DaemonState.LIMBO
         elif status.get("config_invalid"):
             self.state = DaemonState.CONFIG_INVALID
         elif status.get("config_changed_on_disk"):
@@ -134,17 +136,25 @@ class DaemonManager:
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
         return menu_items
 
+    def _get_limbo_menu_items(self):
+        return [
+            pystray.MenuItem("Daemon in limbo state", None, enabled=False),
+            pystray.MenuItem("Reload Config", reload_config),
+            pystray.MenuItem("Exit", lambda: icon.stop())
+        ]
+
     def _get_running_menu_items(self):
         menu_items = []
 
-        # Add warning state at the top of the menu
-        has_sync_issues = any(
-            job["sync_status"] not in ["COMPLETED", "NONE", None] or
-            job["resync_status"] not in ["COMPLETED", "NONE", None] or
-            job.get("hash_warnings", False)
-            for job in self.status.get("sync_jobs", {}).values()
-        )
-        if has_sync_issues:
+        if self.status.get("config_invalid", False):
+            menu_items.append(pystray.MenuItem(
+                "⚠️ Config is invalid", None, enabled=False))
+
+        if self.status.get("config_changed_on_disk", False):
+            menu_items.append(pystray.MenuItem(
+                "⚠️ Config changed on disk", None, enabled=False))
+
+        if self._has_sync_issues(self.status):
             menu_items.append(pystray.MenuItem(
                 "⚠️ Sync issues detected", None, enabled=False))
 
@@ -162,7 +172,6 @@ class DaemonManager:
             menu_items.append(pystray.MenuItem(
                 "Queued jobs:\n  None", None, enabled=False))
 
-        # Add a separator before "Sync Jobs"
         menu_items.append(pystray.Menu.SEPARATOR)
 
         is_shutting_down = self.status.get('shutting_down', False)
@@ -204,11 +213,6 @@ class DaemonManager:
                 pystray.MenuItem("Open Config Folder", open_config_file),
                 pystray.MenuItem("Open Log Folder", open_log_folder)
             )),
-            pystray.MenuItem("⚠️ Config file is invalid",
-                             None, enabled=False, visible=self.status.get('config_invalid', False)),
-            pystray.MenuItem("⚠️ Config changed on disk",
-                             None, enabled=False,
-                             visible=not self.status.get('config_invalid', False) and self.status.get('config_changed_on_disk', False)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Show Status Window", show_status_window,
                              enabled=not is_shutting_down),
