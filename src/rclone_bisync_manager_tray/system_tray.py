@@ -97,7 +97,7 @@ def update_menu(status):
 
     if "sync_jobs" in status and not status.get('config_invalid', False) and not is_shutting_down:
         jobs_submenu = []
-        for job_key, job_status in status["sync_jobs"].items():
+        for job_key, job_status in reversed(status["sync_jobs"].items()):
             job_submenu = pystray.Menu(
                 pystray.MenuItem(
                     f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
@@ -115,7 +115,7 @@ def update_menu(status):
                 f"Job: {job_key}", job_submenu))
 
         menu_items.append(pystray.MenuItem(
-            "Sync Jobs", pystray.Menu(*jobs_submenu)))
+            "Sync Jobs", pystray.Menu(*reversed(jobs_submenu))))
     else:
         menu_items.append(pystray.MenuItem(
             "Sync Jobs", None, enabled=False))
@@ -355,8 +355,16 @@ def run_tray():
 
     def check_status_and_update():
         last_status = None
+        first_run = True
         while True:
             current_status = get_daemon_status()
+            if first_run and "error" in current_status:
+                print("Daemon not running. Attempting to start...")
+                start_daemon()
+                time.sleep(10)  # Wait for the daemon to start
+                current_status = get_daemon_status()
+                first_run = False
+
             if current_status != last_status:
                 new_menu = update_menu(current_status)
                 icon.menu = new_menu
