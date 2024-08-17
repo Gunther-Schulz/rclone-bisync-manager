@@ -158,20 +158,23 @@ class DaemonManager:
         else:
             menu_items.extend(self._get_normal_menu_items(status))
 
-        # Common menu items for all states
-        menu_items.extend([
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
-                                 DaemonState.INITIAL, DaemonState.ERROR, DaemonState.OFFLINE, DaemonState.SHUTTING_DOWN]),
-                pystray.MenuItem("Open Config Folder", open_config_file),
-                pystray.MenuItem("Open Log Folder", open_log_folder)
-            )),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Status Window", show_status_window,
-                             enabled=current_state != DaemonState.INITIAL),
-            pystray.Menu.SEPARATOR,
-        ])
+        # Common menu items for all states except OFFLINE and ERROR
+        if current_state not in [DaemonState.OFFLINE, DaemonState.ERROR]:
+            menu_items.extend([
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Config & Logs", pystray.Menu(
+                    pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
+                                     DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]),
+                    pystray.MenuItem("Open Config Folder", open_config_file),
+                    pystray.MenuItem("Open Log Folder", open_log_folder)
+                )),
+                pystray.Menu.SEPARATOR,
+            ])
+
+        # Show Status Window menu item (enabled for all states except INITIAL)
+        menu_items.append(pystray.MenuItem("Show Status Window", show_status_window,
+                                           enabled=current_state != DaemonState.INITIAL))
+        menu_items.append(pystray.Menu.SEPARATOR)
 
         # Add Start/Stop/Shutting Down menu item
         if current_state in [DaemonState.OFFLINE, DaemonState.ERROR]:
