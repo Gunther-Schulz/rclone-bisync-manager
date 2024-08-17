@@ -149,6 +149,7 @@ def run_rclone_command(rclone_args):
 
 
 def handle_rclone_exit_code(result_code, local_path, sync_type):
+    result_code = 7
     messages = {
         0: "completed successfully",
         1: "Non-critical error. A rerun may be successful.",
