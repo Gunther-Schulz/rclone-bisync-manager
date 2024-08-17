@@ -69,6 +69,18 @@ class Colors:
 
 
 class DaemonManager:
+    STATE_PRIORITY = [
+        DaemonState.ERROR,
+        DaemonState.OFFLINE,
+        DaemonState.SHUTTING_DOWN,
+        DaemonState.LIMBO,
+        DaemonState.CONFIG_INVALID,
+        DaemonState.SYNC_ISSUES,  # Moved up in priority
+        DaemonState.CONFIG_CHANGED,
+        DaemonState.SYNCING,
+        DaemonState.RUNNING
+    ]
+
     def __init__(self):
         self.last_status = {}
         self.daemon_start_error = None
@@ -94,31 +106,44 @@ class DaemonManager:
         return current_state
 
     def _determine_state(self, status):
-        if self.daemon_start_error:
-            return DaemonState.ERROR
-        elif status is None or "error" in status:
+        if status is None:
             return DaemonState.OFFLINE
-        elif status.get("shutting_down"):
-            return DaemonState.SHUTTING_DOWN
-        elif status.get("in_limbo"):
-            return DaemonState.LIMBO
-        elif status.get("config_invalid"):
-            return DaemonState.CONFIG_INVALID
-        elif status.get("config_changed_on_disk"):
-            return DaemonState.CONFIG_CHANGED
-        elif status.get("currently_syncing"):
-            return DaemonState.SYNCING
-        elif self._has_sync_issues(status):
-            return DaemonState.SYNC_ISSUES
+
+        for state in self.STATE_PRIORITY:
+            if self._check_state_condition(state, status):
+                return state
+
+        return DaemonState.RUNNING
+
+    def _check_state_condition(self, state, status):
+        if state == DaemonState.ERROR:
+            return self.daemon_start_error
+        elif state == DaemonState.OFFLINE:
+            return "error" in status
+        elif state == DaemonState.SHUTTING_DOWN:
+            return status.get("shutting_down")
+        elif state == DaemonState.LIMBO:
+            return status.get("in_limbo")
+        elif state == DaemonState.CONFIG_INVALID:
+            return status.get("config_invalid")
+        elif state == DaemonState.SYNC_ISSUES:
+            return self._has_sync_issues(status)
+        elif state == DaemonState.CONFIG_CHANGED:
+            return status.get("config_changed_on_disk")
+        elif state == DaemonState.SYNCING:
+            return status.get("currently_syncing")
         else:
-            return DaemonState.RUNNING
+            return False
 
     def _has_sync_issues(self, status):
-        return any(
-            job["sync_status"] not in ["COMPLETED", "NONE", None] or
-            job["resync_status"] not in ["COMPLETED", "NONE", None] or
-            job.get("hash_warnings", False)
-            for job in status.get("sync_jobs", {}).values()
+        return (
+            any(
+                job["sync_status"] not in ["COMPLETED", "NONE", None] or
+                job["resync_status"] not in ["COMPLETED", "NONE", None] or
+                job.get("hash_warnings", False)
+                for job in status.get("sync_jobs", {}).values()
+            ) or
+            bool(status.get("sync_errors"))
         )
 
     def is_currently_syncing(self, status):
@@ -198,14 +223,16 @@ class DaemonManager:
 
     def _get_normal_menu_items(self, status):
         items = []
-        if status.get("config_invalid", False):
+
+        if self._has_sync_issues(status):
             items.append(pystray.MenuItem(
-                "⚠️ Config is invalid", None, enabled=False))
-            items.append(pystray.MenuItem(f"Error: {status.get(
-                'config_error_message', 'Unknown error')}", None, enabled=False))
-        if status.get("config_changed_on_disk", False):
+                "⚠️ Sync issues detected", None, enabled=False))
+        if status.get("config_changed_on_disk"):
             items.append(pystray.MenuItem(
                 "⚠️ Config changed on disk", None, enabled=False))
+
+        if self._has_sync_issues(status) or status.get("config_changed_on_disk"):
+            items.append(pystray.Menu.SEPARATOR)
 
         currently_syncing = status.get('currently_syncing', None)
         if currently_syncing:
@@ -224,11 +251,6 @@ class DaemonManager:
             items.append(pystray.MenuItem("Queued jobs:", None, enabled=False))
             for job in queued_jobs:
                 items.append(pystray.MenuItem(f"  {job}", None, enabled=False))
-
-        # # If neither currently syncing nor queued jobs, add a single item
-        # if not currently_syncing and not queued_jobs:
-        #     items.append(pystray.MenuItem(
-        #         "No active syncs or queued jobs", None, enabled=False))
 
         # Add sync jobs submenu
         if "sync_jobs" in status:
@@ -269,7 +291,7 @@ class DaemonManager:
         elif current_state == DaemonState.SHUTTING_DOWN:
             return Colors.PURPLE
         elif current_state == DaemonState.SYNC_ISSUES:
-            return Colors.ORANGE
+            return Colors.RED
         elif current_state == DaemonState.CONFIG_INVALID:
             return Colors.RED
         elif current_state == DaemonState.CONFIG_CHANGED:
@@ -307,13 +329,24 @@ def get_daemon_status():
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(5)  # Set a timeout of 5 seconds
         client.connect(socket_path)
         client.sendall(b"STATUS")
         status = json.loads(client.recv(4096).decode())
         client.close()
         return status
+    except socket.error as e:
+        log_message(f"Socket error when getting daemon status: {
+                    e}", level=logging.ERROR)
+        return None
+    except json.JSONDecodeError as e:
+        log_message(f"JSON decode error when getting daemon status: {
+                    e}", level=logging.ERROR)
+        return None
     except Exception as e:
-        return {"error": str(e)}
+        log_message(f"Unexpected error when getting daemon status: {
+                    e}", level=logging.ERROR)
+        return None
 
 
 def create_sync_now_handler(job_key):
@@ -526,59 +559,32 @@ def show_status_window():
             job_frame.pack(pady=5, padx=5, fill='x')
 
             ttk.Label(job_frame, text=f"Last sync: {
-                      job_status['last_sync'] or 'Never'}").pack(anchor='w')
+                      job_status['last_sync']}").pack(anchor='w')
             ttk.Label(job_frame, text=f"Next run: {
-                      job_status['next_run'] or 'Not scheduled'}").pack(anchor='w')
+                      job_status['next_run']}").pack(anchor='w')
             ttk.Label(job_frame, text=f"Sync status: {
                       job_status['sync_status']}").pack(anchor='w')
             ttk.Label(job_frame, text=f"Resync status: {
                       job_status['resync_status']}").pack(anchor='w')
 
-    # Add new Messages frame
-    messages_frame = ttk.Frame(notebook)
-    notebook.add(messages_frame, text='Messages')
+    errors_frame = ttk.Frame(notebook)
+    notebook.add(errors_frame, text='Sync Errors')
 
-    messages_text = tkinter.Text(messages_frame, wrap=tkinter.WORD, height=15)
-    messages_text.pack(expand=True, fill='both', padx=5, pady=5)
-    messages_scrollbar = ttk.Scrollbar(
-        messages_frame, orient="vertical", command=messages_text.yview)
-    messages_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
-    messages_text.configure(yscrollcommand=messages_scrollbar.set)
+    if status.get("sync_errors"):
+        for path, error_info in status["sync_errors"].items():
+            error_frame = ttk.LabelFrame(errors_frame, text=path)
+            error_frame.pack(pady=5, padx=5, fill='x')
 
-    # Populate Messages frame
-    messages_text.insert(tkinter.END, "Errors and Warnings:\n\n")
-
-    if status.get("error"):
-        messages_text.insert(tkinter.END, f"Error: {status['error']}\n\n")
-
-    if status.get("config_invalid"):
-        messages_text.insert(tkinter.END, f"Config Invalid: {
-                             status.get('config_error_message', 'Unknown error')}\n\n")
-
-    if status.get("config_changed_on_disk"):
-        messages_text.insert(
-            tkinter.END, "Warning: Config file changed on disk\n\n")
-
-    if status.get("in_limbo"):
-        messages_text.insert(
-            tkinter.END, "Warning: Daemon is in limbo state\n\n")
-
-    for job_key, job_status in status.get("sync_jobs", {}).items():
-        if job_status['sync_status'] not in ["COMPLETED", "NONE", None]:
-            messages_text.insert(tkinter.END, f"Warning: Job '{
-                                 job_key}' sync status: {job_status['sync_status']}\n")
-        if job_status['resync_status'] not in ["COMPLETED", "NONE", None]:
-            messages_text.insert(tkinter.END, f"Warning: Job '{job_key}' resync status: {
-                                 job_status['resync_status']}\n")
-        if job_status.get("hash_warnings", False):
-            messages_text.insert(tkinter.END, f"Warning: Job '{
-                                 job_key}' has hash warnings\n")
-
-    if messages_text.get("1.0", tkinter.END).strip() == "Errors and Warnings:":
-        messages_text.insert(
-            tkinter.END, "No errors or warnings at this time.")
-
-    messages_text.config(state=tkinter.DISABLED)
+            ttk.Label(error_frame, text=f"Sync Type: {
+                      error_info['sync_type']}").pack(anchor='w')
+            ttk.Label(error_frame, text=f"Error Code: {
+                      error_info['error_code']}").pack(anchor='w')
+            ttk.Label(error_frame, text=f"Message: {
+                      error_info['message']}").pack(anchor='w')
+            ttk.Label(error_frame, text=f"Timestamp: {
+                      error_info['timestamp']}").pack(anchor='w')
+    else:
+        ttk.Label(errors_frame, text="No sync errors at this time.").pack(pady=20)
 
     window.mainloop()
 
@@ -635,6 +641,25 @@ def show_text_window(title, content):
     root.mainloop()
 
 
+def ensure_daemon_running():
+    global daemon_manager
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        status = get_daemon_status()
+        if status is not None:
+            log_message("Daemon is already running", level=logging.INFO)
+            return True
+
+        log_message(f"Daemon not running. Attempt {
+                    attempt + 1} to start it.", level=logging.INFO)
+        start_daemon()
+        time.sleep(2)  # Wait for the daemon to start
+
+    log_message("Failed to start daemon after multiple attempts",
+                level=logging.ERROR)
+    return False
+
+
 def run_tray():
     global icon, daemon_manager, args, debug
     daemon_manager = DaemonManager()
@@ -657,6 +682,12 @@ def run_tray():
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
 
+    # Ensure daemon is running before creating the icon
+    if not ensure_daemon_running():
+        log_message("Unable to start the daemon. Exiting.",
+                    level=logging.ERROR)
+        return
+
     icon = pystray.Icon("rclone-bisync-manager",
                         create_status_image(daemon_manager.get_icon_color(daemon_manager.last_status),
                                             daemon_manager.get_icon_text(
@@ -678,15 +709,34 @@ def check_status_and_update(args):
     global icon, daemon_manager
     last_status_hash = None
     initial_startup = True
+    consecutive_errors = 0
 
     while True:
         try:
             current_status = get_daemon_status()
-            current_status_hash = hash(json.dumps(
-                current_status, sort_keys=True)) if current_status else None
+
+            if current_status is None:
+                consecutive_errors += 1
+                log_message(f"Failed to get daemon status. Consecutive errors: {
+                            consecutive_errors}", level=logging.WARNING)
+
+                if consecutive_errors >= 5:  # After 5 consecutive errors, assume daemon is offline
+                    current_status = {
+                        "error": "Daemon is offline or not responding"}
+                    log_message(
+                        "Assuming daemon is offline due to consecutive errors", level=logging.ERROR)
+                else:
+                    time.sleep(1)
+                    continue
+            else:
+                consecutive_errors = 0  # Reset error count if we successfully get a status
+
+            current_status_hash = hash(
+                json.dumps(current_status, sort_keys=True))
 
             if initial_startup:
-                initial_state = daemon_manager.get_current_state(None)
+                initial_state = daemon_manager.get_current_state(
+                    current_status)
                 log_message(f"Initial state: {
                             initial_state.name}", level=logging.INFO)
                 update_menu_and_icon()
@@ -697,7 +747,7 @@ def check_status_and_update(args):
                 current_state = daemon_manager.get_current_state(
                     current_status)
                 log_message(f"Status changed. New state: {
-                    current_state.name}", level=logging.INFO)
+                            current_state.name}", level=logging.INFO)
                 update_menu_and_icon()
                 last_status_hash = current_status_hash
 
@@ -706,13 +756,14 @@ def check_status_and_update(args):
                 current_state = daemon_manager.get_current_state(
                     current_status)
                 log_message(f"First status received. New state: {
-                    current_state.name}", level=logging.INFO)
+                            current_state.name}", level=logging.INFO)
                 update_menu_and_icon()
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
                         e}", level=logging.ERROR)
-            current_status = None  # Assume offline if there's an error getting status
+            # Treat any exception as an error status
+            current_status = {"error": str(e)}
 
         time.sleep(1)
 

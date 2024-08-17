@@ -75,6 +75,7 @@ def generate_status_report():
         "config_changed_on_disk": config.config_changed_on_disk,
         "config_file_location": config.config_file,
         "log_file_location": config._config.log_file_path if config._config else None,
+        "sync_errors": config.sync_errors,
         "sync_jobs": {}
     }
 
