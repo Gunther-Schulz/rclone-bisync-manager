@@ -17,11 +17,6 @@ RClone BiSync Manager is a daemon-based solution for automated, bidirectional sy
 - Configurable exclusion rules
 - Automatic handling of missed sync jobs
 
-## Requirements
-
-- Python 3.12 or higher
-- RClone installed and configured on your system
-
 ## Installation
 
 You can install RClone BiSync Manager using pip:
@@ -29,6 +24,17 @@ You can install RClone BiSync Manager using pip:
 ```
 pip install rclone-bisync-manager
 ```
+
+To install with system tray support, use:
+
+```
+pip install rclone-bisync-manager[tray]
+```
+
+### Requirements
+
+- Python 3.12 or higher
+- RClone installed and configured on your system
 
 ## Configuration
 
