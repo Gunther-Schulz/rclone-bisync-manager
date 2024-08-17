@@ -88,85 +88,100 @@ class DaemonManager:
         current_state = self.get_current_state(status)
         menu_items = []
 
-        if status.get("in_limbo", False):
-            menu_items.append(pystray.MenuItem(
-                "⚠️ Daemon is in limbo state", None, enabled=False))
+        if current_state == DaemonState.ERROR:
+            menu_items.extend(self._get_error_menu_items(status))
+        elif current_state == DaemonState.LIMBO:
+            menu_items.extend(self._get_limbo_menu_items(status))
+        else:
+            menu_items.extend(self._get_normal_menu_items(status))
 
+        # Common menu items for all states
+        menu_items.extend([
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Config & Logs", pystray.Menu(
+                pystray.MenuItem("Reload Config", reload_config,
+                                 enabled=not status.get('shutting_down', False)),
+                pystray.MenuItem("Open Config Folder", open_config_file),
+                pystray.MenuItem("Open Log Folder", open_log_folder)
+            )),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Show Status Window", show_status_window,
+                             enabled=not status.get('shutting_down', False)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Stop Daemon", stop_daemon,
+                             enabled=not status.get('shutting_down', False)),
+            pystray.MenuItem("Exit", lambda: icon.stop())
+        ])
+
+        return menu_items
+
+    def _get_error_menu_items(self, status):
+        return [
+            pystray.MenuItem("⚠️ Daemon Error", None, enabled=False),
+            pystray.MenuItem(f"Error: {status.get(
+                'error', 'Unknown error')}", None, enabled=False),
+        ]
+
+    def _get_limbo_menu_items(self, status):
+        items = [
+            pystray.MenuItem("⚠️ Daemon is in limbo state",
+                             None, enabled=False),
+        ]
         if status.get("config_invalid", False):
-            menu_items.append(pystray.MenuItem(
+            items.append(pystray.MenuItem(
                 "⚠️ Config is invalid", None, enabled=False))
-            menu_items.append(pystray.MenuItem(f"Error: {status.get(
+            items.append(pystray.MenuItem(f"Error: {status.get(
                 'config_error_message', 'Unknown error')}", None, enabled=False))
+        return items
 
+    def _get_normal_menu_items(self, status):
+        items = []
+        if status.get("config_invalid", False):
+            items.append(pystray.MenuItem(
+                "⚠️ Config is invalid", None, enabled=False))
+            items.append(pystray.MenuItem(f"Error: {status.get(
+                'config_error_message', 'Unknown error')}", None, enabled=False))
         if status.get("config_changed_on_disk", False):
-            menu_items.append(pystray.MenuItem(
+            items.append(pystray.MenuItem(
                 "⚠️ Config changed on disk", None, enabled=False))
 
         currently_syncing = status.get('currently_syncing', 'None')
-        menu_items.append(pystray.MenuItem(f"Currently syncing:\n  {
-                          currently_syncing}", None, enabled=False))
+        items.append(pystray.MenuItem(f"Currently syncing: {
+                     currently_syncing}", None, enabled=False))
 
         queued_jobs = status.get('queued_paths', [])
         if queued_jobs:
             queued_jobs_str = "Queued jobs:\n" + \
                 "\n".join(f"  {job}" for job in queued_jobs)
-            menu_items.append(pystray.MenuItem(
+            items.append(pystray.MenuItem(
                 queued_jobs_str, None, enabled=False))
         else:
-            menu_items.append(pystray.MenuItem(
-                "Queued jobs:\n  None", None, enabled=False))
+            items.append(pystray.MenuItem(
+                "Queued jobs: None", None, enabled=False))
 
-        menu_items.append(pystray.Menu.SEPARATOR)
-
-        is_shutting_down = status.get('shutting_down', False)
-
-        if "sync_jobs" in status and not status.get('config_invalid', False) and not is_shutting_down:
+        # Add sync jobs submenu
+        if "sync_jobs" in status:
             jobs_submenu = []
-            for job_key, job_status in reversed(status["sync_jobs"].items()):
-                last_sync = job_status['last_sync'].replace(
-                    'T', ' ')[:16] if job_status['last_sync'] else 'Never'
-                next_run = job_status['next_run'].replace(
-                    'T', ' ')[:16] if job_status['next_run'] else 'Not scheduled'
-
+            for job_key, job_status in status["sync_jobs"].items():
                 job_submenu = pystray.Menu(
-                    pystray.MenuItem("    ⚡ Sync Now",
-                                     create_sync_now_handler(job_key)),
-                    pystray.MenuItem(f"    Last sync: {
-                                     last_sync}", None, enabled=False),
-                    pystray.MenuItem(f"    Next run: {
-                                     next_run}", None, enabled=False),
-                    pystray.MenuItem(f"    Sync status: {
-                                     job_status['sync_status']}", None, enabled=False),
-                    pystray.MenuItem(f"    Resync status: {
+                    pystray.MenuItem(
+                        "Sync Now", create_sync_now_handler(job_key)),
+                    pystray.MenuItem(
+                        f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
+                    pystray.MenuItem(
+                        f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
+                    pystray.MenuItem(
+                        f"Sync status: {job_status['sync_status']}", None, enabled=False),
+                    pystray.MenuItem(f"Resync status: {
                                      job_status['resync_status']}", None, enabled=False),
                 )
-                jobs_submenu.append(pystray.MenuItem(
-                    f"  {job_key}", job_submenu))
-
-            menu_items.append(pystray.MenuItem(
-                "Sync Jobs", pystray.Menu(*reversed(jobs_submenu))))
+                jobs_submenu.append(pystray.MenuItem(job_key, job_submenu))
+            items.append(pystray.MenuItem(
+                "Sync Jobs", pystray.Menu(*jobs_submenu)))
         else:
-            menu_items.append(pystray.MenuItem(
-                "Sync Jobs", None, enabled=False))
+            items.append(pystray.MenuItem("Sync Jobs", None, enabled=False))
 
-        menu_items.extend([
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config, enabled=status.get(
-                    'currently_syncing') == None and not is_shutting_down),
-                pystray.MenuItem("Open Config Folder", open_config_file),
-                pystray.MenuItem("Open Log Folder", open_log_folder)
-            )),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Status Window",
-                             show_status_window, enabled=not is_shutting_down),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Shutting down..." if is_shutting_down else "Stop Daemon",
-                             stop_daemon, enabled=not is_shutting_down),
-            pystray.MenuItem("Exit", lambda: icon.stop())
-        ])
-
-        return menu_items
+        return items
 
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
@@ -564,7 +579,9 @@ def check_status_and_update(args):
                 json.dumps(current_status, sort_keys=True))
 
             if current_status_hash != last_status_hash:
-                print("Status changed. Updating menu and icon.")
+                current_state = daemon_manager.get_current_state(
+                    current_status)
+                print(f"Status changed. New state: {current_state.name}")
                 new_menu = pystray.Menu(
                     *daemon_manager.get_menu_items(current_status))
                 new_icon = create_status_image(

@@ -271,8 +271,7 @@ class Config:
             if debug:
                 print(f"Formatted error message:\n{error_message}")
 
-            if not self.config_invalid or self.config_error_message != error_message:
-                log_error(f"Configuration on disk is invalid: {error_message}")
+            log_error(f"Configuration on disk is invalid: {error_message}")
             self.config_invalid = True
             self.config_error_message = error_message
             raise ValueError(error_message)
