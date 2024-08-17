@@ -114,11 +114,14 @@ class DaemonManager:
             return DaemonState.RUNNING
 
     def _has_sync_issues(self, status):
-        return any(
-            job["sync_status"] not in ["COMPLETED", "NONE", None] or
-            job["resync_status"] not in ["COMPLETED", "NONE", None] or
-            job.get("hash_warnings", False)
-            for job in status.get("sync_jobs", {}).values()
+        return (
+            any(
+                job["sync_status"] not in ["COMPLETED", "NONE", None] or
+                job["resync_status"] not in ["COMPLETED", "NONE", None] or
+                job.get("hash_warnings", False)
+                for job in status.get("sync_jobs", {}).values()
+            ) or
+            bool(status.get("sync_errors"))
         )
 
     def is_currently_syncing(self, status):
@@ -198,6 +201,10 @@ class DaemonManager:
 
     def _get_normal_menu_items(self, status):
         items = []
+        # Add general warning for sync errors
+        if status.get("sync_errors"):
+            items.append(pystray.MenuItem(
+                "⚠️ Sync errors detected", None, enabled=False))
         if status.get("config_invalid", False):
             items.append(pystray.MenuItem(
                 "⚠️ Config is invalid", None, enabled=False))
@@ -269,7 +276,7 @@ class DaemonManager:
         elif current_state == DaemonState.SHUTTING_DOWN:
             return Colors.PURPLE
         elif current_state == DaemonState.SYNC_ISSUES:
-            return Colors.ORANGE
+            return Colors.RED
         elif current_state == DaemonState.CONFIG_INVALID:
             return Colors.RED
         elif current_state == DaemonState.CONFIG_CHANGED:
@@ -573,6 +580,43 @@ def show_status_window():
         if job_status.get("hash_warnings", False):
             messages_text.insert(tkinter.END, f"Warning: Job '{
                                  job_key}' has hash warnings\n")
+
+    # Add new Sync Errors frame
+    errors_frame = ttk.Frame(notebook)
+    notebook.add(errors_frame, text='Sync Errors')
+
+    errors_text = tkinter.Text(errors_frame, wrap=tkinter.WORD, height=15)
+    errors_text.pack(expand=True, fill='both', padx=5, pady=5)
+    errors_scrollbar = ttk.Scrollbar(
+        errors_frame, orient="vertical", command=errors_text.yview)
+    errors_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
+    errors_text.configure(yscrollcommand=errors_scrollbar.set)
+
+    # Populate Sync Errors frame
+    if status.get("sync_errors"):
+        for path, error_info in status["sync_errors"].items():
+            errors_text.insert(tkinter.END, f"Path: {path}\n")
+            errors_text.insert(tkinter.END, f"  Sync Type: {
+                               error_info['sync_type']}\n")
+            errors_text.insert(tkinter.END, f"  Error Code: {
+                               error_info['error_code']}\n")
+            errors_text.insert(tkinter.END, f"  Message: {
+                               error_info['message']}\n")
+            errors_text.insert(tkinter.END, f"  Timestamp: {
+                               error_info['timestamp']}\n\n")
+    else:
+        errors_text.insert(tkinter.END, "No sync errors at this time.")
+
+    errors_text.config(state=tkinter.DISABLED)
+
+    # Update Messages frame with Sync Errors
+    messages_text.insert(tkinter.END, "Sync Errors:\n")
+    if status.get("sync_errors"):
+        for path, error_info in status["sync_errors"].items():
+            messages_text.insert(tkinter.END, f"Error in {path}: {
+                                 error_info['message']}\n")
+    else:
+        messages_text.insert(tkinter.END, "No sync errors at this time.\n")
 
     if messages_text.get("1.0", tkinter.END).strip() == "Errors and Warnings:":
         messages_text.insert(
