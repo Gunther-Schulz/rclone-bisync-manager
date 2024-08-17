@@ -5,7 +5,7 @@ from pystray import MenuItem as item
 import tkinter
 from tkinter import ttk
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import socket
 import json
 import threading
@@ -14,6 +14,9 @@ import subprocess
 import os
 import enum
 from dataclasses import dataclass
+import math
+from io import BytesIO
+from cairosvg import svg2png
 
 global daemon_manager
 daemon_manager = None
@@ -330,50 +333,36 @@ def determine_arrow_color(color, icon_text):
 
 def create_status_image(color, icon_text):
     size = 64
-    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
 
-    # Draw background circle
-    draw.ellipse([0, 0, size, size], fill=color)
+    # Convert color tuple to hex string
+    if isinstance(color, tuple):
+        color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
 
-    # Determine arrow color
-    arrow_color = determine_arrow_color(color, icon_text)
+    # SVG code for the arrows with color placeholder
+    svg_code = '''
+    <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+    <path d="M290.688 449.941333a21.290667 21.290667 0 0 0-30.058667 2.624l-99.52 118.698667c-10.858667-77.034667 4.010667-154.026667 43.861334-220.501333 47.872-79.893333 128-138.048 219.818666-159.573334a341.12 341.12 0 0 1 334.122667 106.709334 21.354667 21.354667 0 0 0 32-28.245334 383.68 383.68 0 0 0-375.850667-120.042666c-102.997333 24.128-192.917333 89.450667-246.677333 179.2-41.344 68.992-58.816 147.882667-51.882667 227.541333l-77.418666-115.797333a21.333333 21.333333 0 0 0-35.477334 23.701333l118.592 177.344a21.333333 21.333333 0 0 0 16.576 9.450667l1.152 0.021333c6.272 0 12.266667-2.773333 16.362667-7.573333L293.333333 480a21.333333 21.333333 0 0 0-2.645333-30.058667zM1001.813333 625.898667l-118.528-177.344a21.290667 21.290667 0 0 0-16.576-9.450667 21.866667 21.866667 0 0 0-17.493333 7.594667l-137.130667 163.498666a21.333333 21.333333 0 0 0 32.704 27.434667l95.786667-114.197333c5.312 154.368-101.162667 295.146667-259.968 332.352-115.114667 26.965333-234.090667-6.613333-318.293333-89.92a21.354667 21.354667 0 0 0-30.037334 30.336c73.173333 72.384 169.685333 111.424 269.525334 111.424 29.397333 0 59.072-3.392 88.554666-10.304 177.792-41.642667 297.322667-198.869333 292.949334-371.968l83.050666 124.288a21.333333 21.333333 0 1 0 35.456-23.744z" fill="{color}"/>
+    </svg>
+    '''
 
-    # Draw arrows
-    arrow_width = 4
-    arrow_padding = 12
-    arrow_size = size - 2 * arrow_padding
+    # Replace color placeholder with actual color
+    svg_code = svg_code.format(color=color)
 
-    # Top arrow (pointing right)
-    draw.line((arrow_padding, size//2 - arrow_size//4,
-               size - arrow_padding, size//2 - arrow_size//4),
-              fill=arrow_color, width=arrow_width)
-    draw.polygon([(size - arrow_padding, size//2 - arrow_size//4),
-                  (size - arrow_padding - arrow_size//6,
-                   size//2 - arrow_size//4 - arrow_size//6),
-                  (size - arrow_padding - arrow_size//6, size//2 - arrow_size//4 + arrow_size//6)],
-                 fill=arrow_color)
+    # Convert SVG to PNG
+    png_data = svg2png(bytestring=svg_code,
+                       output_width=size, output_height=size)
 
-    # Bottom arrow (pointing left)
-    draw.line((size - arrow_padding, size//2 + arrow_size//4,
-               arrow_padding, size//2 + arrow_size//4),
-              fill=arrow_color, width=arrow_width)
-    draw.polygon([(arrow_padding, size//2 + arrow_size//4),
-                  (arrow_padding + arrow_size//6, size //
-                   2 + arrow_size//4 - arrow_size//6),
-                  (arrow_padding + arrow_size//6, size//2 + arrow_size//4 + arrow_size//6)],
-                 fill=arrow_color)
-
-    # Draw icon text
-    font = ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-    left, top, right, bottom = draw.textbbox((0, 0), icon_text, font=font)
-    text_width = right - left
-    text_height = bottom - top
-    text_position = ((size - text_width) // 2, (size - text_height) // 2)
-    draw.text(text_position, icon_text, font=font, fill=arrow_color)
+    # Create image with transparent background
+    image = Image.open(BytesIO(png_data)).convert('RGBA')
 
     return image
+
+
+def determine_text_color(background_color):
+    # Simple logic to determine if text should be black or white based on background brightness
+    r, g, b = background_color[:3]
+    brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return "#000000" if brightness > 0.5 else "#FFFFFF"
 
 
 def show_status_window():
