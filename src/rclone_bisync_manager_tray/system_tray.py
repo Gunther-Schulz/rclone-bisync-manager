@@ -277,6 +277,8 @@ class DaemonManager:
             return "WARN"
         elif current_state == DaemonState.LIMBO:
             return "LIMBO"
+        elif current_state == DaemonState.SHUTTING_DOWN:
+            return "STOP"
         else:
             return "RUN"
 
