@@ -207,18 +207,17 @@ class DaemonManager:
                 for job in currently_syncing:
                     items.append(pystray.MenuItem(
                         f"  {job.strip()}", None, enabled=False))
-        else:
-            items.append(pystray.MenuItem(
-                "No active syncs", None, enabled=False))
 
         queued_jobs = status.get('queued_paths', [])
         if queued_jobs:
             items.append(pystray.MenuItem("Queued jobs:", None, enabled=False))
             for job in queued_jobs:
                 items.append(pystray.MenuItem(f"  {job}", None, enabled=False))
-        else:
+
+        # If neither currently syncing nor queued jobs, add a single item
+        if not currently_syncing and not queued_jobs:
             items.append(pystray.MenuItem(
-                "No queued jobs", None, enabled=False))
+                "No active syncs or queued jobs", None, enabled=False))
 
         # Add sync jobs submenu
         if "sync_jobs" in status:
