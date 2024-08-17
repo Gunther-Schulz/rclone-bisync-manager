@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
-from PIL import ImageFont
 from pystray import MenuItem as item
 import tkinter
 from tkinter import ttk
 import pystray
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import socket
 import json
 import threading
@@ -14,7 +13,6 @@ import subprocess
 import os
 import enum
 from dataclasses import dataclass
-import math
 from io import BytesIO
 from cairosvg import svg2png
 import argparse
@@ -26,6 +24,16 @@ logging.basicConfig(level=logging.DEBUG,
 
 global daemon_manager
 daemon_manager = None
+
+# At the top of the file, after imports
+debug = False
+
+
+def log_message(message, level=logging.INFO):
+    if args.log_level != 'NONE':
+        logging.log(level, message)
+    elif debug:
+        print(message)
 
 
 class DaemonState(enum.Enum):
@@ -80,8 +88,8 @@ class DaemonManager:
             current_state = self._determine_state(status)
 
         if current_state != self.last_state:
-            logging.info(f"State changed: {
-                         self.last_state} -> {current_state}")
+            log_message(f"State changed: {
+                        self.last_state} -> {current_state}", level=logging.INFO)
             self.last_state = current_state
         return current_state
 
@@ -228,7 +236,7 @@ class DaemonManager:
             for job_key, job_status in status["sync_jobs"].items():
                 job_submenu = pystray.Menu(
                     pystray.MenuItem(
-                        "Sync Now", create_sync_now_handler(job_key)),
+                        "⚡ Sync Now", create_sync_now_handler(job_key)),
                     pystray.MenuItem(
                         f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
                     pystray.MenuItem(
@@ -322,12 +330,13 @@ def stop_daemon():
         client.sendall(b"STOP")
         response = client.recv(1024).decode()
         client.close()
-        print("Daemon is shutting down. Use 'daemon status' to check progress.")
+        log_message(
+            "Daemon is shutting down. Use 'daemon status' to check progress.")
 
         # Immediately update the menu to show "Shutting Down"
         update_menu_and_icon()
     except Exception as e:
-        print(f"Error stopping daemon: {e}")
+        log_message(f"Error stopping daemon: {e}", level=logging.ERROR)
 
 
 def start_daemon():
@@ -335,10 +344,10 @@ def start_daemon():
     try:
         subprocess.run(
             ["rclone-bisync-manager", "daemon", "start"], check=True)
-        print("Daemon started successfully")
+        log_message("Daemon started successfully")
         daemon_manager.daemon_start_error = None
     except subprocess.CalledProcessError as e:
-        print(f"Error starting daemon: {e}")
+        log_message(f"Error starting daemon: {e}", level=logging.ERROR)
         daemon_manager.daemon_start_error = str(e)
 
 
@@ -355,10 +364,10 @@ def reload_config():
         try:
             response_data = json.loads(response)
             if response_data["status"] == "success":
-                print("Configuration reloaded successfully")
+                log_message("Configuration reloaded successfully")
             else:
-                print(f"Error reloading configuration: {
-                      response_data['message']}")
+                log_message(f"Error reloading configuration: {
+                    response_data['message']}", level=logging.ERROR)
 
             current_status = get_daemon_status()
             new_menu = pystray.Menu(
@@ -376,10 +385,12 @@ def reload_config():
 
             return response_data["status"] == "success"
         except json.JSONDecodeError:
-            print(f"Error: Invalid JSON response from daemon: {response}")
+            log_message(f"Error: Invalid JSON response from daemon: {
+                        response}", level=logging.ERROR)
             return False
     except Exception as e:
-        print(f"Error communicating with daemon: {str(e)}")
+        log_message(f"Error communicating with daemon: {
+                    str(e)}", level=logging.ERROR)
         return False
 
 
@@ -391,9 +402,10 @@ def add_to_sync_queue(job_key):
         client.sendall(json.dumps([job_key]).encode())
         response = client.recv(1024).decode()
         client.close()
-        print(f"Add to sync queue response: {response}")
+        log_message(f"Add to sync queue response: {response}")
     except Exception as e:
-        print(f"Error adding job to sync queue: {str(e)}")
+        log_message(f"Error adding job to sync queue: {
+                    str(e)}", level=logging.ERROR)
 
 
 def determine_arrow_color(color, icon_text):
@@ -580,7 +592,7 @@ def open_config_file():
         elif os.name == 'posix':  # For macOS and Linux
             subprocess.call(('xdg-open', config_dir))
     else:
-        print("Config file path not found")
+        log_message("Config file path not found", level=logging.ERROR)
 
 
 def open_log_folder():
@@ -592,7 +604,7 @@ def open_log_folder():
         elif os.name == 'posix':  # For macOS and Linux
             subprocess.call(('xdg-open', log_dir))
     else:
-        print("Log file path not found")
+        log_message("Log file path not found", level=logging.ERROR)
 
 
 def get_config_file_path():
@@ -624,7 +636,7 @@ def show_text_window(title, content):
 
 
 def run_tray():
-    global icon, daemon_manager, args
+    global icon, daemon_manager, args, debug
     daemon_manager = DaemonManager()
 
     parser = argparse.ArgumentParser()
@@ -632,7 +644,18 @@ def run_tray():
                         choices=[1, 2], default=1, help='Choose icon style: 1 or 2')
     parser.add_argument('--icon-thickness', type=int,
                         default=40, help='Set the thickness of the icon lines')
+    parser.add_argument('--log-level', type=str, choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        default='NONE', help='Set the logging level')
     args = parser.parse_args()
+
+    # Set up logging based on the argument
+    if args.log_level != 'NONE':
+        logging.basicConfig(level=getattr(logging, args.log_level),
+                            format='%(asctime)s - %(levelname)s - %(message)s')
+        debug = (args.log_level == 'DEBUG')
+    else:
+        logging.disable(logging.CRITICAL)  # Disable all logging
+        debug = False
 
     icon = pystray.Icon("rclone-bisync-manager",
                         create_status_image(daemon_manager.get_icon_color(daemon_manager.last_status),
@@ -664,7 +687,8 @@ def check_status_and_update(args):
 
             if initial_startup:
                 initial_state = daemon_manager.get_current_state(None)
-                logging.info(f"Initial state: {initial_state.name}")
+                log_message(f"Initial state: {
+                            initial_state.name}", level=logging.INFO)
                 update_menu_and_icon()
                 initial_startup = False
                 last_status_hash = current_status_hash
@@ -672,8 +696,8 @@ def check_status_and_update(args):
             if current_status_hash != last_status_hash:
                 current_state = daemon_manager.get_current_state(
                     current_status)
-                logging.info(f"Status changed. New state: {
-                             current_state.name}")
+                log_message(f"Status changed. New state: {
+                    current_state.name}", level=logging.INFO)
                 update_menu_and_icon()
                 last_status_hash = current_status_hash
 
@@ -681,12 +705,13 @@ def check_status_and_update(args):
                 daemon_manager.first_status_received = True
                 current_state = daemon_manager.get_current_state(
                     current_status)
-                logging.info(f"First status received. New state: {
-                             current_state.name}")
+                log_message(f"First status received. New state: {
+                    current_state.name}", level=logging.INFO)
                 update_menu_and_icon()
 
         except Exception as e:
-            logging.error(f"Error in check_status_and_update: {e}")
+            log_message(f"Error in check_status_and_update: {
+                        e}", level=logging.ERROR)
             current_status = None  # Assume offline if there's an error getting status
 
         time.sleep(1)
@@ -696,14 +721,14 @@ def update_menu_and_icon():
     global icon, daemon_manager, args
     current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
-    logging.info(f"Updating menu and icon. Current state: {
-                 current_state.name}")
+    log_message(f"Updating menu and icon. Current state: {
+        current_state.name}", level=logging.INFO)
 
     # Update menu
     new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
     icon.menu = new_menu
     icon.update_menu()
-    logging.debug("Menu updated")
+    log_message("Menu updated", level=logging.DEBUG)
 
     # Update icon in a separate thread
     threading.Thread(target=update_icon, args=(
@@ -712,18 +737,18 @@ def update_menu_and_icon():
 
 def update_icon(current_status, current_state):
     global icon, daemon_manager, args
-    logging.debug("Starting icon update")
+    log_message("Starting icon update", level=logging.DEBUG)
     new_icon = create_status_image(
         daemon_manager.get_icon_color(current_status),
         daemon_manager.get_icon_text(current_status),
         style=args.icon_style,
         thickness=args.icon_thickness
     )
-    logging.debug("New icon created")
+    log_message("New icon created", level=logging.DEBUG)
     icon.icon = new_icon
-    logging.debug(f"Icon color updated to: {
-                  daemon_manager.get_icon_color(current_status)}")
-    logging.debug("Icon update completed")
+    log_message(f"Icon color updated to: {
+        daemon_manager.get_icon_color(current_status)}", level=logging.DEBUG)
+    log_message("Icon update completed", level=logging.DEBUG)
 
 
 def main():
