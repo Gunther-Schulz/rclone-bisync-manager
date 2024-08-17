@@ -178,7 +178,8 @@ class DaemonManager:
 
         # Add Start/Stop/Shutting Down menu item
         if current_state in [DaemonState.OFFLINE, DaemonState.ERROR]:
-            menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+            menu_items.append(pystray.MenuItem(
+                "Start Daemon", lambda: start_daemon()))
         elif current_state == DaemonState.SHUTTING_DOWN:
             menu_items.append(pystray.MenuItem(
                 "Shutting Down", lambda: None, enabled=False))
