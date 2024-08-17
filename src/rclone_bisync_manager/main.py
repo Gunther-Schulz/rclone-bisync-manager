@@ -23,13 +23,14 @@ def main():
     if args.command == 'daemon':
         if args.action == 'start':
             try:
-                config.load_and_validate_config(args)
+                # Initialize config without validation
+                config.initialize_config(args)
                 set_config(config)  # Set the config for logging_utils
                 ensure_log_file_path()
                 setup_loggers(args.console_log)
                 log_config_file_location(config.config_file)
-            except (ValueError, FileNotFoundError) as e:
-                print(f"Configuration error: {str(e)}")
+            except Exception as e:
+                print(f"Error initializing configuration: {str(e)}")
                 sys.exit(1)
 
             check_tools()
@@ -50,7 +51,7 @@ def main():
                         "Use 'daemon status' to check its status or 'daemon stop' to stop it.")
                 sys.exit(1)
             try:
-                log_message("Starting daemon...")
+                log_message("Starting daemon in limbo state...")
                 with daemon.DaemonContext(
                     working_directory='/',
                     umask=0o002,
@@ -61,10 +62,6 @@ def main():
                     stdout=sys.stdout,
                     stderr=sys.stderr
                 ):
-                    scheduler.schedule_tasks()
-                    if not config._config.run_initial_sync_on_startup:
-                        log_message(
-                            "Skipping initial sync as per configuration")
                     config.args = args
                     daemon_main()
             except Exception as e:
