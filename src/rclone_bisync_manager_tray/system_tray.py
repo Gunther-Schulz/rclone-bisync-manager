@@ -691,19 +691,28 @@ def show_text_window(title, content):
 
 def ensure_daemon_running():
     global daemon_manager
-    max_attempts = 1
-    for attempt in range(max_attempts):
+    timeout = 30  # Timeout in seconds
+    interval = 1  # Check interval in seconds
+
+    status = get_daemon_status()
+    if status is not None:
+        log_message("Daemon is already running", level=logging.INFO)
+        return True
+
+    log_message("Daemon not running. Attempting to start it.",
+                level=logging.INFO)
+    start_daemon()
+
+    elapsed_time = 0
+    while elapsed_time < timeout:
         status = get_daemon_status()
         if status is not None:
-            log_message("Daemon is already running", level=logging.INFO)
+            log_message("Daemon started successfully", level=logging.INFO)
             return True
+        time.sleep(interval)
+        elapsed_time += interval
 
-        log_message(f"Daemon not running. Attempt {
-                    attempt + 1} to start it.", level=logging.INFO)
-        start_daemon()
-        time.sleep(2)  # Wait for the daemon to start
-
-    log_message("Failed to start daemon after multiple attempts",
+    log_message("Failed to start daemon within the timeout period",
                 level=logging.ERROR)
     return False
 
