@@ -149,7 +149,11 @@ class DaemonManager:
             f"Error: {truncated_error}", None, enabled=False))
         menu_items.append(pystray.MenuItem(
             "Show Full Error Details", self.show_error_details))
+        menu_items.append(pystray.Menu.SEPARATOR)
         menu_items.append(pystray.MenuItem("Reload Config", reload_config))
+        if self.status.get("config_changed_on_disk", False):
+            menu_items.append(pystray.MenuItem(
+                "⚠️ Config changed on disk", None, enabled=False))
         menu_items.append(pystray.Menu.SEPARATOR)
         menu_items.append(pystray.MenuItem("Shutdown Daemon", stop_daemon))
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
