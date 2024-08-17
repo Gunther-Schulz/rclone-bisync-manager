@@ -17,6 +17,7 @@ from io import BytesIO
 from cairosvg import svg2png
 import argparse
 import logging
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG,
@@ -75,7 +76,7 @@ class DaemonManager:
         DaemonState.SHUTTING_DOWN,
         DaemonState.LIMBO,
         DaemonState.CONFIG_INVALID,
-        DaemonState.SYNC_ISSUES,  # Moved up in priority
+        DaemonState.SYNC_ISSUES,
         DaemonState.CONFIG_CHANGED,
         DaemonState.SYNCING,
         DaemonState.RUNNING
@@ -88,25 +89,17 @@ class DaemonManager:
         self.first_status_received = False
 
     def get_current_state(self, status):
-        if self.last_state == DaemonState.INITIAL:
-            current_state = DaemonState.STARTING
-        elif not self.first_status_received:
-            if status is None:
-                current_state = DaemonState.STARTING
-            else:
-                self.first_status_received = True
-                current_state = self._determine_state(status)
+        if "state" in status:
+            return status["state"]
+        elif "error" in status:
+            return DaemonState.ERROR
+        elif status is None:
+            return DaemonState.OFFLINE
         else:
-            current_state = self._determine_state(status)
-
-        if current_state != self.last_state:
-            log_message(f"State changed: {
-                        self.last_state} -> {current_state}", level=logging.INFO)
-            self.last_state = current_state
-        return current_state
+            return self._determine_state(status)
 
     def _determine_state(self, status):
-        if status is None:
+        if status is None or "error" in status:
             return DaemonState.OFFLINE
 
         for state in self.STATE_PRIORITY:
@@ -119,7 +112,7 @@ class DaemonManager:
         if state == DaemonState.ERROR:
             return self.daemon_start_error
         elif state == DaemonState.OFFLINE:
-            return "error" in status
+            return status is None or "error" in status
         elif state == DaemonState.SHUTTING_DOWN:
             return status.get("shutting_down")
         elif state == DaemonState.LIMBO:
@@ -155,10 +148,11 @@ class DaemonManager:
         current_state = self.get_current_state(status)
         menu_items = []
 
-        if current_state == DaemonState.ERROR:
-            menu_items.extend(self._get_error_menu_items())
-        elif current_state == DaemonState.OFFLINE:
-            menu_items.extend(self._get_offline_menu_items())
+        if current_state == DaemonState.INITIAL:
+            menu_items.append(pystray.MenuItem(
+                "Initializing...", None, enabled=False))
+        elif current_state == DaemonState.ERROR or current_state == DaemonState.OFFLINE:
+            menu_items.extend(self._get_error_menu_items(status))
         elif current_state == DaemonState.LIMBO:
             menu_items.extend(self._get_limbo_menu_items(status))
         else:
@@ -168,16 +162,14 @@ class DaemonManager:
         menu_items.extend([
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config, enabled=not (
-                    current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN] or
-                    self.is_currently_syncing(status)
-                )),
+                pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
+                                 DaemonState.INITIAL, DaemonState.ERROR, DaemonState.OFFLINE, DaemonState.SHUTTING_DOWN]),
                 pystray.MenuItem("Open Config Folder", open_config_file),
                 pystray.MenuItem("Open Log Folder", open_log_folder)
             )),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Status Window", show_status_window, enabled=current_state not in [
-                             DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
+            pystray.MenuItem("Show Status Window",
+                             show_status_window, enabled=True),
             pystray.Menu.SEPARATOR,
         ])
 
@@ -187,24 +179,21 @@ class DaemonManager:
         elif current_state == DaemonState.SHUTTING_DOWN:
             menu_items.append(pystray.MenuItem(
                 "Shutting Down", lambda: None, enabled=False))
-        else:
+        elif current_state != DaemonState.INITIAL:
             menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
 
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
 
         return menu_items
 
-    def _get_error_menu_items(self):
-        return [
-            pystray.MenuItem("⚠️ Daemon failed to start", None, enabled=False),
-            pystray.MenuItem(
-                f"Error: {self.daemon_start_error}", None, enabled=False),
-        ]
-
-    def _get_offline_menu_items(self):
-        return [
-            pystray.MenuItem("⚠️ Daemon is offline", None, enabled=False),
-        ]
+    def _get_error_menu_items(self, status):
+        items = [pystray.MenuItem(
+            "⚠️ Daemon is not running", None, enabled=False)]
+        error_message = status.get("error") or self.daemon_start_error
+        if error_message:
+            items.append(pystray.MenuItem(
+                f"Error: {error_message[:50]}...", None, enabled=False))
+        return items
 
     def _get_limbo_menu_items(self, status):
         items = [
@@ -279,7 +268,7 @@ class DaemonManager:
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
         if current_state == DaemonState.INITIAL:
-            return Colors.GRAY
+            return Colors.YELLOW
         elif current_state == DaemonState.STARTING:
             return Colors.YELLOW
         elif current_state == DaemonState.RUNNING:
@@ -305,7 +294,9 @@ class DaemonManager:
 
     def get_icon_text(self, status):
         current_state = self.get_current_state(status)
-        if current_state == DaemonState.ERROR:
+        if current_state == DaemonState.INITIAL:
+            return "INIT"
+        elif current_state == DaemonState.ERROR:
             return "ERR"
         elif current_state == DaemonState.OFFLINE:
             return "OFF"
@@ -376,12 +367,19 @@ def start_daemon():
     global daemon_manager
     try:
         subprocess.run(
-            ["rclone-bisync-manager", "daemon", "start"], check=True)
+            ["rclone-bisync-manager", "daemon", "start"], check=True, capture_output=True, text=True)
         log_message("Daemon started successfully")
         daemon_manager.daemon_start_error = None
     except subprocess.CalledProcessError as e:
-        log_message(f"Error starting daemon: {e}", level=logging.ERROR)
-        daemon_manager.daemon_start_error = str(e)
+        error_message = f"Error starting daemon: {
+            e}\nOutput: {e.stdout}\nError: {e.stderr}"
+        log_message(error_message, level=logging.ERROR)
+        daemon_manager.daemon_start_error = error_message
+    except Exception as e:
+        error_message = f"Unexpected error starting daemon: {
+            e}\n{traceback.format_exc()}"
+        log_message(error_message, level=logging.ERROR)
+        daemon_manager.daemon_start_error = error_message
 
 
 def reload_config():
@@ -400,7 +398,7 @@ def reload_config():
                 log_message("Configuration reloaded successfully")
             else:
                 log_message(f"Error reloading configuration: {
-                    response_data['message']}", level=logging.ERROR)
+                            response_data['message']}", level=logging.ERROR)
 
             current_status = get_daemon_status()
             new_menu = pystray.Menu(
@@ -527,6 +525,15 @@ def show_status_window():
 
     general_frame = ttk.Frame(notebook)
     notebook.add(general_frame, text='General')
+
+    if daemon_manager.daemon_start_error:
+        error_label = ttk.Label(
+            general_frame, text="⚠️ Error starting daemon:", foreground="red")
+        error_label.pack(pady=(10, 0))
+        error_text = tkinter.Text(general_frame, wrap=tkinter.WORD, height=4)
+        error_text.pack(pady=(0, 10), padx=10, fill='x')
+        error_text.insert(tkinter.END, daemon_manager.daemon_start_error)
+        error_text.config(state=tkinter.DISABLED)
 
     ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
         'config_invalid', False) else 'Invalid'}").pack(pady=5)
@@ -707,21 +714,19 @@ def run_tray():
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
 
-    # Ensure daemon is running before creating the icon
-    if not ensure_daemon_running():
-        log_message("Unable to start the daemon. Exiting.",
-                    level=logging.ERROR)
-        return
+    # Start with INITIAL state
+    initial_status = {"state": DaemonState.INITIAL}
 
     icon = pystray.Icon("rclone-bisync-manager",
-                        create_status_image(daemon_manager.get_icon_color(daemon_manager.last_status),
+                        create_status_image(daemon_manager.get_icon_color(initial_status),
                                             daemon_manager.get_icon_text(
-                                                daemon_manager.last_status),
+                                                initial_status),
                                             style=args.icon_style,
                                             thickness=args.icon_thickness),
                         "RClone BiSync Manager")
-    icon.menu = pystray.Menu(
-        *daemon_manager.get_menu_items(daemon_manager.last_status))
+
+    # Create initial menu
+    icon.menu = pystray.Menu(*daemon_manager.get_menu_items(initial_status))
 
     # Start the status checking thread, passing args
     threading.Thread(target=check_status_and_update,
@@ -734,71 +739,44 @@ def check_status_and_update(args):
     global icon, daemon_manager
     last_status_hash = None
     initial_startup = True
-    consecutive_errors = 0
 
     while True:
         try:
-            current_status = get_daemon_status()
+            if initial_startup:
+                current_status = {"state": DaemonState.INITIAL}
+                initial_startup = False
+                daemon_running = ensure_daemon_running()
+                if not daemon_running:
+                    current_status = {"state": DaemonState.OFFLINE,
+                                      "error": daemon_manager.daemon_start_error}
+            else:
+                current_status = get_daemon_status()
 
             if current_status is None:
-                consecutive_errors += 1
-                log_message(f"Failed to get daemon status. Consecutive errors: {
-                            consecutive_errors}", level=logging.WARNING)
-
-                if consecutive_errors >= 5:  # After 5 consecutive errors, assume daemon is offline
-                    current_status = {
-                        "error": "Daemon is offline or not responding"}
-                    log_message(
-                        "Assuming daemon is offline due to consecutive errors", level=logging.ERROR)
-                else:
-                    time.sleep(1)
-                    continue
-            else:
-                consecutive_errors = 0  # Reset error count if we successfully get a status
+                current_status = {"state": DaemonState.OFFLINE,
+                                  "error": "Failed to get daemon status"}
 
             current_status_hash = hash(
                 json.dumps(current_status, sort_keys=True))
 
-            if initial_startup:
-                initial_state = daemon_manager.get_current_state(
-                    current_status)
-                log_message(f"Initial state: {
-                            initial_state.name}", level=logging.INFO)
-                update_menu_and_icon()
-                initial_startup = False
-                last_status_hash = current_status_hash
-
             if current_status_hash != last_status_hash:
-                current_state = daemon_manager.get_current_state(
-                    current_status)
-                log_message(f"Status changed. New state: {
-                            current_state.name}", level=logging.INFO)
-                update_menu_and_icon()
+                update_menu_and_icon(current_status)
                 last_status_hash = current_status_hash
-
-            if not daemon_manager.first_status_received and current_status:
-                daemon_manager.first_status_received = True
-                current_state = daemon_manager.get_current_state(
-                    current_status)
-                log_message(f"First status received. New state: {
-                            current_state.name}", level=logging.INFO)
-                update_menu_and_icon()
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
                         e}", level=logging.ERROR)
-            # Treat any exception as an error status
-            current_status = {"error": str(e)}
+            current_status = {"state": DaemonState.ERROR, "error": str(e)}
+            update_menu_and_icon(current_status)
 
         time.sleep(1)
 
 
-def update_menu_and_icon():
+def update_menu_and_icon(current_status):
     global icon, daemon_manager, args
-    current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
     log_message(f"Updating menu and icon. Current state: {
-        current_state.name}", level=logging.INFO)
+                current_state.name}", level=logging.INFO)
 
     # Update menu
     new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
@@ -806,25 +784,16 @@ def update_menu_and_icon():
     icon.update_menu()
     log_message("Menu updated", level=logging.DEBUG)
 
-    # Update icon in a separate thread
-    threading.Thread(target=update_icon, args=(
-        current_status, current_state)).start()
-
-
-def update_icon(current_status, current_state):
-    global icon, daemon_manager, args
-    log_message("Starting icon update", level=logging.DEBUG)
+    # Update icon
     new_icon = create_status_image(
         daemon_manager.get_icon_color(current_status),
         daemon_manager.get_icon_text(current_status),
         style=args.icon_style,
         thickness=args.icon_thickness
     )
-    log_message("New icon created", level=logging.DEBUG)
     icon.icon = new_icon
     log_message(f"Icon color updated to: {
-        daemon_manager.get_icon_color(current_status)}", level=logging.DEBUG)
-    log_message("Icon update completed", level=logging.DEBUG)
+                daemon_manager.get_icon_color(current_status)}", level=logging.DEBUG)
 
 
 def main():
