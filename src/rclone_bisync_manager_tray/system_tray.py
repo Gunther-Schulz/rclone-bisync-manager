@@ -5,7 +5,7 @@ from pystray import MenuItem as item
 import tkinter
 from tkinter import ttk
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import socket
 import json
 import threading
@@ -14,6 +14,10 @@ import subprocess
 import os
 import enum
 from dataclasses import dataclass
+import math
+from io import BytesIO
+from cairosvg import svg2png
+import argparse
 
 global daemon_manager
 daemon_manager = None
@@ -166,21 +170,25 @@ class DaemonManager:
         if "sync_jobs" in self.status and not self.status.get('config_invalid', False) and not is_shutting_down:
             jobs_submenu = []
             for job_key, job_status in reversed(self.status["sync_jobs"].items()):
+                last_sync = job_status['last_sync'].replace(
+                    'T', ' ')[:16] if job_status['last_sync'] else 'Never'
+                next_run = job_status['next_run'].replace(
+                    'T', ' ')[:16] if job_status['next_run'] else 'Not scheduled'
+
                 job_submenu = pystray.Menu(
-                    pystray.MenuItem(
-                        f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
-                    pystray.MenuItem(
-                        f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
-                    pystray.MenuItem(
-                        f"Sync status: {job_status['sync_status']}", None, enabled=False),
-                    pystray.MenuItem(f"Resync status: {
+                    pystray.MenuItem("    ⚡ Sync Now",
+                                     create_sync_now_handler(job_key)),
+                    pystray.MenuItem(f"    Last sync: {
+                                     last_sync}", None, enabled=False),
+                    pystray.MenuItem(f"    Next run: {
+                                     next_run}", None, enabled=False),
+                    pystray.MenuItem(f"    Sync status: {
+                                     job_status['sync_status']}", None, enabled=False),
+                    pystray.MenuItem(f"    Resync status: {
                                      job_status['resync_status']}", None, enabled=False),
-                    pystray.MenuItem(
-                        "⚡ Sync Now", create_sync_now_handler(job_key)),
-                    pystray.MenuItem("", None, enabled=False)
                 )
                 jobs_submenu.append(pystray.MenuItem(
-                    f"Job: {job_key}", job_submenu))
+                    f"  {job_key}", job_submenu))
 
             menu_items.append(pystray.MenuItem(
                 "Sync Jobs", pystray.Menu(*reversed(jobs_submenu))))
@@ -324,52 +332,60 @@ def determine_arrow_color(color, icon_text):
         return "#FFFFFF"  # White for normal operation
 
 
-def create_status_image(color, icon_text):
+def create_status_image_style1(color, thickness):
     size = 64
-    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
 
-    # Draw background circle
-    draw.ellipse([0, 0, size, size], fill=color)
+    if isinstance(color, tuple):
+        color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
 
-    # Determine arrow color
-    arrow_color = determine_arrow_color(color, icon_text)
+    svg_code = '''
+    <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+    <path d="M505.6 57.6a20.906667 20.906667 0 0 1 6.4 15.36V170.666667a341.333333 341.333333 0 0 1 295.253333 512 22.186667 22.186667 0 0 1-15.786666 10.24 21.333333 21.333333 0 0 1-17.92-5.973334l-31.146667-31.146666a21.333333 21.333333 0 0 1-3.84-25.173334A253.44 253.44 0 0 0 768 512a256 256 0 0 0-256-256v100.693333a20.906667 20.906667 0 0 1-6.4 15.36l-8.533333 8.533334a21.333333 21.333333 0 0 1-30.293334 0L315.733333 229.973333a21.76 21.76 0 0 1 0-30.293333l151.04-150.613333a21.333333 21.333333 0 0 1 30.293334 0z m51.626667 585.813333a21.333333 21.333333 0 0 0-30.293334 0l-8.533333 8.533334a20.906667 20.906667 0 0 0-6.4 15.36V768a256 256 0 0 1-256-256 248.746667 248.746667 0 0 1 29.866667-119.04 21.76 21.76 0 0 0-3.84-25.173333l-31.573334-31.573334a21.333333 21.333333 0 0 0-17.92-5.973333 22.186667 22.186667 0 0 0-15.786666 11.093333A341.333333 341.333333 0 0 0 512 853.333333v97.706667a20.906667 20.906667 0 0 0 6.4 15.36l8.533333 8.533333a21.333333 21.333333 0 0 0 30.293334 0l151.04-150.613333a21.76 21.76 0 0 0 0-30.293333z" 
+    fill="{color}" stroke="{color}" stroke-width="{thickness}" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+    '''
 
-    # Draw arrows
-    arrow_width = 4
-    arrow_padding = 12
-    arrow_size = size - 2 * arrow_padding
-
-    # Top arrow (pointing right)
-    draw.line((arrow_padding, size//2 - arrow_size//4,
-               size - arrow_padding, size//2 - arrow_size//4),
-              fill=arrow_color, width=arrow_width)
-    draw.polygon([(size - arrow_padding, size//2 - arrow_size//4),
-                  (size - arrow_padding - arrow_size//6,
-                   size//2 - arrow_size//4 - arrow_size//6),
-                  (size - arrow_padding - arrow_size//6, size//2 - arrow_size//4 + arrow_size//6)],
-                 fill=arrow_color)
-
-    # Bottom arrow (pointing left)
-    draw.line((size - arrow_padding, size//2 + arrow_size//4,
-               arrow_padding, size//2 + arrow_size//4),
-              fill=arrow_color, width=arrow_width)
-    draw.polygon([(arrow_padding, size//2 + arrow_size//4),
-                  (arrow_padding + arrow_size//6, size //
-                   2 + arrow_size//4 - arrow_size//6),
-                  (arrow_padding + arrow_size//6, size//2 + arrow_size//4 + arrow_size//6)],
-                 fill=arrow_color)
-
-    # Draw icon text
-    font = ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-    left, top, right, bottom = draw.textbbox((0, 0), icon_text, font=font)
-    text_width = right - left
-    text_height = bottom - top
-    text_position = ((size - text_width) // 2, (size - text_height) // 2)
-    draw.text(text_position, icon_text, font=font, fill=arrow_color)
+    svg_code = svg_code.format(color=color, thickness=thickness)
+    png_data = svg2png(bytestring=svg_code,
+                       output_width=size, output_height=size)
+    image = Image.open(BytesIO(png_data)).convert('RGBA')
 
     return image
+
+
+def create_status_image_style2(color, thickness):
+    size = 64
+
+    if isinstance(color, tuple):
+        color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
+
+    svg_code = '''
+    <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+    <path d="M917.333 394.667H106.667a32 32 0 0 1 0-64h810.666a32 32 0 0 1 0 64z m0 298.666H106.667a32 32 0 0 1 0-64h810.666a32 32 0 0 1 0 64z" fill="none" stroke="{color}" stroke-width="{thickness}" stroke-linecap="round"/>
+    <path d="M106.667 394.667a32 32 0 0 1-22.614-54.614l241.28-241.28A32 32 0 0 1 370.56 144L129.28 385.28a32 32 0 0 1-22.613 9.387z m569.386 539.946A32 32 0 0 1 653.44 880l241.28-241.28a32 32 0 1 1 45.227 45.227l-241.28 241.28a32 32 0 0 1-22.614 9.386z" fill="none" stroke="{color}" stroke-width="{thickness}" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    '''
+
+    svg_code = svg_code.format(color=color, thickness=thickness)
+    png_data = svg2png(bytestring=svg_code,
+                       output_width=size, output_height=size)
+    image = Image.open(BytesIO(png_data)).convert('RGBA')
+
+    return image
+
+
+def create_status_image(color, icon_text, style=1, thickness=40):
+    if style == 2:
+        return create_status_image_style2(color, thickness)
+    else:
+        return create_status_image_style1(color, thickness)
+
+
+def determine_text_color(background_color):
+    # Simple logic to determine if text should be black or white based on background brightness
+    r, g, b = background_color[:3]
+    brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return "#000000" if brightness > 0.5 else "#FFFFFF"
 
 
 def show_status_window():
@@ -468,9 +484,18 @@ def run_tray():
     global icon, daemon_manager
     daemon_manager = DaemonManager()
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--icon-style', type=int,
+                        choices=[1, 2], default=1, help='Choose icon style: 1 or 2')
+    parser.add_argument('--icon-thickness', type=int,
+                        default=40, help='Set the thickness of the icon lines')
+    args = parser.parse_args()
+
     icon = pystray.Icon("rclone-bisync-manager",
-                        create_status_image(
-                            daemon_manager.get_icon_color(), daemon_manager.get_icon_text()),
+                        create_status_image(daemon_manager.get_icon_color(),
+                                            daemon_manager.get_icon_text(),
+                                            style=args.icon_style,
+                                            thickness=args.icon_thickness),
                         "RClone BiSync Manager")
     icon.menu = pystray.Menu(*daemon_manager.get_menu_items())
 
@@ -498,7 +523,7 @@ def run_tray():
                 new_menu = pystray.Menu(*daemon_manager.get_menu_items())
                 icon.menu = new_menu
                 icon.icon = create_status_image(
-                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text())
+                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text(), style=args.icon_style, thickness=args.icon_thickness)
                 icon.update_menu()
 
                 last_state = current_state
