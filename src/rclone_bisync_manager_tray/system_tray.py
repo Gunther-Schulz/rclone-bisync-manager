@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import math
 from io import BytesIO
 from cairosvg import svg2png
+import argparse
 
 global daemon_manager
 daemon_manager = None
@@ -331,32 +332,53 @@ def determine_arrow_color(color, icon_text):
         return "#FFFFFF"  # White for normal operation
 
 
-def create_status_image(color, icon_text):
+def create_status_image_original(color, thickness):
     size = 64
 
-    # Convert color tuple to hex string
     if isinstance(color, tuple):
         color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
 
-    # SVG code for the sync icon with color placeholder
     svg_code = '''
     <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
     <path d="M505.6 57.6a20.906667 20.906667 0 0 1 6.4 15.36V170.666667a341.333333 341.333333 0 0 1 295.253333 512 22.186667 22.186667 0 0 1-15.786666 10.24 21.333333 21.333333 0 0 1-17.92-5.973334l-31.146667-31.146666a21.333333 21.333333 0 0 1-3.84-25.173334A253.44 253.44 0 0 0 768 512a256 256 0 0 0-256-256v100.693333a20.906667 20.906667 0 0 1-6.4 15.36l-8.533333 8.533334a21.333333 21.333333 0 0 1-30.293334 0L315.733333 229.973333a21.76 21.76 0 0 1 0-30.293333l151.04-150.613333a21.333333 21.333333 0 0 1 30.293334 0z m51.626667 585.813333a21.333333 21.333333 0 0 0-30.293334 0l-8.533333 8.533334a20.906667 20.906667 0 0 0-6.4 15.36V768a256 256 0 0 1-256-256 248.746667 248.746667 0 0 1 29.866667-119.04 21.76 21.76 0 0 0-3.84-25.173333l-31.573334-31.573334a21.333333 21.333333 0 0 0-17.92-5.973333 22.186667 22.186667 0 0 0-15.786666 11.093333A341.333333 341.333333 0 0 0 512 853.333333v97.706667a20.906667 20.906667 0 0 0 6.4 15.36l8.533333 8.533333a21.333333 21.333333 0 0 0 30.293334 0l151.04-150.613333a21.76 21.76 0 0 0 0-30.293333z" 
-    fill="{color}"/>
+    fill="none" stroke="{color}" stroke-width="{thickness}" stroke-linejoin="round" stroke-linecap="round"/>
     </svg>
     '''
 
-    # Replace color placeholder with actual color
-    svg_code = svg_code.format(color=color)
-
-    # Convert SVG to PNG
+    svg_code = svg_code.format(color=color, thickness=thickness)
     png_data = svg2png(bytestring=svg_code,
                        output_width=size, output_height=size)
-
-    # Create image with transparent background
     image = Image.open(BytesIO(png_data)).convert('RGBA')
 
     return image
+
+
+def create_status_image_alternative(color, thickness):
+    size = 64
+
+    if isinstance(color, tuple):
+        color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
+
+    svg_code = '''
+    <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+    <path d="M917.333 394.667H106.667a32 32 0 0 1 0-64h810.666a32 32 0 0 1 0 64z m0 298.666H106.667a32 32 0 0 1 0-64h810.666a32 32 0 0 1 0 64z" fill="none" stroke="{color}" stroke-width="{thickness}" stroke-linecap="round"/>
+    <path d="M106.667 394.667a32 32 0 0 1-22.614-54.614l241.28-241.28A32 32 0 0 1 370.56 144L129.28 385.28a32 32 0 0 1-22.613 9.387z m569.386 539.946A32 32 0 0 1 653.44 880l241.28-241.28a32 32 0 1 1 45.227 45.227l-241.28 241.28a32 32 0 0 1-22.614 9.386z" fill="none" stroke="{color}" stroke-width="{thickness}" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    '''
+
+    svg_code = svg_code.format(color=color, thickness=thickness)
+    png_data = svg2png(bytestring=svg_code,
+                       output_width=size, output_height=size)
+    image = Image.open(BytesIO(png_data)).convert('RGBA')
+
+    return image
+
+
+def create_status_image(color, icon_text, use_alternative=False, thickness=40):
+    if use_alternative:
+        return create_status_image_alternative(color, thickness)
+    else:
+        return create_status_image_original(color, thickness)
 
 
 def determine_text_color(background_color):
@@ -462,9 +484,18 @@ def run_tray():
     global icon, daemon_manager
     daemon_manager = DaemonManager()
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--alternative-icon', action='store_true',
+                        help='Use the alternative sync icon design')
+    parser.add_argument('--icon-thickness', type=int,
+                        default=40, help='Set the thickness of the icon lines')
+    args = parser.parse_args()
+
     icon = pystray.Icon("rclone-bisync-manager",
-                        create_status_image(
-                            daemon_manager.get_icon_color(), daemon_manager.get_icon_text()),
+                        create_status_image(daemon_manager.get_icon_color(),
+                                            daemon_manager.get_icon_text(),
+                                            use_alternative=args.alternative_icon,
+                                            thickness=args.icon_thickness),
                         "RClone BiSync Manager")
     icon.menu = pystray.Menu(*daemon_manager.get_menu_items())
 
@@ -492,7 +523,7 @@ def run_tray():
                 new_menu = pystray.Menu(*daemon_manager.get_menu_items())
                 icon.menu = new_menu
                 icon.icon = create_status_image(
-                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text())
+                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text(), use_alternative=args.alternative_icon, thickness=args.icon_thickness)
                 icon.update_menu()
 
                 last_state = current_state
