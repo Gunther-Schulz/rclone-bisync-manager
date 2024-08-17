@@ -23,18 +23,7 @@ def daemon_main():
         return
 
     try:
-        # This will now validate the configuration
-        config.load_and_validate_config(config.args)
-    except ValueError as e:
-        log_error(f"Configuration error: {str(e)}")
-        return
-    except FileNotFoundError:
-        log_error(
-            "Configuration file not found. Please create a valid configuration file.")
-        return
-
-    try:
-        log_message("Daemon started")
+        log_message("Daemon started in limbo state")
 
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
@@ -47,37 +36,24 @@ def daemon_main():
             target=handle_add_sync_request, daemon=True)
         add_sync_thread.start()
 
-        if config._config.run_initial_sync_on_startup:
-            log_message("Starting initial sync for all active sync jobs")
-            for key, value in config._config.sync_jobs.items():
-                if value.active:
-                    add_to_sync_queue(key)
-        else:
-            log_message("Skipping initial sync as per configuration")
-
-        config_check_interval = 5  # Check every 5 seconds
-        last_config_check = time.time()
-        last_config_status = None
-
-        config.reset_config_changed_flag()  # Reset the flag after initial load
+        # Attempt to load and validate config
+        try:
+            config.load_and_validate_config(config.args)
+            log_message(
+                "Configuration loaded and validated successfully. Exiting limbo state.")
+            config.in_limbo = False
+            scheduler.schedule_tasks()  # Start the scheduler here
+        except ValueError as e:
+            log_error(f"Configuration error: {str(e)}")
+            config.in_limbo = True
+            config.config_invalid = True
+            config.config_error_message = str(e)
 
         while config.running:
-            current_time = time.time()
-            if current_time - last_config_check >= config_check_interval:
-                config.check_config_changed()
-                if config.config_invalid:
-                    if last_config_status != "invalid":
-                        log_message(
-                            "Configuration is invalid. Waiting for valid config...")
-                        last_config_status = "invalid"
-                elif last_config_status != "valid":
-                    log_message("Configuration is valid and active.")
-                    last_config_status = "valid"
+            if not config.in_limbo and not config.config_invalid:
+                process_sync_queue()
+                check_scheduled_tasks()
 
-                last_config_check = current_time
-
-            process_sync_queue()
-            check_scheduled_tasks()
             time.sleep(1)
             if config.shutting_down:
                 log_message(
@@ -240,29 +216,18 @@ def handle_add_sync_request():
 def reload_config():
     try:
         config.load_and_validate_config(config.args)
-        new_sync_jobs = set(config._config.sync_jobs.keys())
-
-        with config.sync_lock:
-            # Remove jobs from the queue that are no longer in the config
-            config.queued_paths = config.queued_paths.intersection(
-                new_sync_jobs)
-            new_queue = Queue()
-            while not config.sync_queue.empty():
-                job = config.sync_queue.get()
-                if job in new_sync_jobs:
-                    new_queue.put(job)
-            config.sync_queue = new_queue
-
         log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
         scheduler.schedule_tasks()
         config.config_invalid = False
-        config.reset_config_changed_flag()  # Reset the flag after successful reload
+        config.in_limbo = False
+        config.reset_config_changed_flag()
         return True
     except (ValueError, FileNotFoundError) as e:
         error_message = f"Error reloading config: {str(e)}"
         log_error(error_message)
         config.config_invalid = True
+        config.in_limbo = True
         config.config_error_message = error_message
         log_message("Daemon entering limbo state due to invalid configuration.")
         return False

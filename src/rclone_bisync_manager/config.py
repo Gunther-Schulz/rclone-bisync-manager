@@ -203,6 +203,7 @@ class Config:
         self.last_config_status = None
         self.config_changed_on_disk = False
         self.last_config_mtime = None
+        self.in_limbo = True
 
     def _init_file_paths(self):
         self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
@@ -216,6 +217,13 @@ class Config:
             'XDG_STATE_HOME', os.path.expanduser('~/.local/state')), 'rclone-bisync-manager', 'logs')
         self.log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager.log')
+
+    def initialize_config(self, args):
+        self.args = args
+        self._init_file_paths()
+        self._init_logging_paths()
+        self.load_sync_state()
+        self._update_internal_fields(args)
 
     def load_and_validate_config(self, args):
         if debug:
