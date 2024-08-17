@@ -113,6 +113,11 @@ class DaemonManager:
             for job in status.get("sync_jobs", {}).values()
         )
 
+    def is_currently_syncing(self, status):
+        if status is None:
+            return False
+        return status.get('currently_syncing') not in [None, 'None', '']
+
     def get_menu_items(self, status):
         current_state = self.get_current_state(status)
         menu_items = []
@@ -130,8 +135,10 @@ class DaemonManager:
         menu_items.extend([
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
-                                 DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
+                pystray.MenuItem("Reload Config", reload_config, enabled=not (
+                    current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN] or
+                    self.is_currently_syncing(status)
+                )),
                 pystray.MenuItem("Open Config Folder", open_config_file),
                 pystray.MenuItem("Open Log Folder", open_log_folder)
             )),
