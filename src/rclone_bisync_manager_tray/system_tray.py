@@ -56,6 +56,12 @@ def start_daemon():
 
 
 def update_menu(status):
+    if status.get("starting_up"):
+        return pystray.Menu(
+            pystray.MenuItem("Starting daemon...", None, enabled=False),
+            pystray.MenuItem("Exit", lambda: icon.stop())
+        )
+
     if "error" in status:
         return pystray.Menu(
             pystray.MenuItem("Daemon not running", None, enabled=False),
@@ -356,19 +362,29 @@ def run_tray():
     def check_status_and_update():
         last_status = None
         first_run = True
+        starting_up = False
         while True:
             current_status = get_daemon_status()
             if first_run and "error" in current_status:
                 print("Daemon not running. Attempting to start...")
                 start_daemon()
-                time.sleep(10)  # Wait for the daemon to start
-                current_status = get_daemon_status()
+                starting_up = True
+                current_status = {"starting_up": True}
                 first_run = False
+            elif starting_up:
+                if "error" not in current_status:
+                    starting_up = False
+                else:
+                    current_status = {"starting_up": True}
 
             if current_status != last_status:
                 new_menu = update_menu(current_status)
                 icon.menu = new_menu
-                if "error" in current_status:
+                if current_status.get("starting_up"):
+                    icon.icon = create_status_image(
+                        # Yellow for starting up
+                        (255, 235, 59), current_status)
+                elif "error" in current_status:
                     icon.icon = create_status_image(
                         (158, 158, 158), "error")  # Gray for not running
                 elif current_status.get("shutting_down", False):
@@ -399,7 +415,11 @@ def run_tray():
                         (76, 175, 80), current_status)
                 icon.update_menu()
                 last_status = current_status
-            time.sleep(1)
+
+            if starting_up:
+                time.sleep(2)  # Check more frequently during startup
+            else:
+                time.sleep(1)
 
     threading.Thread(target=check_status_and_update, daemon=True).start()
     icon.run()
