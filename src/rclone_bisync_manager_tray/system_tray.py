@@ -600,6 +600,7 @@ def run_tray():
 def check_status_and_update(args):
     global icon, daemon_manager
     last_status_hash = None
+    initial_startup = True
 
     while True:
         try:
@@ -607,7 +608,24 @@ def check_status_and_update(args):
             current_status_hash = hash(json.dumps(
                 current_status, sort_keys=True)) if current_status else None
 
-            if current_status_hash != last_status_hash:
+            if initial_startup:
+                initial_state = daemon_manager.get_current_state(
+                    current_status)
+                print(f"Initial state: {initial_state.name}")
+
+                if initial_state in [DaemonState.OFFLINE, DaemonState.ERROR]:
+                    print("Daemon not running. Attempting to start...")
+                    start_daemon()
+                    time.sleep(2)  # Give the daemon some time to start
+                    current_status = get_daemon_status()
+                    new_state = daemon_manager.get_current_state(
+                        current_status)
+                    print(f"After start attempt, new state: {new_state.name}")
+
+                update_menu_and_icon()
+                initial_startup = False
+                last_status_hash = current_status_hash  # Set initial hash
+            elif current_status_hash != last_status_hash:
                 current_state = daemon_manager.get_current_state(
                     current_status)
                 print(f"Status changed. New state: {current_state.name}")
@@ -624,6 +642,8 @@ def check_status_and_update(args):
 def update_menu_and_icon():
     global icon, daemon_manager, args
     current_status = get_daemon_status()
+    current_state = daemon_manager.get_current_state(current_status)
+    print(f"Updating menu and icon. Current state: {current_state.name}")
     new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
     new_icon = create_status_image(
         daemon_manager.get_icon_color(current_status),
