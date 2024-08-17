@@ -641,6 +641,25 @@ def show_text_window(title, content):
     root.mainloop()
 
 
+def ensure_daemon_running():
+    global daemon_manager
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        status = get_daemon_status()
+        if status is not None:
+            log_message("Daemon is already running", level=logging.INFO)
+            return True
+
+        log_message(f"Daemon not running. Attempt {
+                    attempt + 1} to start it.", level=logging.INFO)
+        start_daemon()
+        time.sleep(2)  # Wait for the daemon to start
+
+    log_message("Failed to start daemon after multiple attempts",
+                level=logging.ERROR)
+    return False
+
+
 def run_tray():
     global icon, daemon_manager, args, debug
     daemon_manager = DaemonManager()
@@ -662,6 +681,12 @@ def run_tray():
     else:
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
+
+    # Ensure daemon is running before creating the icon
+    if not ensure_daemon_running():
+        log_message("Unable to start the daemon. Exiting.",
+                    level=logging.ERROR)
+        return
 
     icon = pystray.Icon("rclone-bisync-manager",
                         create_status_image(daemon_manager.get_icon_color(daemon_manager.last_status),
