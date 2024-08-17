@@ -49,7 +49,15 @@ def daemon_main():
             config.config_invalid = True
             config.config_error_message = str(e)
 
+        last_config_check = time.time()
+        config_check_interval = 1
+
         while config.running:
+            current_time = time.time()
+            if current_time - last_config_check >= config_check_interval:
+                config.check_config_changed()
+                last_config_check = current_time
+
             if not config.in_limbo and not config.config_invalid:
                 process_sync_queue()
                 check_scheduled_tasks()
