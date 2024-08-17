@@ -318,26 +318,43 @@ class DaemonManager:
 
 def get_daemon_status():
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
+    log_message("Attempting to get daemon status", level=logging.DEBUG)
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(5)  # Set a timeout of 5 seconds
+        log_message(f"Connecting to socket: {
+                    socket_path}", level=logging.DEBUG)
         client.connect(socket_path)
+        log_message("Connected to socket, sending STATUS request",
+                    level=logging.DEBUG)
         client.sendall(b"STATUS")
-        status = json.loads(client.recv(4096).decode())
+        log_message("Waiting for response", level=logging.DEBUG)
+        response = client.recv(4096).decode()
+        # Log first 100 chars of response
+        log_message(f"Received response: {
+                    response[:100]}...", level=logging.DEBUG)
+        status = json.loads(response)
         client.close()
+        log_message("Successfully parsed daemon status", level=logging.DEBUG)
         return status
     except socket.error as e:
         log_message(f"Socket error when getting daemon status: {
                     e}", level=logging.ERROR)
+        log_message(f"Socket path: {socket_path}", level=logging.DEBUG)
         return None
     except json.JSONDecodeError as e:
         log_message(f"JSON decode error when getting daemon status: {
                     e}", level=logging.ERROR)
+        log_message(f"Received data: {response}", level=logging.DEBUG)
         return None
     except Exception as e:
         log_message(f"Unexpected error when getting daemon status: {
                     e}", level=logging.ERROR)
+        log_message(f"Error details: {
+                    traceback.format_exc()}", level=logging.DEBUG)
         return None
+    finally:
+        log_message("Finished get_daemon_status attempt", level=logging.DEBUG)
 
 
 def create_sync_now_handler(job_key):
@@ -366,20 +383,34 @@ def stop_daemon():
 def start_daemon():
     global daemon_manager
     try:
-        subprocess.run(
-            ["rclone-bisync-manager", "daemon", "start"], check=True, capture_output=True, text=True)
-        log_message("Daemon started successfully")
+        log_message("Attempting to start daemon", level=logging.DEBUG)
+        log_message(
+            "Executing command: rclone-bisync-manager daemon start", level=logging.DEBUG)
+
+        # Use subprocess.Popen to start the daemon process
+        process = subprocess.Popen(
+            ["rclone-bisync-manager", "daemon", "start"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True
+        )
+
+        # Log the process ID
+        log_message(f"Daemon process started with PID: {
+                    process.pid}", level=logging.DEBUG)
+
+        # Don't wait for the process to complete
         daemon_manager.daemon_start_error = None
-    except subprocess.CalledProcessError as e:
-        error_message = f"Error starting daemon: {
-            e}\nOutput: {e.stdout}\nError: {e.stderr}"
-        log_message(error_message, level=logging.ERROR)
-        daemon_manager.daemon_start_error = error_message
+        log_message("Daemon start command initiated successfully",
+                    level=logging.INFO)
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
+
+    log_message("start_daemon() function completed", level=logging.DEBUG)
 
 
 def reload_config():
@@ -701,10 +732,18 @@ def ensure_daemon_running():
 
     log_message("Daemon not running. Attempting to start it.",
                 level=logging.INFO)
+
     start_daemon()
+
+    if daemon_manager.daemon_start_error:
+        log_message(f"Failed to start daemon: {
+                    daemon_manager.daemon_start_error}", level=logging.ERROR)
+        return False
 
     elapsed_time = 0
     while elapsed_time < timeout:
+        log_message(f"Checking daemon status: Elapsed time {
+                    elapsed_time}s", level=logging.DEBUG)
         status = get_daemon_status()
         if status is not None:
             log_message("Daemon started successfully", level=logging.INFO)
