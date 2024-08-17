@@ -316,45 +316,49 @@ class DaemonManager:
             return "RUN"
 
 
+last_status = None
+last_offline_log_time = 0
+
+
 def get_daemon_status():
+    global last_status, last_offline_log_time
     socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    log_message("Attempting to get daemon status", level=logging.DEBUG)
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(5)  # Set a timeout of 5 seconds
-        log_message(f"Connecting to socket: {
-                    socket_path}", level=logging.DEBUG)
         client.connect(socket_path)
-        log_message("Connected to socket, sending STATUS request",
-                    level=logging.DEBUG)
         client.sendall(b"STATUS")
-        log_message("Waiting for response", level=logging.DEBUG)
         response = client.recv(4096).decode()
-        # Log first 100 chars of response
-        log_message(f"Received response: {
-                    response[:100]}...", level=logging.DEBUG)
         status = json.loads(response)
         client.close()
-        log_message("Successfully parsed daemon status", level=logging.DEBUG)
+
+        if status != last_status:
+            log_message("Daemon status changed", level=logging.INFO)
+            log_message(f"New status: {json.dumps(status)[
+                        :100]}...", level=logging.DEBUG)
+            last_status = status
+
         return status
     except socket.error as e:
-        log_message(f"Socket error when getting daemon status: {
-                    e}", level=logging.ERROR)
-        log_message(f"Socket path: {socket_path}", level=logging.DEBUG)
+        current_time = time.time()
+        if current_time - last_offline_log_time > 60:  # Log offline status once per minute
+            log_message("Daemon is offline", level=logging.INFO)
+            last_offline_log_time = current_time
+        last_status = None
         return None
     except json.JSONDecodeError as e:
         log_message(f"JSON decode error when getting daemon status: {
                     e}", level=logging.ERROR)
         log_message(f"Received data: {response}", level=logging.DEBUG)
+        last_status = None
         return None
     except Exception as e:
         log_message(f"Unexpected error when getting daemon status: {
                     e}", level=logging.ERROR)
         log_message(f"Error details: {
                     traceback.format_exc()}", level=logging.DEBUG)
+        last_status = None
         return None
-    finally:
-        log_message("Finished get_daemon_status attempt", level=logging.DEBUG)
 
 
 def create_sync_now_handler(job_key):
@@ -817,8 +821,7 @@ def check_status_and_update(args):
                 current_status = get_daemon_status()
 
             if current_status is None:
-                current_status = {"state": DaemonState.OFFLINE,
-                                  "error": "Failed to get daemon status"}
+                current_status = {"state": DaemonState.OFFLINE}
 
             current_state = daemon_manager.get_current_state(current_status)
 
