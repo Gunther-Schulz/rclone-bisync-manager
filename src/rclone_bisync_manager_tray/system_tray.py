@@ -332,7 +332,7 @@ def determine_arrow_color(color, icon_text):
         return "#FFFFFF"  # White for normal operation
 
 
-def create_status_image_original(color, thickness):
+def create_status_image_style1(color, thickness):
     size = 64
 
     if isinstance(color, tuple):
@@ -341,7 +341,7 @@ def create_status_image_original(color, thickness):
     svg_code = '''
     <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
     <path d="M505.6 57.6a20.906667 20.906667 0 0 1 6.4 15.36V170.666667a341.333333 341.333333 0 0 1 295.253333 512 22.186667 22.186667 0 0 1-15.786666 10.24 21.333333 21.333333 0 0 1-17.92-5.973334l-31.146667-31.146666a21.333333 21.333333 0 0 1-3.84-25.173334A253.44 253.44 0 0 0 768 512a256 256 0 0 0-256-256v100.693333a20.906667 20.906667 0 0 1-6.4 15.36l-8.533333 8.533334a21.333333 21.333333 0 0 1-30.293334 0L315.733333 229.973333a21.76 21.76 0 0 1 0-30.293333l151.04-150.613333a21.333333 21.333333 0 0 1 30.293334 0z m51.626667 585.813333a21.333333 21.333333 0 0 0-30.293334 0l-8.533333 8.533334a20.906667 20.906667 0 0 0-6.4 15.36V768a256 256 0 0 1-256-256 248.746667 248.746667 0 0 1 29.866667-119.04 21.76 21.76 0 0 0-3.84-25.173333l-31.573334-31.573334a21.333333 21.333333 0 0 0-17.92-5.973333 22.186667 22.186667 0 0 0-15.786666 11.093333A341.333333 341.333333 0 0 0 512 853.333333v97.706667a20.906667 20.906667 0 0 0 6.4 15.36l8.533333 8.533333a21.333333 21.333333 0 0 0 30.293334 0l151.04-150.613333a21.76 21.76 0 0 0 0-30.293333z" 
-    fill="none" stroke="{color}" stroke-width="{thickness}" stroke-linejoin="round" stroke-linecap="round"/>
+    fill="{color}" stroke="{color}" stroke-width="{thickness}" stroke-linejoin="round" stroke-linecap="round"/>
     </svg>
     '''
 
@@ -353,7 +353,7 @@ def create_status_image_original(color, thickness):
     return image
 
 
-def create_status_image_alternative(color, thickness):
+def create_status_image_style2(color, thickness):
     size = 64
 
     if isinstance(color, tuple):
@@ -374,11 +374,11 @@ def create_status_image_alternative(color, thickness):
     return image
 
 
-def create_status_image(color, icon_text, use_alternative=False, thickness=40):
-    if use_alternative:
-        return create_status_image_alternative(color, thickness)
+def create_status_image(color, icon_text, style=1, thickness=40):
+    if style == 2:
+        return create_status_image_style2(color, thickness)
     else:
-        return create_status_image_original(color, thickness)
+        return create_status_image_style1(color, thickness)
 
 
 def determine_text_color(background_color):
@@ -485,8 +485,8 @@ def run_tray():
     daemon_manager = DaemonManager()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--alternative-icon', action='store_true',
-                        help='Use the alternative sync icon design')
+    parser.add_argument('--icon-style', type=int,
+                        choices=[1, 2], default=1, help='Choose icon style: 1 or 2')
     parser.add_argument('--icon-thickness', type=int,
                         default=40, help='Set the thickness of the icon lines')
     args = parser.parse_args()
@@ -494,7 +494,7 @@ def run_tray():
     icon = pystray.Icon("rclone-bisync-manager",
                         create_status_image(daemon_manager.get_icon_color(),
                                             daemon_manager.get_icon_text(),
-                                            use_alternative=args.alternative_icon,
+                                            style=args.icon_style,
                                             thickness=args.icon_thickness),
                         "RClone BiSync Manager")
     icon.menu = pystray.Menu(*daemon_manager.get_menu_items())
@@ -523,7 +523,7 @@ def run_tray():
                 new_menu = pystray.Menu(*daemon_manager.get_menu_items())
                 icon.menu = new_menu
                 icon.icon = create_status_image(
-                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text(), use_alternative=args.alternative_icon, thickness=args.icon_thickness)
+                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text(), style=args.icon_style, thickness=args.icon_thickness)
                 icon.update_menu()
 
                 last_state = current_state

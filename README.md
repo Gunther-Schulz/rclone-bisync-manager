@@ -127,10 +127,15 @@ If no job names are specified, all active jobs will be synced.
 To start the system tray application:
 
 ```
-rclone-bisync-manager-tray
+rclone-bisync-manager-tray [options]
 ```
 
-This provides a convenient way to monitor sync status and control the daemon.
+Options:
+
+- `--icon-style <1|2>`: Choose between two different icon styles (default: 1)
+- `--icon-thickness <value>`: Set the thickness of the icon lines (default: 40)
+
+This provides a convenient way to monitor sync status and control the daemon. The system tray icon changes color and shape to indicate the current status of the sync jobs.
 
 ## Desktop Integration
 
