@@ -2,6 +2,7 @@
 
 ## Testing
 
+- [ ] Test if missed runs are still processed
 - [ ] Test behavior when suspending the PC
 - [ ] Test per-sync job options override
 - [ ] Verify exclude rule file changes trigger a resync
