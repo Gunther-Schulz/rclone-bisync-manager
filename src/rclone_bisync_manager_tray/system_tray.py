@@ -136,7 +136,8 @@ class DaemonManager:
         if current_state == DaemonState.INITIAL:
             menu_items.append(pystray.MenuItem(
                 "Initializing...", None, enabled=False))
-        elif current_state in [DaemonState.ERROR, DaemonState.OFFLINE]:
+        # elif current_state in [DaemonState.ERROR, DaemonState.OFFLINE]:
+        elif current_state in [DaemonState.ERROR]:
             menu_items.extend(self._get_error_menu_items(status))
         elif current_state == DaemonState.LIMBO:
             menu_items.extend(self._get_limbo_menu_items(status))
