@@ -165,15 +165,15 @@ class DaemonManager:
             "Show Status Window", show_status_window, enabled=current_state != DaemonState.INITIAL))
         menu_items.append(pystray.Menu.SEPARATOR)
 
-        # Add Start/Stop/Shutting Down menu item
-        if current_state in [DaemonState.OFFLINE, DaemonState.ERROR]:
+        # Add Start/Stop Daemon menu item
+        if current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.FAILED]:
             menu_items.append(pystray.MenuItem(
                 "Start Daemon", lambda: start_daemon()))
+        elif current_state not in [DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]:
+            menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
         elif current_state == DaemonState.SHUTTING_DOWN:
             menu_items.append(pystray.MenuItem(
                 "Shutting Down", lambda: None, enabled=False))
-        elif current_state != DaemonState.INITIAL:
-            menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
 
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
 
@@ -264,6 +264,8 @@ class DaemonManager:
         current_state = self.get_current_state(status)
         if current_state == DaemonState.INITIAL:
             return Colors.YELLOW
+        elif current_state == DaemonState.STARTING:
+            return Colors.YELLOW  # Added color for starting state
         elif current_state == DaemonState.RUNNING:
             return Colors.GREEN
         elif current_state == DaemonState.SYNCING:
@@ -383,6 +385,15 @@ def stop_daemon():
 
 def start_daemon():
     global daemon_manager
+
+    # First, check if the daemon is already running
+    current_status = get_daemon_status()
+    if current_status is not None:
+        log_message("Daemon is already running", level=logging.INFO)
+        daemon_manager.update_state(DaemonState.RUNNING)
+        update_queue.put(True)
+        return
+
     daemon_manager.update_state(DaemonState.STARTING)
     daemon_manager.daemon_start_error = None
     try:
@@ -405,11 +416,15 @@ def start_daemon():
         stdout, stderr = process.communicate(timeout=5)
 
         if process.returncode is not None and process.returncode != 0:
-            error_message = f"Daemon start failed with return code {
-                process.returncode}.\nStdout: {stdout}\nStderr: {stderr}"
-            log_message(error_message, level=logging.ERROR)
-            daemon_manager.daemon_start_error = error_message
-            daemon_manager.update_state(DaemonState.FAILED)
+            if "Daemon is already running" in stdout or "Daemon is already running" in stderr:
+                log_message("Daemon is already running", level=logging.INFO)
+                daemon_manager.update_state(DaemonState.RUNNING)
+            else:
+                error_message = f"Daemon start failed with return code {
+                    process.returncode}.\nStdout: {stdout}\nStderr: {stderr}"
+                log_message(error_message, level=logging.ERROR)
+                daemon_manager.daemon_start_error = error_message
+                daemon_manager.update_state(DaemonState.FAILED)
         elif stderr.strip():
             error_message = f"Daemon start produced error output:\nStderr: {
                 stderr}"
@@ -428,14 +443,12 @@ def start_daemon():
             "Daemon start command is still running (this is normal)", level=logging.INFO)
         # The process is still running, which is expected
         daemon_manager.update_state(DaemonState.RUNNING)
-        pass
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
         daemon_manager.update_state(DaemonState.FAILED)
-        update_queue.put(True)
 
     log_message("start_daemon() function completed", level=logging.DEBUG)
     update_queue.put(True)
@@ -584,7 +597,7 @@ def show_status_window():
     notebook = ttk.Notebook(window)
     notebook.pack(expand=True, fill='both')
 
-    if current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.INITIAL]:
+    if current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.INITIAL, DaemonState.FAILED]:
         error_frame = ttk.Frame(notebook)
         notebook.add(error_frame, text='Status')
 
