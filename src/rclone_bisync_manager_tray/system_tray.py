@@ -42,6 +42,7 @@ class DaemonManager:
     def __init__(self):
         self.state = DaemonState.INITIAL
         self.status = {}
+        self.is_shutting_down = False
         self.state_info = {
             DaemonState.INITIAL: StateInfo((255, 235, 59), self._get_initial_menu_items, "INIT"),
             DaemonState.STARTING: StateInfo((255, 235, 59), self._get_starting_menu_items, "START"),
@@ -56,12 +57,15 @@ class DaemonManager:
 
     def update_state(self, status):
         self.status = status
-        if "error" in status:
-            self.state = DaemonState.ERROR
-        elif status.get("shutting_down"):
+        if status.get("shutting_down"):
+            self.is_shutting_down = True
             self.state = DaemonState.SHUTTING_DOWN
+        elif "error" in status:
+            self.state = DaemonState.ERROR
+            self.is_shutting_down = False  # Reset shutting down flag
         elif status.get("starting_up"):
             self.state = DaemonState.STARTING
+            self.is_shutting_down = False  # Reset shutting down flag
         elif status.get("config_invalid"):
             self.state = DaemonState.CONFIG_INVALID
         elif status.get("config_changed_on_disk"):
@@ -72,6 +76,7 @@ class DaemonManager:
             self.state = DaemonState.SYNC_ISSUES
         else:
             self.state = DaemonState.RUNNING
+            self.is_shutting_down = False  # Reset shutting down flag
 
     def _has_sync_issues(self, status):
         return any(
@@ -100,10 +105,26 @@ class DaemonManager:
         ]
 
     def _get_shutting_down_menu_items(self):
-        return [
+        menu_items = [
             pystray.MenuItem("Shutting down...", None, enabled=False),
-            pystray.MenuItem("Exit", lambda: icon.stop())
         ]
+
+        currently_syncing = self.status.get('currently_syncing', 'None')
+        menu_items.append(pystray.MenuItem(f"Currently syncing:\n  {
+                          currently_syncing}", None, enabled=False))
+
+        queued_jobs = self.status.get('queued_paths', [])
+        if queued_jobs:
+            queued_jobs_str = "Queued jobs:\n" + \
+                "\n".join(f"  {job}" for job in queued_jobs)
+            menu_items.append(pystray.MenuItem(
+                queued_jobs_str, None, enabled=False))
+        else:
+            menu_items.append(pystray.MenuItem(
+                "Queued jobs:\n  None", None, enabled=False))
+
+        menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
+        return menu_items
 
     def _get_running_menu_items(self):
         menu_items = []
@@ -188,13 +209,19 @@ class DaemonManager:
         return menu_items
 
     def get_icon_color(self):
+        if self.is_shutting_down:
+            return self.state_info[DaemonState.SHUTTING_DOWN].color
         return self.state_info[self.state].color
 
     def get_menu_items(self):
+        if self.is_shutting_down:
+            return self._get_shutting_down_menu_items()
         items = self.state_info[self.state].menu_items
         return items() if callable(items) else items
 
     def get_icon_text(self):
+        if self.is_shutting_down:
+            return self.state_info[DaemonState.SHUTTING_DOWN].icon_text
         return self.state_info[self.state].icon_text
 
 
