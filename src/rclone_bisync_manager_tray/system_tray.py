@@ -58,6 +58,7 @@ class DaemonManager:
     def __init__(self):
         self.state = DaemonState.INITIAL
         self.status = {}
+        self.config_changed_on_disk = False
         self.state_info = {
             DaemonState.INITIAL: StateInfo(Colors.GRAY, self._get_initial_menu_items, "INIT"),
             DaemonState.STARTING: StateInfo(Colors.YELLOW, self._get_starting_menu_items, "START"),
@@ -73,6 +74,8 @@ class DaemonManager:
 
     def update_state(self, status):
         self.status = status
+        self.config_changed_on_disk = status.get(
+            'config_changed_on_disk', False)
         if status.get("shutting_down"):
             self.state = DaemonState.SHUTTING_DOWN
         elif "error" in status:
@@ -151,9 +154,12 @@ class DaemonManager:
             "Show Full Error Details", self.show_error_details))
         menu_items.append(pystray.Menu.SEPARATOR)
         menu_items.append(pystray.MenuItem("Reload Config", reload_config))
-        if self.status.get("config_changed_on_disk", False):
+        if self.status.get("config_changed_on_disk", True):
             menu_items.append(pystray.MenuItem(
                 "⚠️ Config changed on disk", None, enabled=False))
+        else:
+            menu_items.append(pystray.MenuItem(
+                "NO Change", None, enabled=False))
         menu_items.append(pystray.Menu.SEPARATOR)
         menu_items.append(pystray.MenuItem("Shutdown Daemon", stop_daemon))
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
@@ -169,13 +175,14 @@ class DaemonManager:
         show_text_window("Configuration Error", error_message)
 
     def _get_running_menu_items(self):
+        # Regenerate menu items each time this method is called
         menu_items = []
 
         if self.status.get("config_invalid", False):
             menu_items.append(pystray.MenuItem(
                 "⚠️ Config is invalid", None, enabled=False))
 
-        if self.status.get("config_changed_on_disk", False):
+        if self.config_changed_on_disk:
             menu_items.append(pystray.MenuItem(
                 "⚠️ Config changed on disk", None, enabled=False))
 
@@ -233,14 +240,14 @@ class DaemonManager:
         menu_items.extend([
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config,
-                                 enabled=self.status.get('currently_syncing') == None and not is_shutting_down),
+                pystray.MenuItem("Reload Config", reload_config, enabled=self.status.get(
+                    'currently_syncing') == None and not is_shutting_down),
                 pystray.MenuItem("Open Config Folder", open_config_file),
                 pystray.MenuItem("Open Log Folder", open_log_folder)
             )),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Status Window", show_status_window,
-                             enabled=not is_shutting_down),
+            pystray.MenuItem("Show Status Window",
+                             show_status_window, enabled=not is_shutting_down),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Shutting down..." if is_shutting_down else "Stop Daemon",
                              stop_daemon, enabled=not is_shutting_down),
@@ -253,8 +260,8 @@ class DaemonManager:
         return self.state_info[self.state].color
 
     def get_menu_items(self):
-        items = self.state_info[self.state].menu_items
-        return items() if callable(items) else items
+        menu_items = self.state_info[self.state].menu_items
+        return menu_items() if callable(menu_items) else menu_items
 
     def get_icon_text(self):
         return self.state_info[self.state].icon_text
@@ -557,6 +564,7 @@ def check_status_and_update(args):
     global icon, daemon_manager
     initial_startup = True
     last_state = None
+    last_status = None
 
     while True:
         try:
@@ -573,9 +581,20 @@ def check_status_and_update(args):
             daemon_manager.update_state(current_status)
             current_state = daemon_manager.state
 
-            if current_state != last_state:
-                print(f"State changed from {last_state} to {current_state}")
-                new_menu = pystray.Menu(*daemon_manager.get_menu_items())
+            # Check if state or relevant status details have changed
+            status_changed = (
+                current_state != last_state or
+                current_status.get('currently_syncing') != last_status.get('currently_syncing') or
+                current_status.get('queued_paths') != last_status.get('queued_paths') or
+                current_status.get('sync_jobs') != last_status.get('sync_jobs') or
+                current_status.get('config_invalid') != last_status.get('config_invalid') or
+                current_status.get('config_changed_on_disk') != last_status.get(
+                    'config_changed_on_disk')
+            ) if last_status is not None else True
+
+            if status_changed:
+                print(f"State or status changed. Updating menu and icon.")
+                new_menu = create_menu(daemon_manager.get_menu_items())
                 new_icon = create_status_image(
                     daemon_manager.get_icon_color(),
                     daemon_manager.get_icon_text(),
@@ -588,11 +607,16 @@ def check_status_and_update(args):
                 icon.update_menu()
 
                 last_state = current_state
+                last_status = current_status.copy()  # Create a copy to avoid reference issues
 
         except Exception as e:
             print(f"Error in check_status_and_update: {e}")
 
         time.sleep(1)
+
+
+def create_menu(menu_items):
+    return pystray.Menu(*menu_items)
 
 
 def main():
