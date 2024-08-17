@@ -182,7 +182,7 @@ class DaemonManager:
             items.append(pystray.MenuItem(
                 "⚠️ Config is invalid", None, enabled=False))
             items.append(pystray.MenuItem(f"Error: {status.get(
-                'config_error_message', 'Unknown error')}", None, enabled=False))
+                'config_error_message', 'Unknown error')[:30]}...", None, enabled=False))
         return items
 
     def _get_normal_menu_items(self, status):
