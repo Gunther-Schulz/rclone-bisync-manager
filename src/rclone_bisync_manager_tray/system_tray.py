@@ -408,10 +408,22 @@ def start_daemon():
         log_message(f"Daemon process started with PID: {
                     process.pid}", level=logging.DEBUG)
 
-        # Don't wait for the process to complete
-        daemon_manager.daemon_start_error = None
-        log_message("Daemon start command initiated successfully",
-                    level=logging.INFO)
+        # Wait for a short time to capture any immediate output
+        time.sleep(2)
+
+        # Check if the process has terminated
+        if process.poll() is not None:
+            # Process has terminated, capture the output
+            stdout, stderr = process.communicate()
+            error_message = f"Daemon failed to start:\nSTDOUT:\n{
+                stdout}\nSTDERR:\n{stderr}"
+            log_message(error_message, level=logging.ERROR)
+            daemon_manager.daemon_start_error = error_message
+        else:
+            daemon_manager.daemon_start_error = None
+            log_message("Daemon start command initiated successfully",
+                        level=logging.INFO)
+
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
@@ -583,7 +595,7 @@ def show_status_window():
         if current_state == DaemonState.INITIAL:
             error_message = "The daemon is currently initializing. Please wait..."
         elif daemon_manager.daemon_start_error:
-            error_message = f"Error occurred while starting the daemon: {
+            error_message = f"Error occurred while starting the daemon:\n\n{
                 daemon_manager.daemon_start_error}"
         else:
             error_message = "The daemon is currently not running. You can start it using the 'Start Daemon' option in the system tray menu."
