@@ -517,7 +517,7 @@ def show_status_window():
 
     window = tkinter.Tk()
     window.title("RClone BiSync Manager Status")
-    window.geometry("500x400")
+    window.geometry("600x500")  # Increased window size
 
     style = ttk.Style()
     style.theme_use('clam')
@@ -585,6 +585,31 @@ def show_status_window():
                       error_info['timestamp']}").pack(anchor='w')
     else:
         ttk.Label(errors_frame, text="No sync errors at this time.").pack(pady=20)
+
+    # Add new Config pane
+    config_frame = ttk.Frame(notebook)
+    notebook.add(config_frame, text='Config')
+
+    config_text = tkinter.Text(config_frame, wrap=tkinter.WORD)
+    config_text.pack(expand=True, fill='both')
+
+    # Read and display the content of the config file
+    config_file_path = status.get('config_file_location')
+    if config_file_path and os.path.exists(config_file_path):
+        with open(config_file_path, 'r') as config_file:
+            config_content = config_file.read()
+        config_text.insert(tkinter.END, config_content)
+    else:
+        config_text.insert(
+            tkinter.END, "Config file not found or inaccessible.")
+
+    config_text.config(state=tkinter.DISABLED)  # Make it read-only
+
+    # Add a scrollbar to the config text widget
+    config_scrollbar = ttk.Scrollbar(
+        config_frame, orient="vertical", command=config_text.yview)
+    config_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
+    config_text.configure(yscrollcommand=config_scrollbar.set)
 
     window.mainloop()
 
