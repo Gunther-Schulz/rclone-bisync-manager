@@ -67,26 +67,28 @@ def generate_status_report():
         "pid": os.getpid(),
         "running": config.running,
         "shutting_down": config.shutting_down,
+        "in_limbo": config.in_limbo,
         "config_invalid": config.config_invalid,
         "config_error_message": getattr(config, 'config_error_message', None),
         "currently_syncing": config.currently_syncing,
         "queued_paths": list(config.queued_paths),
         "config_changed_on_disk": config.config_changed_on_disk,
         "config_file_location": config.config_file,
-        "log_file_location": config._config.log_file_path,
+        "log_file_location": config._config.log_file_path if config._config else None,
         "sync_jobs": {}
     }
 
-    for key, value in config._config.sync_jobs.items():
-        if value.active:
-            job_state = sync_state.get_job_state(key)
-            status["sync_jobs"][key] = {
-                "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
-                "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
-                "sync_status": job_state["sync_status"],
-                "resync_status": job_state["resync_status"],
-                "force_resync": value.force_resync,
-                "hash_warnings": config.hash_warnings.get(key, False)
-            }
+    if config._config and not config.in_limbo and not config.config_invalid:
+        for key, value in config._config.sync_jobs.items():
+            if value.active:
+                job_state = sync_state.get_job_state(key)
+                status["sync_jobs"][key] = {
+                    "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
+                    "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
+                    "sync_status": job_state["sync_status"],
+                    "resync_status": job_state["resync_status"],
+                    "force_resync": value.force_resync,
+                    "hash_warnings": config.hash_warnings.get(key, False)
+                }
 
     return json.dumps(status)
