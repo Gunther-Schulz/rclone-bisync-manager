@@ -57,6 +57,7 @@ class DaemonState(enum.Enum):
     CONFIG_CHANGED = "config_changed"
     LIMBO = "limbo"
     OFFLINE = "offline"
+    FAILED = "failed"
 
 
 @dataclass
@@ -94,6 +95,8 @@ class DaemonManager:
         return False
 
     def get_current_state(self, status):
+        if self.daemon_start_error:
+            return DaemonState.FAILED
         if status is None:
             return DaemonState.OFFLINE
         elif isinstance(status, dict):
@@ -279,6 +282,8 @@ class DaemonManager:
             return Colors.PURPLE
         elif current_state == DaemonState.OFFLINE:
             return Colors.GRAY
+        elif current_state == DaemonState.FAILED:
+            return Colors.RED
         else:
             return Colors.GRAY  # Default color for unknown states
 
@@ -302,6 +307,8 @@ class DaemonManager:
             return "LIMBO"
         elif current_state == DaemonState.SHUTTING_DOWN:
             return "STOP"
+        elif current_state == DaemonState.FAILED:
+            return "FAIL"
         else:
             return "RUN"
 
@@ -375,6 +382,9 @@ def stop_daemon():
 
 
 def start_daemon():
+    global daemon_manager
+    daemon_manager.update_state(DaemonState.STARTING)
+    daemon_manager.daemon_start_error = None
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
         log_message(
@@ -391,15 +401,44 @@ def start_daemon():
         log_message(f"Daemon start command executed with PID: {
                     process.pid}", level=logging.DEBUG)
 
-        # Queue an update to check the status
-        update_queue.put(True)
+        # Wait for a short time to capture immediate output
+        stdout, stderr = process.communicate(timeout=5)
+
+        if process.returncode is not None and process.returncode != 0:
+            error_message = f"Daemon start failed with return code {
+                process.returncode}.\nStdout: {stdout}\nStderr: {stderr}"
+            log_message(error_message, level=logging.ERROR)
+            daemon_manager.daemon_start_error = error_message
+            daemon_manager.update_state(DaemonState.FAILED)
+        elif stderr.strip():
+            error_message = f"Daemon start produced error output:\nStderr: {
+                stderr}"
+            log_message(error_message, level=logging.ERROR)
+            daemon_manager.daemon_start_error = error_message
+            daemon_manager.update_state(DaemonState.FAILED)
+        else:
+            log_message(
+                "Daemon start command completed successfully", level=logging.INFO)
+            log_message(f"Stdout: {stdout}", level=logging.DEBUG)
+            log_message(f"Stderr: {stderr}", level=logging.DEBUG)
+            daemon_manager.update_state(DaemonState.RUNNING)
+
+    except subprocess.TimeoutExpired:
+        log_message(
+            "Daemon start command is still running (this is normal)", level=logging.INFO)
+        # The process is still running, which is expected
+        daemon_manager.update_state(DaemonState.RUNNING)
+        pass
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
+        daemon_manager.daemon_start_error = error_message
+        daemon_manager.update_state(DaemonState.FAILED)
         update_queue.put(True)
 
     log_message("start_daemon() function completed", level=logging.DEBUG)
+    update_queue.put(True)
 
 
 def reload_config():
