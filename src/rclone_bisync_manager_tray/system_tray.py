@@ -137,11 +137,32 @@ class DaemonManager:
         return menu_items
 
     def _get_limbo_menu_items(self):
-        return [
-            pystray.MenuItem("Daemon in limbo state", None, enabled=False),
-            pystray.MenuItem("Reload Config", reload_config),
-            pystray.MenuItem("Exit", lambda: icon.stop())
-        ]
+        error_message = self.status.get(
+            'config_error_message', 'Unknown error')
+        truncated_error = (
+            error_message[:50] + '...') if len(error_message) > 50 else error_message
+
+        menu_items = []
+        menu_items.append(pystray.MenuItem(
+            "Daemon in limbo state", None, enabled=False))
+        menu_items.append(pystray.MenuItem(
+            f"Error: {truncated_error}", None, enabled=False))
+        menu_items.append(pystray.MenuItem(
+            "Show Full Error Details", self.show_error_details))
+        menu_items.append(pystray.MenuItem("Reload Config", reload_config))
+        menu_items.append(pystray.Menu.SEPARATOR)
+        menu_items.append(pystray.MenuItem("Shutdown Daemon", stop_daemon))
+        menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
+
+        if self.status.get("config_invalid", False):
+            menu_items.insert(1, pystray.MenuItem(
+                "⚠️ Config is invalid", None, enabled=False))
+        return menu_items
+
+    def show_error_details(self):
+        error_message = self.status.get(
+            'config_error_message', 'Unknown error')
+        show_text_window("Configuration Error", error_message)
 
     def _get_running_menu_items(self):
         menu_items = []
@@ -482,6 +503,24 @@ def get_config_file_path():
 def get_log_file_path():
     status = get_daemon_status()
     return status.get('log_file_location')
+
+
+def show_text_window(title, content):
+    root = tkinter.Tk()
+    root.title(title)
+    root.geometry("600x400")
+
+    text_widget = tkinter.Text(root, wrap=tkinter.WORD)
+    text_widget.pack(expand=True, fill='both')
+    text_widget.insert(tkinter.END, content)
+    text_widget.config(state=tkinter.DISABLED)
+
+    scrollbar = ttk.Scrollbar(root, orient="vertical",
+                              command=text_widget.yview)
+    scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
+    text_widget.configure(yscrollcommand=scrollbar.set)
+
+    root.mainloop()
 
 
 def run_tray():
