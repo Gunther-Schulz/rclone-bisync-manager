@@ -222,6 +222,7 @@ def handle_add_sync_request():
 
 
 def reload_config():
+    config.reset_config_changed_flag()
     try:
         config.load_and_validate_config(config.args)
         log_message("Config reloaded successfully.")
@@ -229,7 +230,6 @@ def reload_config():
         scheduler.schedule_tasks()
         config.config_invalid = False
         config.in_limbo = False
-        config.reset_config_changed_flag()
         return True
     except (ValueError, FileNotFoundError) as e:
         error_message = f"Error reloading config: {str(e)}"

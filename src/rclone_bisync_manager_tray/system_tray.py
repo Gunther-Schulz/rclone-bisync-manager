@@ -528,7 +528,7 @@ def show_text_window(title, content):
 
 
 def run_tray():
-    global icon, daemon_manager
+    global icon, daemon_manager, args
     daemon_manager = DaemonManager()
 
     parser = argparse.ArgumentParser()
@@ -546,40 +546,53 @@ def run_tray():
                         "RClone BiSync Manager")
     icon.menu = pystray.Menu(*daemon_manager.get_menu_items())
 
-    def check_status_and_update():
-        initial_startup = True
-        last_state = None
-        last_status = None
+    # Start the status checking thread, passing args
+    threading.Thread(target=check_status_and_update,
+                     args=(args,), daemon=True).start()
 
-        while True:
+    icon.run()
+
+
+def check_status_and_update(args):
+    global icon, daemon_manager
+    initial_startup = True
+    last_state = None
+
+    while True:
+        try:
             current_status = get_daemon_status()
 
             if initial_startup:
                 if "error" in current_status:
                     print("Daemon not running. Attempting to start...")
                     start_daemon()
-                    while "error" in current_status:
-                        current_status = get_daemon_status()
-                        time.sleep(0.5)  # Short sleep to avoid busy waiting
+                    time.sleep(2)  # Give the daemon some time to start
+                    current_status = get_daemon_status()
                 initial_startup = False
 
             daemon_manager.update_state(current_status)
             current_state = daemon_manager.state
 
-            if current_state != last_state or current_status != last_status:
+            if current_state != last_state:
+                print(f"State changed from {last_state} to {current_state}")
                 new_menu = pystray.Menu(*daemon_manager.get_menu_items())
+                new_icon = create_status_image(
+                    daemon_manager.get_icon_color(),
+                    daemon_manager.get_icon_text(),
+                    style=args.icon_style,
+                    thickness=args.icon_thickness
+                )
+
                 icon.menu = new_menu
-                icon.icon = create_status_image(
-                    daemon_manager.get_icon_color(), daemon_manager.get_icon_text(), style=args.icon_style, thickness=args.icon_thickness)
+                icon.icon = new_icon
                 icon.update_menu()
 
                 last_state = current_state
-                last_status = current_status
 
-            time.sleep(1)
+        except Exception as e:
+            print(f"Error in check_status_and_update: {e}")
 
-    threading.Thread(target=check_status_and_update, daemon=True).start()
-    icon.run()
+        time.sleep(1)
 
 
 def main():
