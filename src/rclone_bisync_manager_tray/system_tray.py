@@ -21,7 +21,7 @@ import traceback
 import queue
 
 # Add this at the top of your file with other imports
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 
 # Add these global variables
 update_queue = queue.Queue()
@@ -374,13 +374,11 @@ def stop_daemon():
 
 
 def start_daemon():
-    global daemon_manager
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
         log_message(
             "Executing command: rclone-bisync-manager daemon start", level=logging.DEBUG)
 
-        # Use subprocess.Popen to start the daemon process
         process = subprocess.Popen(
             ["rclone-bisync-manager", "daemon", "start"],
             stdout=subprocess.PIPE,
@@ -389,35 +387,15 @@ def start_daemon():
             start_new_session=True
         )
 
-        log_message(f"Daemon process started with PID: {
+        log_message(f"Daemon start command executed with PID: {
                     process.pid}", level=logging.DEBUG)
 
-        # Wait for a short time to capture any immediate output
-        time.sleep(2)
-
-        # Check if the process has terminated
-        if process.poll() is not None:
-            stdout, stderr = process.communicate()
-            error_message = f"Daemon failed to start:\nSTDOUT:\n{
-                stdout}\nSTDERR:\n{stderr}"
-            log_message(error_message, level=logging.ERROR)
-            daemon_manager.daemon_start_error = error_message
-            daemon_manager.update_state(DaemonState.ERROR)
-        else:
-            daemon_manager.daemon_start_error = None
-            # Set to INITIAL, will be updated on next status check
-            daemon_manager.update_state(DaemonState.INITIAL)
-            log_message(
-                "Daemon start command initiated successfully", level=logging.INFO)
-
-        # Queue an update instead of calling directly
+        # Queue an update to check the status
         update_queue.put(True)
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
-        daemon_manager.daemon_start_error = error_message
-        daemon_manager.update_state(DaemonState.ERROR)
         update_queue.put(True)
 
     log_message("start_daemon() function completed", level=logging.DEBUG)
@@ -792,8 +770,8 @@ def run_tray():
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
 
-    # Start with INITIAL state
-    initial_status = None
+    initial_status = get_daemon_status()
+    initial_state = daemon_manager.get_current_state(initial_status)
 
     icon = pystray.Icon("rclone-bisync-manager",
                         create_status_image(daemon_manager.get_icon_color(initial_status),
@@ -803,38 +781,32 @@ def run_tray():
                                             thickness=args.icon_thickness),
                         "RClone BiSync Manager")
 
-    # Create initial menu
     icon.menu = pystray.Menu(*daemon_manager.get_menu_items(initial_status))
 
-    # Start the status checking thread, passing args
     Thread(target=check_status_and_update, daemon=True).start()
-
-    # Auto-start the daemon
-    Thread(target=start_daemon, daemon=True).start()
-
-    # Start the update handling thread
     Thread(target=handle_updates, daemon=True).start()
+
+    # Always attempt to start the daemon, the daemon itself will handle if it's already running
+    Thread(target=start_daemon, daemon=True).start()
 
     icon.run()
 
 
-def update_menu_and_icon(current_status=None):
+def update_menu_and_icon():
     global icon, daemon_manager, args
-    if current_status is None:
-        current_status = get_daemon_status()
+    current_status = get_daemon_status()
+    current_state = daemon_manager.get_current_state(current_status)
 
-    with daemon_manager.state_lock:
-        current_state = daemon_manager.current_state
-        log_message(f"Updating menu and icon. Current state: {
-                    current_state.name}", level=logging.INFO)
+    log_message(f"Updating menu and icon. Current state: {
+                current_state.name}", level=logging.INFO)
 
-        new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
-        new_icon = create_status_image(
-            daemon_manager.get_icon_color(current_status),
-            daemon_manager.get_icon_text(current_status),
-            style=args.icon_style,
-            thickness=args.icon_thickness
-        )
+    new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
+    new_icon = create_status_image(
+        daemon_manager.get_icon_color(current_status),
+        daemon_manager.get_icon_text(current_status),
+        style=args.icon_style,
+        thickness=args.icon_thickness
+    )
 
     icon.menu = new_menu
     icon.icon = new_icon
@@ -868,7 +840,6 @@ def handle_updates():
     while True:
         try:
             update_queue.get()
-            icon.update_menu()
             update_menu_and_icon()
         except Exception as e:
             log_message(f"Error in handle_updates: {e}", level=logging.ERROR)
