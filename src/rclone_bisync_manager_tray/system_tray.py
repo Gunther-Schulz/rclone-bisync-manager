@@ -89,10 +89,10 @@ class DaemonManager:
         self.first_status_received = False
 
     def get_current_state(self, status):
-        if "state" in status:
-            return status["state"]
-        elif "error" in status:
-            return DaemonState.ERROR
+        if status.get("state") == DaemonState.INITIAL:
+            return DaemonState.INITIAL
+        elif "error" in status or status.get("state") == DaemonState.OFFLINE:
+            return DaemonState.OFFLINE
         elif status is None:
             return DaemonState.OFFLINE
         else:
@@ -737,7 +737,7 @@ def run_tray():
 
 def check_status_and_update(args):
     global icon, daemon_manager
-    last_status_hash = None
+    last_state = None
     initial_startup = True
 
     while True:
@@ -756,18 +756,27 @@ def check_status_and_update(args):
                 current_status = {"state": DaemonState.OFFLINE,
                                   "error": "Failed to get daemon status"}
 
-            current_status_hash = hash(
-                json.dumps(current_status, sort_keys=True))
+            current_state = daemon_manager.get_current_state(current_status)
 
-            if current_status_hash != last_status_hash:
+            # Only update if the state has changed
+            if current_state != last_state:
                 update_menu_and_icon(current_status)
-                last_status_hash = current_status_hash
+                last_state = current_state
+                log_message(f"State updated to: {
+                            current_state}", level=logging.INFO)
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
                         e}", level=logging.ERROR)
-            current_status = {"state": DaemonState.ERROR, "error": str(e)}
-            update_menu_and_icon(current_status)
+            error_status = {"state": DaemonState.ERROR, "error": str(e)}
+            error_state = daemon_manager.get_current_state(error_status)
+
+            # Only update if transitioning to ERROR state
+            if error_state != last_state:
+                update_menu_and_icon(error_status)
+                last_state = error_state
+                log_message(f"State updated to ERROR: {
+                            str(e)}", level=logging.ERROR)
 
         time.sleep(1)
 
