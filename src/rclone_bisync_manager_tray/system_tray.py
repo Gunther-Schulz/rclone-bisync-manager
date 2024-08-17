@@ -18,6 +18,14 @@ from cairosvg import svg2png
 import argparse
 import logging
 import traceback
+import queue
+
+# Add this at the top of your file with other imports
+from threading import Thread, Lock
+
+# Add these global variables
+update_queue = queue.Queue()
+icon = None
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG,
@@ -74,6 +82,16 @@ class DaemonManager:
         self.current_state = DaemonState.INITIAL
         self.daemon_start_error = None
         self.last_status = None
+        self.state_lock = Lock()
+
+    def update_state(self, new_state):
+        with self.state_lock:
+            if new_state != self.current_state:
+                log_message(f"State changing from {self.current_state} to {
+                            new_state}", level=logging.INFO)
+                self.current_state = new_state
+                return True
+        return False
 
     def get_current_state(self, status):
         if status is None:
@@ -384,23 +402,23 @@ def start_daemon():
                 stdout}\nSTDERR:\n{stderr}"
             log_message(error_message, level=logging.ERROR)
             daemon_manager.daemon_start_error = error_message
-            daemon_manager.current_state = DaemonState.ERROR
+            daemon_manager.update_state(DaemonState.ERROR)
         else:
             daemon_manager.daemon_start_error = None
             # Set to INITIAL, will be updated on next status check
-            daemon_manager.current_state = DaemonState.INITIAL
+            daemon_manager.update_state(DaemonState.INITIAL)
             log_message(
                 "Daemon start command initiated successfully", level=logging.INFO)
 
-        # Immediately update the menu and icon
-        update_menu_and_icon()
+        # Queue an update instead of calling directly
+        update_queue.put(True)
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
-        daemon_manager.current_state = DaemonState.ERROR
-        update_menu_and_icon()
+        daemon_manager.update_state(DaemonState.ERROR)
+        update_queue.put(True)
 
     log_message("start_daemon() function completed", level=logging.DEBUG)
 
@@ -789,28 +807,50 @@ def run_tray():
     icon.menu = pystray.Menu(*daemon_manager.get_menu_items(initial_status))
 
     # Start the status checking thread, passing args
-    threading.Thread(target=check_status_and_update,
-                     args=(args,), daemon=True).start()
+    Thread(target=check_status_and_update, daemon=True).start()
 
     # Auto-start the daemon
-    threading.Thread(target=start_daemon, daemon=True).start()
+    Thread(target=start_daemon, daemon=True).start()
+
+    # Start the update handling thread
+    Thread(target=handle_updates, daemon=True).start()
 
     icon.run()
 
 
-def check_status_and_update(args):
-    global icon, daemon_manager
-    last_state = None
+def update_menu_and_icon(current_status=None):
+    global icon, daemon_manager, args
+    if current_status is None:
+        current_status = get_daemon_status()
 
+    with daemon_manager.state_lock:
+        current_state = daemon_manager.current_state
+        log_message(f"Updating menu and icon. Current state: {
+                    current_state.name}", level=logging.INFO)
+
+        new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
+        new_icon = create_status_image(
+            daemon_manager.get_icon_color(current_status),
+            daemon_manager.get_icon_text(current_status),
+            style=args.icon_style,
+            thickness=args.icon_thickness
+        )
+
+    icon.menu = new_menu
+    icon.icon = new_icon
+    icon.update_menu()
+    log_message("Menu and icon updated", level=logging.DEBUG)
+
+
+def check_status_and_update():
+    global daemon_manager
     while True:
         try:
             current_status = get_daemon_status()
             current_state = daemon_manager.get_current_state(current_status)
 
-            # Only update if the state has changed
-            if current_state != last_state:
-                update_menu_and_icon(current_status)
-                last_state = current_state
+            if daemon_manager.update_state(current_state):
+                update_queue.put(True)
                 log_message(f"State updated to: {
                             current_state}", level=logging.INFO)
 
@@ -823,30 +863,19 @@ def check_status_and_update(args):
         time.sleep(1)
 
 
-def update_menu_and_icon(current_status=None):
-    global icon, daemon_manager, args
-    if current_status is None:
-        current_status = get_daemon_status()
-    current_state = daemon_manager.get_current_state(current_status)
-    log_message(f"Updating menu and icon. Current state: {
-                current_state.name}", level=logging.INFO)
-
-    # Update menu
-    new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
-    icon.menu = new_menu
-    icon.update_menu()
-    log_message("Menu updated", level=logging.DEBUG)
-
-    # Update icon
-    new_icon = create_status_image(
-        daemon_manager.get_icon_color(current_status),
-        daemon_manager.get_icon_text(current_status),
-        style=args.icon_style,
-        thickness=args.icon_thickness
-    )
-    icon.icon = new_icon
-    log_message(f"Icon color updated to: {
-                daemon_manager.get_icon_color(current_status)}", level=logging.DEBUG)
+def handle_updates():
+    global icon
+    while True:
+        try:
+            update_queue.get()
+            icon.update_menu()
+            update_menu_and_icon()
+        except Exception as e:
+            log_message(f"Error in handle_updates: {e}", level=logging.ERROR)
+            log_message(f"Error details: {
+                        traceback.format_exc()}", level=logging.DEBUG)
+        finally:
+            update_queue.task_done()
 
 
 def main():
