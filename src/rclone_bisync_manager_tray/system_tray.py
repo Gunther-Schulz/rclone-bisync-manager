@@ -168,8 +168,8 @@ class DaemonManager:
                 pystray.MenuItem("Open Log Folder", open_log_folder)
             )),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Status Window",
-                             show_status_window, enabled=True),
+            pystray.MenuItem("Show Status Window", show_status_window,
+                             enabled=current_state != DaemonState.INITIAL),
             pystray.Menu.SEPARATOR,
         ])
 
@@ -691,7 +691,7 @@ def show_text_window(title, content):
 
 def ensure_daemon_running():
     global daemon_manager
-    max_attempts = 5
+    max_attempts = 1
     for attempt in range(max_attempts):
         status = get_daemon_status()
         if status is not None:
