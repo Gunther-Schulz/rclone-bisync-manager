@@ -582,8 +582,12 @@ def show_status_window():
 
         if current_state == DaemonState.INITIAL:
             error_message = "The daemon is currently initializing. Please wait..."
+        elif daemon_manager.daemon_start_error:
+            error_message = f"Error occurred while starting the daemon: {
+                daemon_manager.daemon_start_error}"
         else:
-            error_message = daemon_manager.daemon_start_error or "Unknown error occurred while starting the daemon."
+            error_message = "The daemon is currently not running. You can start it using the 'Start Daemon' option in the system tray menu."
+
         error_text.insert(tkinter.END, error_message)
         error_text.config(state=tkinter.DISABLED)
 
