@@ -184,7 +184,6 @@ class Config:
         self.LOCK_FILE_PATH = '/tmp/rclone_bisync_manager.lock'
         self._init_file_paths()
         self._init_logging_paths()
-        self.load_sync_state()
         self.sync_queue = Queue()
         self.queued_paths = set()
         self.sync_lock = Lock()
@@ -200,6 +199,9 @@ class Config:
         self.status_file_path = {}
         self.hash_warnings = {}
         self.sync_errors = {}
+        self.sync_errors_file = os.path.join(
+            self.cache_dir, 'sync_errors.json')
+        self.load_sync_state()
         self.last_config_status = None
         self.config_changed_on_disk = False
         self.last_config_mtime = None
@@ -327,6 +329,7 @@ class Config:
                 "last_sync_times": {k: v.isoformat() for k, v in sync_state.last_sync_times.items()},
                 "next_run_times": {k: v.isoformat() for k, v in sync_state.next_run_times.items()}
             }, f)
+        self.save_sync_errors()
 
     def load_sync_state(self):
         state_file = os.path.join(self.cache_dir, 'sync_state.json')
@@ -344,6 +347,7 @@ class Config:
             sync_state.resync_status = {}
             sync_state.last_sync_times = {}
             sync_state.next_run_times = {}
+        self.load_sync_errors()
 
     def check_config_changed(self):
         current_mtime = os.path.getmtime(self.config_file)
@@ -356,6 +360,31 @@ class Config:
     def reset_config_changed_flag(self):
         self.config_changed_on_disk = False
         self.last_config_mtime = os.path.getmtime(self.config_file)
+
+    def save_sync_errors(self):
+        with open(self.sync_errors_file, 'w') as f:
+            json.dump(self.sync_errors, f, default=str)
+
+    def load_sync_errors(self):
+        if os.path.exists(self.sync_errors_file):
+            with open(self.sync_errors_file, 'r') as f:
+                self.sync_errors = json.load(f)
+        else:
+            self.sync_errors = {}
+
+    def update_sync_error(self, local_path, sync_type, error_code, message):
+        self.sync_errors[local_path] = {
+            "sync_type": sync_type,
+            "error_code": error_code,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+        self.save_sync_errors()
+
+    def remove_sync_error(self, local_path):
+        if local_path in self.sync_errors:
+            del self.sync_errors[local_path]
+            self.save_sync_errors()
 
 
 config = Config()
