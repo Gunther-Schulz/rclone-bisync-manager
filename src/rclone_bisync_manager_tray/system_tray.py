@@ -70,63 +70,35 @@ class Colors:
 
 
 class DaemonManager:
-    STATE_PRIORITY = [
-        DaemonState.ERROR,
-        DaemonState.OFFLINE,
-        DaemonState.SHUTTING_DOWN,
-        DaemonState.LIMBO,
-        DaemonState.CONFIG_INVALID,
-        DaemonState.SYNC_ISSUES,
-        DaemonState.CONFIG_CHANGED,
-        DaemonState.SYNCING,
-        DaemonState.RUNNING
-    ]
-
     def __init__(self):
-        self.last_status = {}
+        self.current_state = DaemonState.INITIAL
         self.daemon_start_error = None
-        self.last_state = DaemonState.INITIAL
-        self.first_status_received = False
+        self.last_status = None
 
     def get_current_state(self, status):
         if status is None:
             return DaemonState.OFFLINE
-        if status.get("state") == DaemonState.INITIAL:
-            return DaemonState.INITIAL
-        elif "error" in status or status.get("state") == DaemonState.OFFLINE:
-            return DaemonState.OFFLINE
+        elif isinstance(status, dict):
+            if status.get('error'):
+                return DaemonState.ERROR
+            elif status.get('shutting_down'):
+                return DaemonState.SHUTTING_DOWN
+            elif status.get('in_limbo'):
+                return DaemonState.LIMBO
+            elif status.get('config_invalid'):
+                return DaemonState.CONFIG_INVALID
+            elif self._has_sync_issues(status):
+                return DaemonState.SYNC_ISSUES
+            elif status.get('config_changed_on_disk'):
+                return DaemonState.CONFIG_CHANGED
+            elif status.get('currently_syncing'):
+                return DaemonState.SYNCING
+            elif status.get('running', False):
+                return DaemonState.RUNNING
+            else:
+                return DaemonState.OFFLINE
         else:
-            return self._determine_state(status)
-
-    def _determine_state(self, status):
-        if status is None or "error" in status:
-            return DaemonState.OFFLINE
-
-        for state in self.STATE_PRIORITY:
-            if self._check_state_condition(state, status):
-                return state
-
-        return DaemonState.RUNNING
-
-    def _check_state_condition(self, state, status):
-        if state == DaemonState.ERROR:
-            return self.daemon_start_error
-        elif state == DaemonState.OFFLINE:
-            return status is None or "error" in status
-        elif state == DaemonState.SHUTTING_DOWN:
-            return status.get("shutting_down")
-        elif state == DaemonState.LIMBO:
-            return status.get("in_limbo")
-        elif state == DaemonState.CONFIG_INVALID:
-            return status.get("config_invalid")
-        elif state == DaemonState.SYNC_ISSUES:
-            return self._has_sync_issues(status)
-        elif state == DaemonState.CONFIG_CHANGED:
-            return status.get("config_changed_on_disk")
-        elif state == DaemonState.SYNCING:
-            return status.get("currently_syncing")
-        else:
-            return False
+            return DaemonState.ERROR
 
     def _has_sync_issues(self, status):
         return (
@@ -139,11 +111,6 @@ class DaemonManager:
             bool(status.get("sync_errors"))
         )
 
-    def is_currently_syncing(self, status):
-        if status is None:
-            return False
-        return status.get('currently_syncing') not in [None, 'None', '']
-
     def get_menu_items(self, status):
         current_state = self.get_current_state(status)
         menu_items = []
@@ -151,7 +118,7 @@ class DaemonManager:
         if current_state == DaemonState.INITIAL:
             menu_items.append(pystray.MenuItem(
                 "Initializing...", None, enabled=False))
-        elif current_state == DaemonState.ERROR or current_state == DaemonState.OFFLINE:
+        elif current_state in [DaemonState.ERROR, DaemonState.OFFLINE]:
             menu_items.extend(self._get_error_menu_items(status))
         elif current_state == DaemonState.LIMBO:
             menu_items.extend(self._get_limbo_menu_items(status))
@@ -172,8 +139,8 @@ class DaemonManager:
             ])
 
         # Show Status Window menu item (enabled for all states except INITIAL)
-        menu_items.append(pystray.MenuItem("Show Status Window", show_status_window,
-                                           enabled=current_state != DaemonState.INITIAL))
+        menu_items.append(pystray.MenuItem(
+            "Show Status Window", show_status_window, enabled=current_state != DaemonState.INITIAL))
         menu_items.append(pystray.Menu.SEPARATOR)
 
         # Add Start/Stop/Shutting Down menu item
@@ -193,87 +160,87 @@ class DaemonManager:
     def _get_error_menu_items(self, status):
         items = [pystray.MenuItem(
             "⚠️ Daemon is not running", None, enabled=False)]
-        error_message = status.get("error") or self.daemon_start_error
-        if error_message:
-            items.append(pystray.MenuItem(
-                f"Error: {error_message[:50]}...", None, enabled=False))
+        error_message = status.get("error") if status else None
+        error_message = error_message or self.daemon_start_error or "Unknown error"
+        items.append(pystray.MenuItem(
+            f"Error: {error_message[:50]}...", None, enabled=False))
         return items
 
     def _get_limbo_menu_items(self, status):
-        items = [
-            pystray.MenuItem("⚠️ Daemon is in limbo state",
-                             None, enabled=False),
-        ]
-        if status.get("config_invalid", False):
-            items.append(pystray.MenuItem(
-                "⚠️ Config is invalid", None, enabled=False))
-            items.append(pystray.MenuItem(f"Error: {status.get(
-                'config_error_message', 'Unknown error')[:30]}...", None, enabled=False))
-        if status.get("config_changed_on_disk", False):
-            items.append(pystray.MenuItem(
-                "⚠️ Config changed on disk", None, enabled=False))
+        items = [pystray.MenuItem(
+            "⚠️ Daemon is in limbo state", None, enabled=False)]
+        if status:
+            if status.get("config_invalid", False):
+                items.append(pystray.MenuItem(
+                    "⚠️ Config is invalid", None, enabled=False))
+                items.append(pystray.MenuItem(f"Error: {status.get(
+                    'config_error_message', 'Unknown error')[:30]}...", None, enabled=False))
+            if status.get("config_changed_on_disk", False):
+                items.append(pystray.MenuItem(
+                    "⚠️ Config changed on disk", None, enabled=False))
         return items
 
     def _get_normal_menu_items(self, status):
         items = []
-
-        if self._has_sync_issues(status):
-            items.append(pystray.MenuItem(
-                "⚠️ Sync issues detected", None, enabled=False))
-        if status.get("config_changed_on_disk"):
-            items.append(pystray.MenuItem(
-                "⚠️ Config changed on disk", None, enabled=False))
-
-        if self._has_sync_issues(status) or status.get("config_changed_on_disk"):
-            items.append(pystray.Menu.SEPARATOR)
-
-        currently_syncing = status.get('currently_syncing', None)
-        if currently_syncing:
-            items.append(pystray.MenuItem(
-                "Currently syncing:", None, enabled=False))
-            if isinstance(currently_syncing, str):
+        if status:
+            if self._has_sync_issues(status):
                 items.append(pystray.MenuItem(
-                    f"  {currently_syncing.strip()}", None, enabled=False))
-            elif isinstance(currently_syncing, list):
-                for job in currently_syncing:
+                    "⚠️ Sync issues detected", None, enabled=False))
+            if status.get("config_changed_on_disk"):
+                items.append(pystray.MenuItem(
+                    "⚠️ Config changed on disk", None, enabled=False))
+
+            if self._has_sync_issues(status) or status.get("config_changed_on_disk"):
+                items.append(pystray.Menu.SEPARATOR)
+
+            currently_syncing = status.get('currently_syncing')
+            if currently_syncing:
+                items.append(pystray.MenuItem(
+                    "Currently syncing:", None, enabled=False))
+                if isinstance(currently_syncing, str):
                     items.append(pystray.MenuItem(
-                        f"  {job.strip()}", None, enabled=False))
+                        f"  {currently_syncing.strip()}", None, enabled=False))
+                elif isinstance(currently_syncing, list):
+                    for job in currently_syncing:
+                        items.append(pystray.MenuItem(
+                            f"  {job.strip()}", None, enabled=False))
 
-        queued_jobs = status.get('queued_paths', [])
-        if queued_jobs:
-            items.append(pystray.MenuItem("Queued jobs:", None, enabled=False))
-            for job in queued_jobs:
-                items.append(pystray.MenuItem(f"  {job}", None, enabled=False))
+            queued_jobs = status.get('queued_paths', [])
+            if queued_jobs:
+                items.append(pystray.MenuItem(
+                    "Queued jobs:", None, enabled=False))
+                for job in queued_jobs:
+                    items.append(pystray.MenuItem(
+                        f"  {job}", None, enabled=False))
 
-        # Add sync jobs submenu
-        if "sync_jobs" in status:
-            jobs_submenu = []
-            for job_key, job_status in status["sync_jobs"].items():
-                job_submenu = pystray.Menu(
-                    pystray.MenuItem(
-                        "⚡ Sync Now", create_sync_now_handler(job_key)),
-                    pystray.MenuItem(
-                        f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
-                    pystray.MenuItem(
-                        f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
-                    pystray.MenuItem(
-                        f"Sync status: {job_status['sync_status']}", None, enabled=False),
-                    pystray.MenuItem(f"Resync status: {
-                                     job_status['resync_status']}", None, enabled=False),
-                )
-                jobs_submenu.append(pystray.MenuItem(job_key, job_submenu))
-            items.append(pystray.MenuItem(
-                "Sync Jobs", pystray.Menu(*jobs_submenu)))
-        else:
-            items.append(pystray.MenuItem("Sync Jobs", None, enabled=False))
+            # Add sync jobs submenu
+            if "sync_jobs" in status:
+                jobs_submenu = []
+                for job_key, job_status in status["sync_jobs"].items():
+                    job_submenu = pystray.Menu(
+                        pystray.MenuItem(
+                            "⚡ Sync Now", create_sync_now_handler(job_key)),
+                        pystray.MenuItem(
+                            f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
+                        pystray.MenuItem(
+                            f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
+                        pystray.MenuItem(
+                            f"Sync status: {job_status['sync_status']}", None, enabled=False),
+                        pystray.MenuItem(f"Resync status: {
+                                         job_status['resync_status']}", None, enabled=False),
+                    )
+                    jobs_submenu.append(pystray.MenuItem(job_key, job_submenu))
+                items.append(pystray.MenuItem(
+                    "Sync Jobs", pystray.Menu(*jobs_submenu)))
+            else:
+                items.append(pystray.MenuItem(
+                    "Sync Jobs", None, enabled=False))
 
         return items
 
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
         if current_state == DaemonState.INITIAL:
-            return Colors.YELLOW
-        elif current_state == DaemonState.STARTING:
             return Colors.YELLOW
         elif current_state == DaemonState.RUNNING:
             return Colors.GREEN
@@ -404,7 +371,6 @@ def start_daemon():
             start_new_session=True
         )
 
-        # Log the process ID
         log_message(f"Daemon process started with PID: {
                     process.pid}", level=logging.DEBUG)
 
@@ -413,22 +379,28 @@ def start_daemon():
 
         # Check if the process has terminated
         if process.poll() is not None:
-            # Process has terminated, capture the output
             stdout, stderr = process.communicate()
             error_message = f"Daemon failed to start:\nSTDOUT:\n{
                 stdout}\nSTDERR:\n{stderr}"
             log_message(error_message, level=logging.ERROR)
             daemon_manager.daemon_start_error = error_message
+            daemon_manager.current_state = DaemonState.ERROR
         else:
             daemon_manager.daemon_start_error = None
-            log_message("Daemon start command initiated successfully",
-                        level=logging.INFO)
+            # Set to INITIAL, will be updated on next status check
+            daemon_manager.current_state = DaemonState.INITIAL
+            log_message(
+                "Daemon start command initiated successfully", level=logging.INFO)
 
+        # Immediately update the menu and icon
+        update_menu_and_icon()
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
+        daemon_manager.current_state = DaemonState.ERROR
+        update_menu_and_icon()
 
     log_message("start_daemon() function completed", level=logging.DEBUG)
 
@@ -803,7 +775,7 @@ def run_tray():
         debug = False
 
     # Start with INITIAL state
-    initial_status = {"state": DaemonState.INITIAL}
+    initial_status = None
 
     icon = pystray.Icon("rclone-bisync-manager",
                         create_status_image(daemon_manager.get_icon_color(initial_status),
@@ -820,29 +792,19 @@ def run_tray():
     threading.Thread(target=check_status_and_update,
                      args=(args,), daemon=True).start()
 
+    # Auto-start the daemon
+    threading.Thread(target=start_daemon, daemon=True).start()
+
     icon.run()
 
 
 def check_status_and_update(args):
     global icon, daemon_manager
     last_state = None
-    initial_startup = True
 
     while True:
         try:
-            if initial_startup:
-                current_status = {"state": DaemonState.INITIAL}
-                initial_startup = False
-                daemon_running = ensure_daemon_running()
-                if not daemon_running:
-                    current_status = {"state": DaemonState.OFFLINE,
-                                      "error": daemon_manager.daemon_start_error}
-            else:
-                current_status = get_daemon_status()
-
-            if current_status is None:
-                current_status = {"state": DaemonState.OFFLINE}
-
+            current_status = get_daemon_status()
             current_state = daemon_manager.get_current_state(current_status)
 
             # Only update if the state has changed
@@ -855,21 +817,16 @@ def check_status_and_update(args):
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
                         e}", level=logging.ERROR)
-            error_status = {"state": DaemonState.ERROR, "error": str(e)}
-            error_state = daemon_manager.get_current_state(error_status)
-
-            # Only update if transitioning to ERROR state
-            if error_state != last_state:
-                update_menu_and_icon(error_status)
-                last_state = error_state
-                log_message(f"State updated to ERROR: {
-                            str(e)}", level=logging.ERROR)
+            log_message(f"Error details: {
+                        traceback.format_exc()}", level=logging.DEBUG)
 
         time.sleep(1)
 
 
-def update_menu_and_icon(current_status):
+def update_menu_and_icon(current_status=None):
     global icon, daemon_manager, args
+    if current_status is None:
+        current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
     log_message(f"Updating menu and icon. Current state: {
                 current_state.name}", level=logging.INFO)
