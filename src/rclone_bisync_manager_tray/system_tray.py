@@ -114,12 +114,18 @@ class DaemonManager:
             pystray.MenuItem("Show Status Window", show_status_window, enabled=current_state not in [
                              DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Start Daemon", start_daemon, enabled=current_state in [
-                             DaemonState.OFFLINE, DaemonState.ERROR]),
-            pystray.MenuItem("Stop Daemon", stop_daemon, enabled=current_state not in [
-                             DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
-            pystray.MenuItem("Exit", lambda: icon.stop())
         ])
+
+        # Add Start/Stop/Shutting Down menu item
+        if current_state in [DaemonState.OFFLINE, DaemonState.ERROR]:
+            menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+        elif current_state == DaemonState.SHUTTING_DOWN:
+            menu_items.append(pystray.MenuItem(
+                "Shutting Down", lambda: None, enabled=False))
+        else:
+            menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
+
+        menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
 
         return menu_items
 
@@ -263,6 +269,9 @@ def stop_daemon():
         response = client.recv(1024).decode()
         client.close()
         print("Daemon is shutting down. Use 'daemon status' to check progress.")
+
+        # Immediately update the menu to show "Shutting Down"
+        update_menu_and_icon()
     except Exception as e:
         print(f"Error stopping daemon: {e}")
 
@@ -602,19 +611,7 @@ def check_status_and_update(args):
                 current_state = daemon_manager.get_current_state(
                     current_status)
                 print(f"Status changed. New state: {current_state.name}")
-                new_menu = pystray.Menu(
-                    *daemon_manager.get_menu_items(current_status))
-                new_icon = create_status_image(
-                    daemon_manager.get_icon_color(current_status),
-                    daemon_manager.get_icon_text(current_status),
-                    style=args.icon_style,
-                    thickness=args.icon_thickness
-                )
-
-                icon.menu = new_menu
-                icon.icon = new_icon
-                icon.update_menu()
-
+                update_menu_and_icon()
                 last_status_hash = current_status_hash
 
         except Exception as e:
@@ -622,6 +619,21 @@ def check_status_and_update(args):
             current_status = None  # Assume offline if there's an error getting status
 
         time.sleep(1)
+
+
+def update_menu_and_icon():
+    global icon, daemon_manager, args
+    current_status = get_daemon_status()
+    new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
+    new_icon = create_status_image(
+        daemon_manager.get_icon_color(current_status),
+        daemon_manager.get_icon_text(current_status),
+        style=args.icon_style,
+        thickness=args.icon_thickness
+    )
+    icon.menu = new_menu
+    icon.icon = new_icon
+    icon.update_menu()
 
 
 def main():
