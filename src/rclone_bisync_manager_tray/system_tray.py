@@ -34,6 +34,7 @@ class DaemonState(enum.Enum):
     CONFIG_INVALID = "config_invalid"
     CONFIG_CHANGED = "config_changed"
     LIMBO = "limbo"
+    OFFLINE = "offline"
 
 
 @dataclass
@@ -57,12 +58,15 @@ class Colors:
 class DaemonManager:
     def __init__(self):
         self.last_status = {}
+        self.daemon_start_error = None
 
     def get_current_state(self, status):
-        if status.get("shutting_down"):
-            return DaemonState.SHUTTING_DOWN
-        elif "error" in status:
+        if self.daemon_start_error:
             return DaemonState.ERROR
+        elif status is None or "error" in status:
+            return DaemonState.OFFLINE
+        elif status.get("shutting_down"):
+            return DaemonState.SHUTTING_DOWN
         elif status.get("in_limbo"):
             return DaemonState.LIMBO
         elif status.get("config_invalid"):
@@ -89,7 +93,9 @@ class DaemonManager:
         menu_items = []
 
         if current_state == DaemonState.ERROR:
-            menu_items.extend(self._get_error_menu_items(status))
+            menu_items.extend(self._get_error_menu_items())
+        elif current_state == DaemonState.OFFLINE:
+            menu_items.extend(self._get_offline_menu_items())
         elif current_state == DaemonState.LIMBO:
             menu_items.extend(self._get_limbo_menu_items(status))
         else:
@@ -99,27 +105,34 @@ class DaemonManager:
         menu_items.extend([
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config,
-                                 enabled=not status.get('shutting_down', False)),
+                pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
+                                 DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
                 pystray.MenuItem("Open Config Folder", open_config_file),
                 pystray.MenuItem("Open Log Folder", open_log_folder)
             )),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Status Window", show_status_window,
-                             enabled=not status.get('shutting_down', False)),
+            pystray.MenuItem("Show Status Window", show_status_window, enabled=current_state not in [
+                             DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Stop Daemon", stop_daemon,
-                             enabled=not status.get('shutting_down', False)),
+            pystray.MenuItem("Start Daemon", start_daemon, enabled=current_state in [
+                             DaemonState.OFFLINE, DaemonState.ERROR]),
+            pystray.MenuItem("Stop Daemon", stop_daemon, enabled=current_state not in [
+                             DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.SHUTTING_DOWN]),
             pystray.MenuItem("Exit", lambda: icon.stop())
         ])
 
         return menu_items
 
-    def _get_error_menu_items(self, status):
+    def _get_error_menu_items(self):
         return [
-            pystray.MenuItem("⚠️ Daemon Error", None, enabled=False),
-            pystray.MenuItem(f"Error: {status.get(
-                'error', 'Unknown error')}", None, enabled=False),
+            pystray.MenuItem("⚠️ Daemon failed to start", None, enabled=False),
+            pystray.MenuItem(
+                f"Error: {self.daemon_start_error}", None, enabled=False),
+        ]
+
+    def _get_offline_menu_items(self):
+        return [
+            pystray.MenuItem("⚠️ Daemon is offline", None, enabled=False),
         ]
 
     def _get_limbo_menu_items(self, status):
@@ -186,6 +199,8 @@ class DaemonManager:
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
         if current_state == DaemonState.ERROR:
+            return Colors.RED
+        elif current_state == DaemonState.OFFLINE:
             return Colors.GRAY
         elif current_state == DaemonState.SYNCING:
             return Colors.BLUE
@@ -204,6 +219,8 @@ class DaemonManager:
         current_state = self.get_current_state(status)
         if current_state == DaemonState.ERROR:
             return "ERR"
+        elif current_state == DaemonState.OFFLINE:
+            return "OFF"
         elif current_state == DaemonState.SYNCING:
             return "SYNC"
         elif current_state == DaemonState.CONFIG_INVALID:
@@ -251,12 +268,15 @@ def stop_daemon():
 
 
 def start_daemon():
+    global daemon_manager
     try:
         subprocess.run(
             ["rclone-bisync-manager", "daemon", "start"], check=True)
         print("Daemon started successfully")
+        daemon_manager.daemon_start_error = None
     except subprocess.CalledProcessError as e:
         print(f"Error starting daemon: {e}")
+        daemon_manager.daemon_start_error = str(e)
 
 
 def reload_config():
@@ -575,8 +595,8 @@ def check_status_and_update(args):
     while True:
         try:
             current_status = get_daemon_status()
-            current_status_hash = hash(
-                json.dumps(current_status, sort_keys=True))
+            current_status_hash = hash(json.dumps(
+                current_status, sort_keys=True)) if current_status else None
 
             if current_status_hash != last_status_hash:
                 current_state = daemon_manager.get_current_state(
@@ -599,6 +619,7 @@ def check_status_and_update(args):
 
         except Exception as e:
             print(f"Error in check_status_and_update: {e}")
+            current_status = None  # Assume offline if there's an error getting status
 
         time.sleep(1)
 
