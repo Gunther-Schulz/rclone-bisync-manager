@@ -88,15 +88,15 @@ class DaemonManager:
         current_state = self.get_current_state(status)
         menu_items = []
 
+        if status.get("in_limbo", False):
+            menu_items.append(pystray.MenuItem(
+                "⚠️ Daemon is in limbo state", None, enabled=False))
+
         if status.get("config_invalid", False):
             menu_items.append(pystray.MenuItem(
                 "⚠️ Config is invalid", None, enabled=False))
             menu_items.append(pystray.MenuItem(f"Error: {status.get(
                 'config_error_message', 'Unknown error')}", None, enabled=False))
-
-        if status.get("in_limbo", False):
-            menu_items.append(pystray.MenuItem(
-                "⚠️ Daemon is in limbo state", None, enabled=False))
 
         if status.get("config_changed_on_disk", False):
             menu_items.append(pystray.MenuItem(
@@ -374,7 +374,7 @@ def show_status_window():
 
     window = tkinter.Tk()
     window.title("RClone BiSync Manager Status")
-    window.geometry("400x300")
+    window.geometry("500x400")
 
     style = ttk.Style()
     style.theme_use('clam')
@@ -423,6 +423,52 @@ def show_status_window():
                       job_status['sync_status']}").pack(anchor='w')
             ttk.Label(job_frame, text=f"Resync status: {
                       job_status['resync_status']}").pack(anchor='w')
+
+    # Add new Messages frame
+    messages_frame = ttk.Frame(notebook)
+    notebook.add(messages_frame, text='Messages')
+
+    messages_text = tkinter.Text(messages_frame, wrap=tkinter.WORD, height=15)
+    messages_text.pack(expand=True, fill='both', padx=5, pady=5)
+    messages_scrollbar = ttk.Scrollbar(
+        messages_frame, orient="vertical", command=messages_text.yview)
+    messages_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
+    messages_text.configure(yscrollcommand=messages_scrollbar.set)
+
+    # Populate Messages frame
+    messages_text.insert(tkinter.END, "Errors and Warnings:\n\n")
+
+    if status.get("error"):
+        messages_text.insert(tkinter.END, f"Error: {status['error']}\n\n")
+
+    if status.get("config_invalid"):
+        messages_text.insert(tkinter.END, f"Config Invalid: {
+                             status.get('config_error_message', 'Unknown error')}\n\n")
+
+    if status.get("config_changed_on_disk"):
+        messages_text.insert(
+            tkinter.END, "Warning: Config file changed on disk\n\n")
+
+    if status.get("in_limbo"):
+        messages_text.insert(
+            tkinter.END, "Warning: Daemon is in limbo state\n\n")
+
+    for job_key, job_status in status.get("sync_jobs", {}).items():
+        if job_status['sync_status'] not in ["COMPLETED", "NONE", None]:
+            messages_text.insert(tkinter.END, f"Warning: Job '{
+                                 job_key}' sync status: {job_status['sync_status']}\n")
+        if job_status['resync_status'] not in ["COMPLETED", "NONE", None]:
+            messages_text.insert(tkinter.END, f"Warning: Job '{job_key}' resync status: {
+                                 job_status['resync_status']}\n")
+        if job_status.get("hash_warnings", False):
+            messages_text.insert(tkinter.END, f"Warning: Job '{
+                                 job_key}' has hash warnings\n")
+
+    if messages_text.get("1.0", tkinter.END).strip() == "Errors and Warnings:":
+        messages_text.insert(
+            tkinter.END, "No errors or warnings at this time.")
+
+    messages_text.config(state=tkinter.DISABLED)
 
     window.mainloop()
 
