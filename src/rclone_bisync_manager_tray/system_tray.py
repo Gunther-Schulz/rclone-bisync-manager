@@ -166,21 +166,25 @@ class DaemonManager:
         if "sync_jobs" in self.status and not self.status.get('config_invalid', False) and not is_shutting_down:
             jobs_submenu = []
             for job_key, job_status in reversed(self.status["sync_jobs"].items()):
+                last_sync = job_status['last_sync'].replace(
+                    'T', ' ')[:16] if job_status['last_sync'] else 'Never'
+                next_run = job_status['next_run'].replace(
+                    'T', ' ')[:16] if job_status['next_run'] else 'Not scheduled'
+
                 job_submenu = pystray.Menu(
-                    pystray.MenuItem(
-                        f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
-                    pystray.MenuItem(
-                        f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
-                    pystray.MenuItem(
-                        f"Sync status: {job_status['sync_status']}", None, enabled=False),
-                    pystray.MenuItem(f"Resync status: {
+                    pystray.MenuItem("    ⚡ Sync Now",
+                                     create_sync_now_handler(job_key)),
+                    pystray.MenuItem(f"    Last sync: {
+                                     last_sync}", None, enabled=False),
+                    pystray.MenuItem(f"    Next run: {
+                                     next_run}", None, enabled=False),
+                    pystray.MenuItem(f"    Sync status: {
+                                     job_status['sync_status']}", None, enabled=False),
+                    pystray.MenuItem(f"    Resync status: {
                                      job_status['resync_status']}", None, enabled=False),
-                    pystray.MenuItem(
-                        "⚡ Sync Now", create_sync_now_handler(job_key)),
-                    pystray.MenuItem("", None, enabled=False)
                 )
                 jobs_submenu.append(pystray.MenuItem(
-                    f"Job: {job_key}", job_submenu))
+                    f"  {job_key}", job_submenu))
 
             menu_items.append(pystray.MenuItem(
                 "Sync Jobs", pystray.Menu(*reversed(jobs_submenu))))
