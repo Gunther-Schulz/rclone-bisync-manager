@@ -18,6 +18,11 @@ import math
 from io import BytesIO
 from cairosvg import svg2png
 import argparse
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 global daemon_manager
 daemon_manager = None
@@ -59,8 +64,28 @@ class DaemonManager:
     def __init__(self):
         self.last_status = {}
         self.daemon_start_error = None
+        self.last_state = DaemonState.INITIAL
+        self.first_status_received = False
 
     def get_current_state(self, status):
+        if self.last_state == DaemonState.INITIAL:
+            current_state = DaemonState.STARTING
+        elif not self.first_status_received:
+            if status is None:
+                current_state = DaemonState.STARTING
+            else:
+                self.first_status_received = True
+                current_state = self._determine_state(status)
+        else:
+            current_state = self._determine_state(status)
+
+        if current_state != self.last_state:
+            logging.info(f"State changed: {
+                         self.last_state} -> {current_state}")
+            self.last_state = current_state
+        return current_state
+
+    def _determine_state(self, status):
         if self.daemon_start_error:
             return DaemonState.ERROR
         elif status is None or "error" in status:
@@ -204,22 +229,30 @@ class DaemonManager:
 
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
-        if current_state == DaemonState.ERROR:
-            return Colors.RED
-        elif current_state == DaemonState.OFFLINE:
+        if current_state == DaemonState.INITIAL:
             return Colors.GRAY
+        elif current_state == DaemonState.STARTING:
+            return Colors.YELLOW
+        elif current_state == DaemonState.RUNNING:
+            return Colors.GREEN
         elif current_state == DaemonState.SYNCING:
             return Colors.BLUE
+        elif current_state == DaemonState.ERROR:
+            return Colors.RED
+        elif current_state == DaemonState.SHUTTING_DOWN:
+            return Colors.PURPLE
+        elif current_state == DaemonState.SYNC_ISSUES:
+            return Colors.ORANGE
         elif current_state == DaemonState.CONFIG_INVALID:
             return Colors.RED
         elif current_state == DaemonState.CONFIG_CHANGED:
             return Colors.AMBER
-        elif current_state == DaemonState.SYNC_ISSUES:
-            return Colors.ORANGE
         elif current_state == DaemonState.LIMBO:
             return Colors.PURPLE
+        elif current_state == DaemonState.OFFLINE:
+            return Colors.GRAY
         else:
-            return Colors.GREEN
+            return Colors.GRAY  # Default color for unknown states
 
     def get_icon_text(self, status):
         current_state = self.get_current_state(status)
@@ -609,31 +642,30 @@ def check_status_and_update(args):
                 current_status, sort_keys=True)) if current_status else None
 
             if initial_startup:
-                initial_state = daemon_manager.get_current_state(
-                    current_status)
-                print(f"Initial state: {initial_state.name}")
-
-                if initial_state in [DaemonState.OFFLINE, DaemonState.ERROR]:
-                    print("Daemon not running. Attempting to start...")
-                    start_daemon()
-                    time.sleep(2)  # Give the daemon some time to start
-                    current_status = get_daemon_status()
-                    new_state = daemon_manager.get_current_state(
-                        current_status)
-                    print(f"After start attempt, new state: {new_state.name}")
-
+                initial_state = daemon_manager.get_current_state(None)
+                logging.info(f"Initial state: {initial_state.name}")
                 update_menu_and_icon()
                 initial_startup = False
-                last_status_hash = current_status_hash  # Set initial hash
-            elif current_status_hash != last_status_hash:
+                last_status_hash = current_status_hash
+
+            if current_status_hash != last_status_hash:
                 current_state = daemon_manager.get_current_state(
                     current_status)
-                print(f"Status changed. New state: {current_state.name}")
+                logging.info(f"Status changed. New state: {
+                             current_state.name}")
                 update_menu_and_icon()
                 last_status_hash = current_status_hash
 
+            if not daemon_manager.first_status_received and current_status:
+                daemon_manager.first_status_received = True
+                current_state = daemon_manager.get_current_state(
+                    current_status)
+                logging.info(f"First status received. New state: {
+                             current_state.name}")
+                update_menu_and_icon()
+
         except Exception as e:
-            print(f"Error in check_status_and_update: {e}")
+            logging.error(f"Error in check_status_and_update: {e}")
             current_status = None  # Assume offline if there's an error getting status
 
         time.sleep(1)
@@ -643,17 +675,34 @@ def update_menu_and_icon():
     global icon, daemon_manager, args
     current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
-    print(f"Updating menu and icon. Current state: {current_state.name}")
+    logging.info(f"Updating menu and icon. Current state: {
+                 current_state.name}")
+
+    # Update menu
     new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
+    icon.menu = new_menu
+    icon.update_menu()
+    logging.debug("Menu updated")
+
+    # Update icon in a separate thread
+    threading.Thread(target=update_icon, args=(
+        current_status, current_state)).start()
+
+
+def update_icon(current_status, current_state):
+    global icon, daemon_manager, args
+    logging.debug("Starting icon update")
     new_icon = create_status_image(
         daemon_manager.get_icon_color(current_status),
         daemon_manager.get_icon_text(current_status),
         style=args.icon_style,
         thickness=args.icon_thickness
     )
-    icon.menu = new_menu
+    logging.debug("New icon created")
     icon.icon = new_icon
-    icon.update_menu()
+    logging.debug(f"Icon color updated to: {
+                  daemon_manager.get_icon_color(current_status)}")
+    logging.debug("Icon update completed")
 
 
 def main():
