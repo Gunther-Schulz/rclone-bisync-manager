@@ -149,7 +149,7 @@ def run_rclone_command(rclone_args):
 
 
 def handle_rclone_exit_code(result_code, local_path, sync_type):
-    result_code = 7
+
     messages = {
         0: "completed successfully",
         1: "Non-critical error. A rerun may be successful.",
@@ -167,14 +167,9 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
                            result_code}, please check the logs for more information.")
 
     if result_code != 0 and result_code != 9:
-        config.sync_errors[local_path] = {
-            "sync_type": sync_type,
-            "error_code": result_code,
-            "message": message,
-            "timestamp": datetime.now().isoformat()
-        }
+        config.update_sync_error(local_path, sync_type, result_code, message)
     else:
-        config.sync_errors.pop(local_path, None)
+        config.remove_sync_error(local_path)
 
     if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
