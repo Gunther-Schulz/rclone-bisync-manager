@@ -69,6 +69,18 @@ class Colors:
 
 
 class DaemonManager:
+    STATE_PRIORITY = [
+        DaemonState.ERROR,
+        DaemonState.OFFLINE,
+        DaemonState.SHUTTING_DOWN,
+        DaemonState.LIMBO,
+        DaemonState.CONFIG_INVALID,
+        DaemonState.SYNC_ISSUES,  # Moved up in priority
+        DaemonState.CONFIG_CHANGED,
+        DaemonState.SYNCING,
+        DaemonState.RUNNING
+    ]
+
     def __init__(self):
         self.last_status = {}
         self.daemon_start_error = None
@@ -94,24 +106,34 @@ class DaemonManager:
         return current_state
 
     def _determine_state(self, status):
-        if self.daemon_start_error:
-            return DaemonState.ERROR
-        elif status is None:
+        if status is None:
             return DaemonState.OFFLINE
-        elif status.get("shutting_down"):
-            return DaemonState.SHUTTING_DOWN
-        elif status.get("in_limbo"):
-            return DaemonState.LIMBO
-        elif status.get("config_invalid"):
-            return DaemonState.CONFIG_INVALID
-        elif status.get("config_changed_on_disk"):
-            return DaemonState.CONFIG_CHANGED
-        elif status.get("currently_syncing"):
-            return DaemonState.SYNCING
-        elif self._has_sync_issues(status):
-            return DaemonState.SYNC_ISSUES
+
+        for state in self.STATE_PRIORITY:
+            if self._check_state_condition(state, status):
+                return state
+
+        return DaemonState.RUNNING
+
+    def _check_state_condition(self, state, status):
+        if state == DaemonState.ERROR:
+            return self.daemon_start_error
+        elif state == DaemonState.OFFLINE:
+            return "error" in status
+        elif state == DaemonState.SHUTTING_DOWN:
+            return status.get("shutting_down")
+        elif state == DaemonState.LIMBO:
+            return status.get("in_limbo")
+        elif state == DaemonState.CONFIG_INVALID:
+            return status.get("config_invalid")
+        elif state == DaemonState.SYNC_ISSUES:
+            return self._has_sync_issues(status)
+        elif state == DaemonState.CONFIG_CHANGED:
+            return status.get("config_changed_on_disk")
+        elif state == DaemonState.SYNCING:
+            return status.get("currently_syncing")
         else:
-            return DaemonState.RUNNING
+            return False
 
     def _has_sync_issues(self, status):
         return (
@@ -201,13 +223,16 @@ class DaemonManager:
 
     def _get_normal_menu_items(self, status):
         items = []
+
+        if self._has_sync_issues(status):
+            items.append(pystray.MenuItem(
+                "⚠️ Sync issues detected", None, enabled=False))
         if status.get("config_changed_on_disk"):
             items.append(pystray.MenuItem(
                 "⚠️ Config changed on disk", None, enabled=False))
 
-        if status.get("sync_errors"):
-            items.append(pystray.MenuItem(
-                "⚠️ Sync errors detected", None, enabled=False))
+        if self._has_sync_issues(status) or status.get("config_changed_on_disk"):
+            items.append(pystray.Menu.SEPARATOR)
 
         currently_syncing = status.get('currently_syncing', None)
         if currently_syncing:
