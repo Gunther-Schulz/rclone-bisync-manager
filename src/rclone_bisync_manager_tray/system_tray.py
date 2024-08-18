@@ -385,7 +385,7 @@ def stop_daemon():
 
 def start_daemon():
     global daemon_manager
-
+    log_message("----Starting daemon", level=logging.DEBUG)
     # First, check if the daemon is already running
     current_status = get_daemon_status()
     if current_status is not None:
@@ -838,19 +838,46 @@ def update_menu_and_icon():
     log_message(f"Updating menu and icon. Current state: {
                 current_state.name}", level=logging.INFO)
 
-    new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
+    # Log the current menu items
+    log_message("Current menu items:", level=logging.DEBUG)
+    for item in icon.menu:
+        log_message(f"  - {item.text}", level=logging.DEBUG)
+
+    # Get new menu items and log them
+    new_menu_items = daemon_manager.get_menu_items(current_status)
+    log_message("New menu items:", level=logging.DEBUG)
+    for item in new_menu_items:
+        log_message(f"  - {item.text}", level=logging.DEBUG)
+
+    new_menu = pystray.Menu(*new_menu_items)
+    new_icon_color = daemon_manager.get_icon_color(current_status)
+    new_icon_text = daemon_manager.get_icon_text(current_status)
+
+    log_message(f"New icon color: {new_icon_color}", level=logging.DEBUG)
+    log_message(f"New icon text: {new_icon_text}", level=logging.DEBUG)
+
     new_icon = create_status_image(
-        daemon_manager.get_icon_color(current_status),
-        daemon_manager.get_icon_text(current_status),
+        new_icon_color,
+        new_icon_text,
         style=args.icon_style,
         thickness=args.icon_thickness
     )
 
-    icon.menu = new_menu
-    icon.icon = new_icon
-    icon.update_menu()
-    log_message(f"Menu and icon updated for state: {
-                current_state.name}", level=logging.INFO)
+    # Check if there are actual changes
+    menu_changed = str(new_menu) != str(icon.menu)
+    icon_changed = new_icon != icon.icon
+
+    log_message(f"Menu changed: {menu_changed}", level=logging.DEBUG)
+    log_message(f"Icon changed: {icon_changed}", level=logging.DEBUG)
+
+    if menu_changed or icon_changed:
+        icon.menu = new_menu
+        icon.icon = new_icon
+        icon.update_menu()
+        log_message(f"Menu and icon updated for state: {
+                    current_state.name}", level=logging.INFO)
+    else:
+        log_message("No changes detected, skipping update", level=logging.INFO)
 
 
 def check_status_and_update():
@@ -885,15 +912,6 @@ def handle_updates():
                         traceback.format_exc()}", level=logging.DEBUG)
         finally:
             update_queue.task_done()
-
-
-def start_daemon():
-    global daemon_manager
-    log_message("Attempting to start daemon", level=logging.DEBUG)
-    # Your existing start_daemon logic here
-    # ...
-    # After starting the daemon, force a status check
-    update_queue.put(True)
 
 
 def main():
