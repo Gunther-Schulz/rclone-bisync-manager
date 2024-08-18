@@ -19,6 +19,7 @@ import argparse
 import logging
 import traceback
 import queue
+from queue import Queue
 
 # Add this at the top of your file with other imports
 from threading import Thread, Lock, Event
@@ -82,7 +83,6 @@ class DaemonManager:
     def __init__(self):
         self.current_state = DaemonState.INITIAL
         self.daemon_start_error = None
-        self.last_status = None
         self.state_lock = Lock()
 
     def update_state(self, new_state):
@@ -207,7 +207,7 @@ class DaemonManager:
         if status:
             if self._has_sync_issues(status):
                 items.append(pystray.MenuItem(
-                    "⚠️ Sync issues detected", None, enabled=False))
+                    "⚠ Sync issues detected", None, enabled=False))
             if status.get("config_changed_on_disk"):
                 items.append(pystray.MenuItem(
                     "⚠️ Config changed on disk", None, enabled=False))
@@ -785,8 +785,9 @@ def ensure_daemon_running():
 
 
 def run_tray():
-    global icon, daemon_manager, args, debug
+    global icon, daemon_manager, args, debug, update_queue
     daemon_manager = DaemonManager()
+    update_queue = Queue()
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--icon-style', type=int,
@@ -848,7 +849,8 @@ def update_menu_and_icon():
     icon.menu = new_menu
     icon.icon = new_icon
     icon.update_menu()
-    log_message("Menu and icon updated", level=logging.DEBUG)
+    log_message(f"Menu and icon updated for state: {
+                current_state.name}", level=logging.INFO)
 
 
 def check_status_and_update():
@@ -859,9 +861,9 @@ def check_status_and_update():
             current_state = daemon_manager.get_current_state(current_status)
 
             if daemon_manager.update_state(current_state):
-                update_queue.put(True)
-                log_message(f"State updated to: {
+                log_message(f"State updated. Current state: {
                             current_state}", level=logging.INFO)
+                update_queue.put(True)
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
@@ -873,7 +875,6 @@ def check_status_and_update():
 
 
 def handle_updates():
-    global icon
     while True:
         try:
             update_queue.get()
@@ -884,6 +885,15 @@ def handle_updates():
                         traceback.format_exc()}", level=logging.DEBUG)
         finally:
             update_queue.task_done()
+
+
+def start_daemon():
+    global daemon_manager
+    log_message("Attempting to start daemon", level=logging.DEBUG)
+    # Your existing start_daemon logic here
+    # ...
+    # After starting the daemon, force a status check
+    update_queue.put(True)
 
 
 def main():
