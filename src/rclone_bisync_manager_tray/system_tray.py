@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 
-from pystray import MenuItem as item
-import tkinter
 from tkinter import ttk
 import pystray
 from PIL import Image
 import socket
 import json
-import threading
 import time
 import subprocess
 import os
@@ -22,7 +19,7 @@ import queue
 from queue import Queue
 
 # Add this at the top of your file with other imports
-from threading import Thread, Lock, Event
+from threading import Thread, Lock
 
 # Add these global variables
 update_queue = queue.Queue()
@@ -401,25 +398,36 @@ def start_daemon():
 
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
-        result = subprocess.run(
+        process = subprocess.Popen(
             ["rclone-bisync-manager", "daemon", "start"],
-            capture_output=True,
-            text=True,
-            check=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
 
-        # Log the output
-        log_message(f"Daemon start stdout: {
-                    result.stdout}", level=logging.DEBUG)
-        log_message(f"Daemon start stderr: {
-                    result.stderr}", level=logging.DEBUG)
+        # Wait for a short time to check for immediate errors
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+            if process.returncode is not None:
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        process.returncode, process.args, stdout, stderr)
+                else:
+                    log_message("Daemon started successfully",
+                                level=logging.INFO)
+            else:
+                log_message(
+                    "Daemon process started, waiting for it to initialize...", level=logging.INFO)
+        except subprocess.TimeoutExpired:
+            # Process is still running, which is expected
+            log_message(
+                "Daemon process started, waiting for it to initialize...", level=logging.INFO)
 
-        # Check if the daemon started successfully
-        if "daemon started" in result.stdout.lower() or "daemon started" in result.stderr.lower():
-            log_message("Daemon started successfully", level=logging.INFO)
-        else:
-            raise subprocess.CalledProcessError(
-                result.returncode, result.args, result.stdout, result.stderr)
+        # # Log the output if available
+        # if stdout:
+        #     log_message(f"Daemon start stdout: {stdout}", level=logging.DEBUG)
+        # if stderr:
+        #     log_message(f"Daemon start stderr: {stderr}", level=logging.DEBUG)
 
     except subprocess.CalledProcessError as e:
         error_message = f"Error starting daemon: return code {
