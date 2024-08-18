@@ -285,8 +285,8 @@ class DaemonManager:
         current_state = self.get_current_state(status)
         if current_state == DaemonState.INITIAL:
             return "INIT"
-        elif current_state == DaemonState.OFFLINE:
-            return "OFF"
+        elif current_state == DaemonState.STARTING:
+            return "START"
         elif current_state == DaemonState.SYNCING:
             return "SYNC"
         elif current_state == DaemonState.CONFIG_INVALID:
@@ -381,8 +381,7 @@ def start_daemon():
         return
 
     daemon_manager.update_state(DaemonState.STARTING)
-    # Immediately update icon and menu to show "Starting" state
-    update_queue.put(True)
+
     daemon_manager.daemon_start_error = None
 
     try:
