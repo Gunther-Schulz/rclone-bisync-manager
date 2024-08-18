@@ -138,6 +138,8 @@ class DaemonManager:
             menu_items.append(pystray.MenuItem(
                 "Initializing...", None, enabled=False))
         # elif current_state in [DaemonState.ERROR, DaemonState.OFFLINE]:
+        elif current_state in [DaemonState.FAILED]:
+            menu_items.extend(self._get_failed_menu_items(status))
         elif current_state in [DaemonState.ERROR]:
             menu_items.extend(self._get_error_menu_items(status))
         elif current_state == DaemonState.LIMBO:
@@ -174,8 +176,16 @@ class DaemonManager:
                 "Shutting Down", lambda: None, enabled=False))
 
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
-
         return menu_items
+
+    def _get_failed_menu_items(self, status):
+        items = [pystray.MenuItem(
+            "⚠️ Daemon is not running", None, enabled=False)]
+        error_message = status.get("error") if status else None
+        error_message = error_message or self.daemon_start_error or "Unknown error"
+        items.append(pystray.MenuItem(
+            f"Error: {error_message.split('\n')[0]}", None, enabled=False))
+        return items
 
     def _get_error_menu_items(self, status):
         items = [pystray.MenuItem(
@@ -424,11 +434,11 @@ def start_daemon():
             log_message(
                 "Daemon process started, waiting for it to initialize...", level=logging.INFO)
 
-        # # Log the output if available
-        # if stdout:
-        #     log_message(f"Daemon start stdout: {stdout}", level=logging.DEBUG)
-        # if stderr:
-        #     log_message(f"Daemon start stderr: {stderr}", level=logging.DEBUG)
+        # Log the output if available
+        if stdout:
+            log_message(f"Daemon start stdout: {stdout}", level=logging.DEBUG)
+        if stderr:
+            log_message(f"Daemon start stderr: {stderr}", level=logging.DEBUG)
 
     except subprocess.CalledProcessError as e:
         error_message = f"Error starting daemon: return code {
