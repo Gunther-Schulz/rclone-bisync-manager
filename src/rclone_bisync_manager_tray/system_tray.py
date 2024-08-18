@@ -576,118 +576,120 @@ def show_status_window():
     notebook = ttk.Notebook(window)
     notebook.pack(expand=True, fill='both')
 
-    if current_state in [DaemonState.OFFLINE, DaemonState.INITIAL, DaemonState.FAILED]:
+    general_frame = ttk.Frame(notebook)
+    notebook.add(general_frame, text='General')
+
+    if current_state == DaemonState.LIMBO:
+        status_text = "⚠️ Daemon is in limbo state"
+    elif current_state == DaemonState.INITIAL:
+        status_text = "Daemon is initializing..."
+    elif current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
+        status_text = "⚠️ Daemon is not running"
+    else:
+        status_text = "Daemon is running"
+
+    status_label = ttk.Label(general_frame, text=status_text,
+                             foreground="red" if current_state in [DaemonState.OFFLINE, DaemonState.FAILED, DaemonState.LIMBO] else "black")
+    status_label.pack(pady=(10, 0))
+
+    ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
+        'config_invalid', False) else 'Invalid'}").pack(pady=5)
+    ttk.Label(general_frame, text=f"Config changed on disk: {
+              'Yes' if status.get('config_changed_on_disk', False) else 'No'}").pack(pady=5)
+
+    currently_syncing = status.get('currently_syncing', 'None')
+    ttk.Label(general_frame, text="Currently syncing:").pack(
+        anchor='w', padx=5, pady=(5, 0))
+    ttk.Label(general_frame, text=currently_syncing).pack(
+        anchor='w', padx=20, pady=(0, 5))
+
+    queued_jobs = status.get('queued_paths', [])
+    ttk.Label(general_frame, text="Queued jobs:").pack(
+        anchor='w', padx=5, pady=(5, 0))
+    if queued_jobs:
+        for job in queued_jobs:
+            ttk.Label(general_frame, text=job).pack(
+                anchor='w', padx=20, pady=(0, 2))
+    else:
+        ttk.Label(general_frame, text="None").pack(
+            anchor='w', padx=20, pady=(0, 5))
+
+    jobs_frame = ttk.Frame(notebook)
+    notebook.add(jobs_frame, text='Sync Jobs')
+
+    if "sync_jobs" in status:
+        for job_key, job_status in status["sync_jobs"].items():
+            job_frame = ttk.LabelFrame(jobs_frame, text=job_key)
+            job_frame.pack(pady=5, padx=5, fill='x')
+
+            ttk.Label(job_frame, text=f"Last sync: {
+                      job_status['last_sync']}").pack(anchor='w')
+            ttk.Label(job_frame, text=f"Next run: {
+                      job_status['next_run']}").pack(anchor='w')
+            ttk.Label(job_frame, text=f"Sync status: {
+                      job_status['sync_status']}").pack(anchor='w')
+            ttk.Label(job_frame, text=f"Resync status: {
+                      job_status['resync_status']}").pack(anchor='w')
+
+    errors_frame = ttk.Frame(notebook)
+    notebook.add(errors_frame, text='Sync Errors')
+
+    if status.get("sync_errors"):
+        for path, error_info in status["sync_errors"].items():
+            error_frame = ttk.LabelFrame(errors_frame, text=path)
+            error_frame.pack(pady=5, padx=5, fill='x')
+
+            ttk.Label(error_frame, text=f"Sync Type: {
+                      error_info['sync_type']}").pack(anchor='w')
+            ttk.Label(error_frame, text=f"Error Code: {
+                      error_info['error_code']}").pack(anchor='w')
+            ttk.Label(error_frame, text=f"Message: {
+                      error_info['message']}").pack(anchor='w')
+            ttk.Label(error_frame, text=f"Timestamp: {
+                      error_info['timestamp']}").pack(anchor='w')
+    else:
+        ttk.Label(errors_frame, text="No sync errors at this time.").pack(
+            pady=20)
+
+    config_frame = ttk.Frame(notebook)
+    notebook.add(config_frame, text='Config')
+
+    config_text = tkinter.Text(config_frame, wrap=tkinter.WORD)
+    config_text.pack(pady=10, padx=10, fill='both', expand=True)
+
+    config_file_path = status.get('config_file_location')
+    if config_file_path and os.path.exists(config_file_path):
+        with open(config_file_path, 'r') as config_file:
+            config_message = config_file.read()
+    else:
+        config_message = "Config file not found or inaccessible."
+
+    config_text.insert(tkinter.END, config_message)
+    config_text.config(state=tkinter.DISABLED)
+
+    config_scrollbar = ttk.Scrollbar(
+        config_frame, orient="vertical", command=config_text.yview)
+    config_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
+    config_text.configure(yscrollcommand=config_scrollbar.set)
+
+    if current_state == DaemonState.LIMBO:
         error_frame = ttk.Frame(notebook)
-        notebook.add(error_frame, text='Status')
+        notebook.add(error_frame, text='Config Error Details')
 
-        if current_state == DaemonState.INITIAL:
-            status_text = "Daemon is initializing..."
-        else:
-            status_text = "⚠️ Daemon is not running"
+        error_text = tkinter.Text(error_frame, wrap=tkinter.WORD)
+        error_text.pack(pady=10, padx=10, fill='both', expand=True)
 
-        status_label = ttk.Label(error_frame, text=status_text,
-                                 foreground="red" if current_state != DaemonState.INITIAL else "black")
-        status_label.pack(pady=(10, 0))
-
-        error_text = tkinter.Text(error_frame, wrap=tkinter.WORD, height=10)
-        error_text.pack(pady=(0, 10), padx=10, fill='both', expand=True)
-
-        if current_state == DaemonState.INITIAL:
-            error_message = "The daemon is currently initializing. Please wait..."
-        elif daemon_manager.daemon_start_error:
-            error_message = f"Error occurred while starting the daemon:\n\n{
-                daemon_manager.daemon_start_error}"
-        else:
-            error_message = "The daemon is currently not running. You can start it using the 'Start Daemon' option in the system tray menu."
+        error_message = "Daemon is in limbo state. Config error details:\n\n"
+        if status.get("config_invalid", False):
+            error_message += f"Config is invalid.\nError: {
+                status.get('config_error_message', 'Unknown error')}\n\n"
+        if status.get("config_changed_on_disk", False):
+            error_message += "Config has changed on disk.\n\n"
+        error_message += "Full config details:\n"
+        error_message += json.dumps(status.get("config_details", {}), indent=2)
 
         error_text.insert(tkinter.END, error_message)
         error_text.config(state=tkinter.DISABLED)
-
-    else:
-        general_frame = ttk.Frame(notebook)
-        notebook.add(general_frame, text='General')
-
-        ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
-            'config_invalid', False) else 'Invalid'}").pack(pady=5)
-        ttk.Label(general_frame, text=f"Config changed on disk: {
-                  'Yes' if status.get('config_changed_on_disk', False) else 'No'}").pack(pady=5)
-
-        currently_syncing = status.get('currently_syncing', 'None')
-        ttk.Label(general_frame, text="Currently syncing:").pack(
-            anchor='w', padx=5, pady=(5, 0))
-        ttk.Label(general_frame, text=currently_syncing).pack(
-            anchor='w', padx=20, pady=(0, 5))
-
-        queued_jobs = status.get('queued_paths', [])
-        ttk.Label(general_frame, text="Queued jobs:").pack(
-            anchor='w', padx=5, pady=(5, 0))
-        if queued_jobs:
-            for job in queued_jobs:
-                ttk.Label(general_frame, text=job).pack(
-                    anchor='w', padx=20, pady=(0, 2))
-        else:
-            ttk.Label(general_frame, text="None").pack(
-                anchor='w', padx=20, pady=(0, 5))
-
-        jobs_frame = ttk.Frame(notebook)
-        notebook.add(jobs_frame, text='Sync Jobs')
-
-        if "sync_jobs" in status:
-            for job_key, job_status in status["sync_jobs"].items():
-                job_frame = ttk.LabelFrame(jobs_frame, text=job_key)
-                job_frame.pack(pady=5, padx=5, fill='x')
-
-                ttk.Label(job_frame, text=f"Last sync: {
-                          job_status['last_sync']}").pack(anchor='w')
-                ttk.Label(job_frame, text=f"Next run: {
-                          job_status['next_run']}").pack(anchor='w')
-                ttk.Label(job_frame, text=f"Sync status: {
-                          job_status['sync_status']}").pack(anchor='w')
-                ttk.Label(job_frame, text=f"Resync status: {
-                          job_status['resync_status']}").pack(anchor='w')
-
-        errors_frame = ttk.Frame(notebook)
-        notebook.add(errors_frame, text='Sync Errors')
-
-        if status.get("sync_errors"):
-            for path, error_info in status["sync_errors"].items():
-                error_frame = ttk.LabelFrame(errors_frame, text=path)
-                error_frame.pack(pady=5, padx=5, fill='x')
-
-                ttk.Label(error_frame, text=f"Sync Type: {
-                          error_info['sync_type']}").pack(anchor='w')
-                ttk.Label(error_frame, text=f"Error Code: {
-                          error_info['error_code']}").pack(anchor='w')
-                ttk.Label(error_frame, text=f"Message: {
-                          error_info['message']}").pack(anchor='w')
-                ttk.Label(error_frame, text=f"Timestamp: {
-                          error_info['timestamp']}").pack(anchor='w')
-        else:
-            ttk.Label(errors_frame, text="No sync errors at this time.").pack(
-                pady=20)
-
-        # Config pane only when daemon is running
-        config_frame = ttk.Frame(notebook)
-        notebook.add(config_frame, text='Config')
-
-        config_text = tkinter.Text(config_frame, wrap=tkinter.WORD)
-        config_text.pack(expand=True, fill='both')
-
-        config_file_path = status.get('config_file_location')
-        if config_file_path and os.path.exists(config_file_path):
-            with open(config_file_path, 'r') as config_file:
-                config_content = config_file.read()
-            config_text.insert(tkinter.END, config_content)
-        else:
-            config_text.insert(
-                tkinter.END, "Config file not found or inaccessible.")
-
-        config_text.config(state=tkinter.DISABLED)
-
-        config_scrollbar = ttk.Scrollbar(
-            config_frame, orient="vertical", command=config_text.yview)
-        config_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
-        config_text.configure(yscrollcommand=config_scrollbar.set)
 
     window.mainloop()
 
