@@ -143,18 +143,16 @@ class DaemonManager:
         else:
             menu_items.extend(self._get_normal_menu_items(status))
 
-        # Common menu items for all states except OFFLINE and ERROR
-        if current_state not in [DaemonState.OFFLINE, DaemonState.FAILED]:
-            menu_items.extend([
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Config & Logs", pystray.Menu(
-                    pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
-                                     DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]),
-                    pystray.MenuItem("Open Config Folder", open_config_file),
-                    pystray.MenuItem("Open Log Folder", open_log_folder)
-                )),
-                pystray.Menu.SEPARATOR,
-            ])
+        menu_items.extend([
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Config & Logs", pystray.Menu(
+                pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
+                    DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]),
+                pystray.MenuItem("Open Config Folder", open_config_file),
+                pystray.MenuItem("Open Log Folder", open_log_folder)
+            )),
+            pystray.Menu.SEPARATOR,
+        ])
 
         # Show Status Window menu item (enabled for all states except INITIAL)
         menu_items.append(pystray.MenuItem(
@@ -417,11 +415,11 @@ def start_daemon():
             log_message(
                 "Daemon process started, waiting for it to initialize...", level=logging.INFO)
 
-        # Log the output if available
-        if stdout:
-            log_message(f"Daemon start stdout: {stdout}", level=logging.DEBUG)
-        if stderr:
-            log_message(f"Daemon start stderr: {stderr}", level=logging.DEBUG)
+        # # Log the output if available
+        # if stdout:
+        #     log_message(f"Daemon start stdout: {stdout}", level=logging.DEBUG)
+        # if stderr:
+        #     log_message(f"Daemon start stderr: {stderr}", level=logging.DEBUG)
 
     except subprocess.CalledProcessError as e:
         error_message = f"Error starting daemon: return code {
