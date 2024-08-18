@@ -18,13 +18,14 @@ import logging
 import traceback
 import queue
 from queue import Queue
-
-# Add this at the top of your file with other imports
 from threading import Thread, Lock
 
-# Add these global variables
+
+# Global variables
 update_queue = queue.Queue()
 icon = None
+last_status = None
+last_offline_log_time = 0
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG,
@@ -302,10 +303,6 @@ class DaemonManager:
             return "FAIL"
         else:
             return "RUN"
-
-
-last_status = None
-last_offline_log_time = 0
 
 
 def get_daemon_status():
@@ -882,15 +879,24 @@ def update_menu_and_icon():
 
 def check_status_and_update():
     global daemon_manager
+    last_status = None
     while True:
         try:
             current_status = get_daemon_status()
             current_state = daemon_manager.get_current_state(current_status)
 
-            if daemon_manager.update_state(current_state):
-                log_message(f"State updated. Current state: {
-                            current_state}", level=logging.INFO)
+            # Update the daemon manager state
+            daemon_manager.update_state(current_state)
+
+            # Check if the status has changed
+            if current_status != last_status:
+                log_message(
+                    "Status changed. Updating menu and icon.", level=logging.INFO)
+                log_message(f"New status: {
+                            current_status}", level=logging.DEBUG)
                 update_queue.put(True)
+
+            last_status = current_status
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
