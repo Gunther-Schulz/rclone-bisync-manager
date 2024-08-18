@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from tkinter import ttk
+import tkinter
 import pystray
 from PIL import Image
 import socket
@@ -407,7 +408,7 @@ def start_daemon():
 
         # Wait for a short time to check for immediate errors
         try:
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=2)
             if process.returncode is not None:
                 if process.returncode != 0:
                     raise subprocess.CalledProcessError(
