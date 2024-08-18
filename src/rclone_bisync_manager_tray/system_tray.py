@@ -822,8 +822,9 @@ def run_tray():
     Thread(target=check_status_and_update, daemon=True).start()
     Thread(target=handle_updates, daemon=True).start()
 
-    # Always attempt to start the daemon, the daemon itself will handle if it's already running
-    Thread(target=start_daemon, daemon=True).start()
+    # Start the daemon only if the initial state is OFFLINE
+    if initial_state == DaemonState.OFFLINE:
+        Thread(target=start_daemon, daemon=True).start()
 
     icon.run()
 
