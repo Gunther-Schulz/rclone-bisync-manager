@@ -401,17 +401,33 @@ def start_daemon():
 
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
-        subprocess.Popen(
+        result = subprocess.run(
             ["rclone-bisync-manager", "daemon", "start"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
-            start_new_session=True
+            check=True
         )
 
-        # Start a thread to monitor the daemon start process
-        threading.Thread(target=monitor_daemon_start, daemon=True).start()
+        # Log the output
+        log_message(f"Daemon start stdout: {
+                    result.stdout}", level=logging.DEBUG)
+        log_message(f"Daemon start stderr: {
+                    result.stderr}", level=logging.DEBUG)
 
+        # Check if the daemon started successfully
+        if "daemon started" in result.stdout.lower() or "daemon started" in result.stderr.lower():
+            log_message("Daemon started successfully", level=logging.INFO)
+        else:
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args, result.stdout, result.stderr)
+
+    except subprocess.CalledProcessError as e:
+        error_message = f"Error starting daemon: return code {
+            e.returncode}\nstdout: {e.stdout}\nstderr: {e.stderr}"
+        log_message(error_message, level=logging.ERROR)
+        daemon_manager.daemon_start_error = error_message
+        daemon_manager.update_state(DaemonState.FAILED)
+        update_queue.put(True)
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
@@ -419,27 +435,6 @@ def start_daemon():
         daemon_manager.daemon_start_error = error_message
         daemon_manager.update_state(DaemonState.FAILED)
         update_queue.put(True)
-
-
-def monitor_daemon_start():
-    start_time = time.time()
-    while time.time() - start_time < 30:  # Wait for up to 30 seconds
-        time.sleep(1)  # Check every second
-        status = get_daemon_status()
-        if status is not None:
-            log_message("Daemon started successfully", level=logging.INFO)
-            daemon_manager.update_state(DaemonState.RUNNING)
-            update_queue.put(True)
-            return
-        # Update icon and menu every second during startup
-        update_queue.put(True)
-
-    # If we get here, the daemon didn't start within 30 seconds
-    log_message("Daemon failed to start within 30 seconds",
-                level=logging.ERROR)
-    daemon_manager.daemon_start_error = "Timeout waiting for daemon to start"
-    daemon_manager.update_state(DaemonState.FAILED)
-    update_queue.put(True)
 
 
 def reload_config():
