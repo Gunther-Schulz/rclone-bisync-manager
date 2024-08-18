@@ -49,7 +49,6 @@ class DaemonState(enum.Enum):
     STARTING = "starting"
     RUNNING = "running"
     SYNCING = "syncing"
-    ERROR = "error"
     SHUTTING_DOWN = "shutting_down"
     SYNC_ISSUES = "sync_issues"
     CONFIG_INVALID = "config_invalid"
@@ -99,7 +98,7 @@ class DaemonManager:
             return DaemonState.OFFLINE
         elif isinstance(status, dict):
             if status.get('error'):
-                return DaemonState.ERROR
+                return DaemonState.FAILED
             elif status.get('shutting_down'):
                 return DaemonState.SHUTTING_DOWN
             elif status.get('in_limbo'):
@@ -117,7 +116,7 @@ class DaemonManager:
             else:
                 return DaemonState.OFFLINE
         else:
-            return DaemonState.ERROR
+            return DaemonState.FAILED
 
     def _has_sync_issues(self, status):
         return (
@@ -137,18 +136,15 @@ class DaemonManager:
         if current_state == DaemonState.INITIAL:
             menu_items.append(pystray.MenuItem(
                 "Initializing...", None, enabled=False))
-        # elif current_state in [DaemonState.ERROR, DaemonState.OFFLINE]:
-        elif current_state in [DaemonState.FAILED]:
+        elif current_state == DaemonState.FAILED:
             menu_items.extend(self._get_failed_menu_items(status))
-        elif current_state in [DaemonState.ERROR]:
-            menu_items.extend(self._get_error_menu_items(status))
         elif current_state == DaemonState.LIMBO:
             menu_items.extend(self._get_limbo_menu_items(status))
         else:
             menu_items.extend(self._get_normal_menu_items(status))
 
         # Common menu items for all states except OFFLINE and ERROR
-        if current_state not in [DaemonState.OFFLINE, DaemonState.ERROR]:
+        if current_state not in [DaemonState.OFFLINE, DaemonState.FAILED]:
             menu_items.extend([
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Config & Logs", pystray.Menu(
@@ -166,7 +162,7 @@ class DaemonManager:
         menu_items.append(pystray.Menu.SEPARATOR)
 
         # Add Start/Stop Daemon menu item
-        if current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.FAILED]:
+        if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
             menu_items.append(pystray.MenuItem(
                 "Start Daemon", lambda: start_daemon()))
         elif current_state not in [DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]:
@@ -185,15 +181,6 @@ class DaemonManager:
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append(pystray.MenuItem(
             f"Error: {error_message.split('\n')[0]}", None, enabled=False))
-        return items
-
-    def _get_error_menu_items(self, status):
-        items = [pystray.MenuItem(
-            "⚠️ Daemon is not running", None, enabled=False)]
-        error_message = status.get("error") if status else None
-        error_message = error_message or self.daemon_start_error or "Unknown error"
-        items.append(pystray.MenuItem(
-            f"Error: {error_message[:50]}...", None, enabled=False))
         return items
 
     def _get_limbo_menu_items(self, status):
@@ -273,13 +260,11 @@ class DaemonManager:
         if current_state == DaemonState.INITIAL:
             return Colors.YELLOW
         elif current_state == DaemonState.STARTING:
-            return Colors.YELLOW  # Added color for starting state
+            return Colors.YELLOW
         elif current_state == DaemonState.RUNNING:
             return Colors.GREEN
         elif current_state == DaemonState.SYNCING:
             return Colors.BLUE
-        elif current_state == DaemonState.ERROR:
-            return Colors.RED
         elif current_state == DaemonState.SHUTTING_DOWN:
             return Colors.PURPLE
         elif current_state == DaemonState.SYNC_ISSUES:
@@ -295,14 +280,12 @@ class DaemonManager:
         elif current_state == DaemonState.FAILED:
             return Colors.RED
         else:
-            return Colors.GRAY  # Default color for unknown states
+            return Colors.GRAY
 
     def get_icon_text(self, status):
         current_state = self.get_current_state(status)
         if current_state == DaemonState.INITIAL:
             return "INIT"
-        elif current_state == DaemonState.ERROR:
-            return "ERR"
         elif current_state == DaemonState.OFFLINE:
             return "OFF"
         elif current_state == DaemonState.SYNCING:
@@ -599,7 +582,7 @@ def show_status_window():
     notebook = ttk.Notebook(window)
     notebook.pack(expand=True, fill='both')
 
-    if current_state in [DaemonState.OFFLINE, DaemonState.ERROR, DaemonState.INITIAL, DaemonState.FAILED]:
+    if current_state in [DaemonState.OFFLINE, DaemonState.INITIAL, DaemonState.FAILED]:
         error_frame = ttk.Frame(notebook)
         notebook.add(error_frame, text='Status')
 
