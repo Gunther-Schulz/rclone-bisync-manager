@@ -395,13 +395,13 @@ def start_daemon():
         return
 
     daemon_manager.update_state(DaemonState.STARTING)
+    # Immediately update icon and menu to show "Starting" state
+    update_queue.put(True)
     daemon_manager.daemon_start_error = None
+
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
-        log_message(
-            "Executing command: rclone-bisync-manager daemon start", level=logging.DEBUG)
-
-        process = subprocess.Popen(
+        subprocess.Popen(
             ["rclone-bisync-manager", "daemon", "start"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -409,48 +409,36 @@ def start_daemon():
             start_new_session=True
         )
 
-        log_message(f"Daemon start command executed with PID: {
-                    process.pid}", level=logging.DEBUG)
+        # Start a thread to monitor the daemon start process
+        threading.Thread(target=monitor_daemon_start, daemon=True).start()
 
-        # Wait for a short time to capture immediate output
-        stdout, stderr = process.communicate(timeout=5)
-
-        if process.returncode is not None and process.returncode != 0:
-            if "Daemon is already running" in stdout or "Daemon is already running" in stderr:
-                log_message("Daemon is already running", level=logging.INFO)
-                daemon_manager.update_state(DaemonState.RUNNING)
-            else:
-                error_message = f"Daemon start failed with return code {
-                    process.returncode}.\nStdout: {stdout}\nStderr: {stderr}"
-                log_message(error_message, level=logging.ERROR)
-                daemon_manager.daemon_start_error = error_message
-                daemon_manager.update_state(DaemonState.FAILED)
-        elif stderr.strip():
-            error_message = f"Daemon start produced error output:\nStderr: {
-                stderr}"
-            log_message(error_message, level=logging.ERROR)
-            daemon_manager.daemon_start_error = error_message
-            daemon_manager.update_state(DaemonState.FAILED)
-        else:
-            log_message(
-                "Daemon start command completed successfully", level=logging.INFO)
-            log_message(f"Stdout: {stdout}", level=logging.DEBUG)
-            log_message(f"Stderr: {stderr}", level=logging.DEBUG)
-            daemon_manager.update_state(DaemonState.RUNNING)
-
-    except subprocess.TimeoutExpired:
-        log_message(
-            "Daemon start command is still running (this is normal)", level=logging.INFO)
-        # The process is still running, which is expected
-        daemon_manager.update_state(DaemonState.RUNNING)
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
         daemon_manager.update_state(DaemonState.FAILED)
+        update_queue.put(True)
 
-    log_message("start_daemon() function completed", level=logging.DEBUG)
+
+def monitor_daemon_start():
+    start_time = time.time()
+    while time.time() - start_time < 30:  # Wait for up to 30 seconds
+        time.sleep(1)  # Check every second
+        status = get_daemon_status()
+        if status is not None:
+            log_message("Daemon started successfully", level=logging.INFO)
+            daemon_manager.update_state(DaemonState.RUNNING)
+            update_queue.put(True)
+            return
+        # Update icon and menu every second during startup
+        update_queue.put(True)
+
+    # If we get here, the daemon didn't start within 30 seconds
+    log_message("Daemon failed to start within 30 seconds",
+                level=logging.ERROR)
+    daemon_manager.daemon_start_error = "Timeout waiting for daemon to start"
+    daemon_manager.update_state(DaemonState.FAILED)
     update_queue.put(True)
 
 
