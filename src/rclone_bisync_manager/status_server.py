@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 
 from pydantic import BaseModel
-from rclone_bisync_manager.config import config, sync_state
+from rclone_bisync_manager.config import ConfigSchema, OptionsValidatorMixin, SyncJobConfig, config, sync_state
 from typing import Any
 from datetime import datetime, date
 
@@ -84,13 +84,13 @@ def generate_status_report():
             "config_file_location": str(config.config_file),
             "log_file_location": str(config._config.log_file_path) if config._config else None,
             "sync_errors": config.sync_errors,
-            "config": {},
+            "config": get_config_schema(),
             "sync_jobs": {}
         }
 
         if config._config and not config.in_limbo and not config.config_invalid:
-            # Add all fields from ConfigSchema
-            status["config"] = model_to_dict(config._config)
+            # Add current config values
+            status["current_config"] = model_to_dict(config._config)
 
             for key, value in config._config.sync_jobs.items():
                 if value.active:
@@ -109,6 +109,23 @@ def generate_status_report():
         error_message = f"Error generating status report: {str(e)}"
         log_error(error_message)
         return json.dumps({"status": "error", "message": error_message})
+
+
+def get_config_schema():
+    return {
+        "ConfigSchema": model_schema(ConfigSchema),
+        "SyncJobConfig": model_schema(SyncJobConfig),
+        "OptionsValidatorMixin": model_schema(OptionsValidatorMixin)
+    }
+
+
+def model_schema(model):
+    schema = model.model_json_schema()
+    return {
+        "properties": schema.get("properties", {}),
+        "required": schema.get("required", []),
+        "type": schema.get("type", "object")
+    }
 
 
 def model_to_dict(obj: Any) -> dict:
