@@ -35,12 +35,6 @@ def parse_args():
     add_sync_parser.add_argument(
         'sync_jobs', nargs='+', help='Names of the sync jobs to add')
 
-    # Crash log command
-    crash_log_parser = subparsers.add_parser(
-        'crash-log', parents=[global_parser], help='Manage crash logs')
-    crash_log_parser.add_argument('action', choices=['view', 'clear'],
-                                  help='Action to perform on the crash log')
-
     args = parser.parse_args()
 
     args.force_resync = args.command == 'sync' and args.resync

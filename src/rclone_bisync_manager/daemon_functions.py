@@ -116,31 +116,6 @@ def write_crash_log(error_message):
         f.write(error_message)
 
 
-def read_crash_log():
-    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
-    if os.path.exists(crash_log_path):
-        with open(crash_log_path, 'r') as f:
-            return f.read()
-    return None
-
-
-def handle_crash_log(action):
-    if action == 'view':
-        log_content = read_crash_log()
-        if log_content:
-            print("Crash log content:")
-            print(log_content)
-        else:
-            print("No crash log found.")
-    elif action == 'clear':
-        crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
-        if os.path.exists(crash_log_path):
-            os.remove(crash_log_path)
-            print("Crash log cleared.")
-        else:
-            print("No crash log found.")
-
-
 def process_sync_queue():
     while not config.sync_queue.empty() and not config.shutting_down:
         with config.sync_lock:
