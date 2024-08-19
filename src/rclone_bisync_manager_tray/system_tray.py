@@ -169,14 +169,11 @@ class DaemonManager:
         menu_items.append(pystray.Menu.SEPARATOR)
 
         # Add Start/Stop Daemon menu item
-        if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
-            menu_items.append(pystray.MenuItem(
-                "Start Daemon", lambda: start_daemon()))
-        elif current_state not in [DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]:
+        daemon_status = get_daemon_status()
+        if daemon_status is None:
+            menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+        else:
             menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
-        elif current_state == DaemonState.SHUTTING_DOWN:
-            menu_items.append(pystray.MenuItem(
-                "Shutting Down", lambda: None, enabled=False))
 
         # Add the "Edit Configuration" option for specific states
         if current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID,
@@ -391,7 +388,7 @@ def stop_daemon():
 
 def start_daemon():
     global daemon_manager
-    log_message("----Starting daemon", level=logging.DEBUG)
+    log_message("Starting daemon", level=logging.DEBUG)
     # First, check if the daemon is already running
     current_status = get_daemon_status()
     if current_status is not None:
