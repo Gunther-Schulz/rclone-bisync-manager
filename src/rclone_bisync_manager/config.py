@@ -382,3 +382,22 @@ def signal_handler(signum, frame):
         log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
         if hasattr(config, 'lock_fd'):
             config.lock_fd.close()
+
+
+def get_config_schema():
+    def model_schema(model):
+        if hasattr(model, 'model_json_schema'):
+            # For newer Pydantic versions
+            return model.model_json_schema()
+        elif hasattr(model, 'schema'):
+            # For older Pydantic versions
+            return model.schema()
+        else:
+            raise AttributeError(
+                f"Model {model.__name__} has no schema method")
+
+    return {
+        "ConfigSchema": model_schema(ConfigSchema),
+        "SyncJobConfig": model_schema(SyncJobConfig),
+        "OptionsValidatorMixin": model_schema(OptionsValidatorMixin)
+    }
