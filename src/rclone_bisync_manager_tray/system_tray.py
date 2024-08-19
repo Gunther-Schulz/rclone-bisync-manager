@@ -19,6 +19,7 @@ import traceback
 import queue
 from queue import Queue
 from threading import Thread, Lock
+from rclone_bisync_manager_tray.config_editor import edit_config
 
 
 # Global variables
@@ -980,6 +981,14 @@ def check_crash_log():
         # os.remove(crash_log_path)  # Remove the file after reading
         return crash_message
     return None
+
+
+def open_config_editor():
+    config_file_path = get_config_file_path()
+    if config_file_path:
+        edit_config(config_file_path)
+    else:
+        log_message("Config file path not found", level=logging.ERROR)
 
 
 def main():
