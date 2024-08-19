@@ -180,6 +180,9 @@ class DaemonManager:
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append(pystray.MenuItem(
             f"Error: {error_message.split('\n')[0]}", None, enabled=False))
+        if self.daemon_start_error:
+            items.append(pystray.MenuItem("Show Full Error", lambda: show_text_window(
+                "Daemon Crash Log", self.daemon_start_error)))
         return items
 
     def _get_limbo_menu_items(self, status):
@@ -580,7 +583,8 @@ def show_status_window():
         if daemon_manager.daemon_start_error:
             error_frame = ttk.LabelFrame(window, text="Error Details")
             error_frame.pack(pady=10, padx=10, fill='x')
-            error_text = tkinter.Text(error_frame, wrap=tkinter.WORD, height=5)
+            error_text = tkinter.Text(
+                error_frame, wrap=tkinter.WORD, height=25)
             error_text.pack(pady=5, padx=5, fill='both', expand=True)
             error_text.insert(tkinter.END, daemon_manager.daemon_start_error)
             error_text.config(state=tkinter.DISABLED)
@@ -899,6 +903,15 @@ def check_status_and_update():
     last_status = None
     while True:
         try:
+            crash_message = check_crash_log()
+            if crash_message:
+                log_message(f"Daemon crashed: {
+                            crash_message}", level=logging.ERROR)
+                daemon_manager.daemon_start_error = crash_message
+                daemon_manager.update_state(DaemonState.FAILED)
+                update_queue.put(True)
+                continue
+
             current_status = get_daemon_status()
             current_state = daemon_manager.get_current_state(current_status)
 
@@ -935,6 +948,16 @@ def handle_updates():
                         traceback.format_exc()}", level=logging.DEBUG)
         finally:
             update_queue.task_done()
+
+
+def check_crash_log():
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    if os.path.exists(crash_log_path):
+        with open(crash_log_path, 'r') as f:
+            crash_message = f.read()
+        # os.remove(crash_log_path)  # Remove the file after reading
+        return crash_message
+    return None
 
 
 def main():

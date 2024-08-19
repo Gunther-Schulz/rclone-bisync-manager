@@ -1,5 +1,6 @@
 import json
 import socket
+import traceback
 from rclone_bisync_manager.status_server import start_status_server
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.utils import check_and_create_lock_file
@@ -91,6 +92,11 @@ def daemon_main():
         log_message('Daemon shutdown complete.')
         status_thread.join(timeout=5)
 
+    except Exception as e:
+        error_message = f"Daemon crashed unexpectedly: {
+            str(e)}\n{traceback.format_exc()}"
+        log_error(error_message)
+        write_crash_log(error_message)
     finally:
         if lock_fd is not None:
             try:
@@ -102,6 +108,37 @@ def daemon_main():
                 os.unlink(config.LOCK_FILE_PATH)
             except OSError:
                 pass  # Ignore if the file is already gone
+
+
+def write_crash_log(error_message):
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    with open(crash_log_path, 'w') as f:
+        f.write(error_message)
+
+
+def read_crash_log():
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    if os.path.exists(crash_log_path):
+        with open(crash_log_path, 'r') as f:
+            return f.read()
+    return None
+
+
+def handle_crash_log(action):
+    if action == 'view':
+        log_content = read_crash_log()
+        if log_content:
+            print("Crash log content:")
+            print(log_content)
+        else:
+            print("No crash log found.")
+    elif action == 'clear':
+        crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+        if os.path.exists(crash_log_path):
+            os.remove(crash_log_path)
+            print("Crash log cleared.")
+        else:
+            print("No crash log found.")
 
 
 def process_sync_queue():
