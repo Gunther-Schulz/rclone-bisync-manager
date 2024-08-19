@@ -11,7 +11,24 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rclone_bisync_manager.logging_utils import log_message, log_error
 
 
-class SyncJobConfig(BaseModel):
+class OptionsValidatorMixin(BaseModel):
+    rclone_options: Dict[str, Any] = Field(default_factory=dict)
+    bisync_options: Dict[str, Any] = Field(default_factory=dict)
+    resync_options: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('rclone_options', 'bisync_options', 'resync_options')
+    @classmethod
+    def validate_options(cls, v, field):
+        disallowed_keys = {'resync', 'bisync', 'log-file'}
+
+        invalid_keys = set(v.keys()) & disallowed_keys
+        if invalid_keys:
+            raise ValueError(f"The following keys are not allowed in {
+                             field.name}: {', '.join(invalid_keys)}")
+        return v
+
+
+class SyncJobConfig(OptionsValidatorMixin):
     local: str
     rclone_remote: str
     remote: str
@@ -20,9 +37,6 @@ class SyncJobConfig(BaseModel):
     dry_run: bool = Field(default=False)
     force_resync: bool = Field(default=False)
     force_operation: bool = Field(default=False)
-    rclone_options: Dict[str, Any] = Field(default_factory=dict)
-    bisync_options: Dict[str, Any] = Field(default_factory=dict)
-    resync_options: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('schedule')
     @classmethod
@@ -63,7 +77,7 @@ class SyncState:
 sync_state = SyncState()
 
 
-class ConfigSchema(BaseModel):
+class ConfigSchema(OptionsValidatorMixin):
     # Base path for local files to be synced
     local_base_path: DirectoryPath
 
@@ -81,15 +95,6 @@ class ConfigSchema(BaseModel):
 
     # Whether to run initial sync on startup
     run_initial_sync_on_startup: bool = True
-
-    # Global rclone options
-    rclone_options: Dict[str, Any] = Field(default_factory=dict)
-
-    # Global bisync options
-    bisync_options: Dict[str, Any] = Field(default_factory=dict)
-
-    # Global resync options
-    resync_options: Dict[str, Any] = Field(default_factory=dict)
 
     # Sync job configurations
     sync_jobs: Dict[str, SyncJobConfig]
@@ -227,7 +232,8 @@ class Config:
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
-        self._update_config_with_args(config_data, args)
+        # Merge CLI arguments into config_data
+        self._merge_cli_args(config_data, args)
 
         try:
             new_config = ConfigSchema(**config_data)
@@ -248,10 +254,24 @@ class Config:
         self._populate_status_file_paths()
         self._update_internal_fields(args)
 
-    def _update_config_with_args(self, config_data, args):
-        config_data.update({
-            'dry_run': args.dry_run,
-        })
+    def _merge_cli_args(self, config_data, args):
+        # Override global options
+        config_data['dry_run'] = args.dry_run
+
+        # Override sync job options
+        if args.specific_sync_jobs:
+            for job_key in args.specific_sync_jobs:
+                if job_key in config_data['sync_jobs']:
+                    config_data['sync_jobs'][job_key]['active'] = True
+
+        if args.force_resync:
+            for job_key in (args.resync or []):
+                if job_key in config_data['sync_jobs']:
+                    config_data['sync_jobs'][job_key]['force_resync'] = True
+
+        if args.force_operation:
+            for job_key in config_data['sync_jobs']:
+                config_data['sync_jobs'][job_key]['force_operation'] = True
 
     def _update_internal_fields(self, args):
         self.console_log = args.console_log
@@ -362,3 +382,22 @@ def signal_handler(signum, frame):
         log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
         if hasattr(config, 'lock_fd'):
             config.lock_fd.close()
+
+
+def get_config_schema():
+    def model_schema(model):
+        if hasattr(model, 'model_json_schema'):
+            # For newer Pydantic versions
+            return model.model_json_schema()
+        elif hasattr(model, 'schema'):
+            # For older Pydantic versions
+            return model.schema()
+        else:
+            raise AttributeError(
+                f"Model {model.__name__} has no schema method")
+
+    return {
+        "ConfigSchema": model_schema(ConfigSchema),
+        "SyncJobConfig": model_schema(SyncJobConfig),
+        "OptionsValidatorMixin": model_schema(OptionsValidatorMixin)
+    }

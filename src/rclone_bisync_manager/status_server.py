@@ -2,7 +2,14 @@ import os
 import socket
 import json
 import threading
-from rclone_bisync_manager.config import config, sync_state
+from pathlib import Path
+
+from pydantic import BaseModel
+from rclone_bisync_manager.config import config, sync_state, get_config_schema
+from typing import Any
+from datetime import datetime, date
+
+from rclone_bisync_manager.logging_utils import log_error
 
 
 def start_status_server():
@@ -45,12 +52,20 @@ def handle_client(conn):
                 "message": "Shutdown signal sent to daemon"
             })
         elif data == "STATUS":
-            response = generate_status_report()  # This is already JSON
+            response = generate_status_report()
         else:
             response = json.dumps({
                 "status": "error",
                 "message": "Invalid command"
             })
+
+        # Check response size
+        if len(response) > 1048576:  # 1 MB limit
+            response = json.dumps({
+                "status": "error",
+                "message": "Status report too large. Please check the log file for complete information."
+            })
+
         conn.sendall(response.encode())
     except Exception as e:
         error_response = json.dumps({
@@ -63,33 +78,65 @@ def handle_client(conn):
 
 
 def generate_status_report():
-    status = {
-        "pid": os.getpid(),
-        "running": config.running,
-        "shutting_down": config.shutting_down,
-        "in_limbo": config.in_limbo,
-        "config_invalid": config.config_invalid,
-        "config_error_message": getattr(config, 'config_error_message', None),
-        "currently_syncing": config.currently_syncing,
-        "queued_paths": list(config.queued_paths),
-        "config_changed_on_disk": config.config_changed_on_disk,
-        "config_file_location": config.config_file,
-        "log_file_location": config._config.log_file_path if config._config else None,
-        "sync_errors": config.sync_errors,
-        "sync_jobs": {}
-    }
+    try:
+        status = {
+            "pid": os.getpid(),
+            "running": config.running,
+            "shutting_down": config.shutting_down,
+            "in_limbo": config.in_limbo,
+            "config_invalid": config.config_invalid,
+            "config_error_message": getattr(config, 'config_error_message', None),
+            "currently_syncing": config.currently_syncing,
+            "queued_paths": list(config.queued_paths),
+            "config_changed_on_disk": config.config_changed_on_disk,
+            "config_file_location": str(config.config_file),
+            "log_file_location": str(config._config.log_file_path) if config._config else None,
+            "sync_errors": config.sync_errors,
+            # "config_schema": get_config_schema()
+        }
 
-    if config._config and not config.in_limbo and not config.config_invalid:
-        for key, value in config._config.sync_jobs.items():
-            if value.active:
-                job_state = sync_state.get_job_state(key)
-                status["sync_jobs"][key] = {
-                    "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
-                    "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
-                    "sync_status": job_state["sync_status"],
-                    "resync_status": job_state["resync_status"],
-                    "force_resync": value.force_resync,
-                    "hash_warnings": config.hash_warnings.get(key, False)
-                }
+        if config._config and not config.in_limbo and not config.config_invalid:
+            status["current_config"] = model_to_dict(config._config)
+            status["sync_jobs"] = {}
+            for key, value in config._config.sync_jobs.items():
+                if value.active:
+                    job_state = sync_state.get_job_state(key)
+                    status["sync_jobs"][key] = model_to_dict(value)
+                    status["sync_jobs"][key].update({
+                        "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
+                        "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
+                        "sync_status": job_state["sync_status"],
+                        "resync_status": job_state["resync_status"],
+                        "hash_warnings": config.hash_warnings.get(key, False)
+                    })
 
-    return json.dumps(status)
+        return json.dumps(status, default=json_serializer, ensure_ascii=False)
+    except Exception as e:
+        error_message = f"Error generating status report: {str(e)}"
+        log_error(error_message)
+        return json.dumps({"status": "error", "message": error_message})
+
+
+def model_to_dict(obj: Any) -> dict:
+    return {k: v for k, v in obj.model_dump().items() if v is not None}
+
+
+def json_serializer(obj: Any) -> Any:
+    if isinstance(obj, BaseModel):
+        if hasattr(obj, 'model_dump'):
+            # For newer Pydantic versions
+            return obj.model_dump()
+        else:
+            # For older Pydantic versions
+            return obj.dict()
+    elif isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    elif isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, set):
+        return list(obj)
+    elif isinstance(obj, dict):
+        return {k: json_serializer(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [json_serializer(v) for v in obj]
+    return str(obj)  # Convert any other types to strings
