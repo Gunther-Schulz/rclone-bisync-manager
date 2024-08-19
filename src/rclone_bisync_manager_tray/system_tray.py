@@ -101,7 +101,11 @@ class DaemonManager:
         if status is None:
             return DaemonState.OFFLINE
         elif isinstance(status, dict):
-            if status.get('error'):
+            if status.get('status') == 'error':
+                self.daemon_start_error = status.get(
+                    'message', 'Unknown error occurred')
+                return DaemonState.FAILED
+            elif status.get('error'):
                 return DaemonState.FAILED
             elif status.get('shutting_down'):
                 return DaemonState.SHUTTING_DOWN
@@ -120,6 +124,7 @@ class DaemonManager:
             else:
                 return DaemonState.OFFLINE
         else:
+            self.daemon_start_error = f"Unexpected status type: {type(status)}"
             return DaemonState.FAILED
 
     def _has_sync_issues(self, status):
@@ -192,9 +197,9 @@ class DaemonManager:
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append(pystray.MenuItem(
             f"Error: {error_message.split('\n')[0]}", None, enabled=False))
-        if self.daemon_start_error:
+        if self.daemon_start_error or (status and status.get("error")):
             items.append(pystray.MenuItem("Show Full Error", lambda: show_text_window(
-                "Daemon Crash Log", self.daemon_start_error)))
+                "Daemon Error Log", self.daemon_start_error or status.get("error"))))
         return items
 
     def _get_limbo_menu_items(self, status):
@@ -351,14 +356,14 @@ def get_daemon_status():
                     e}", level=logging.ERROR)
         log_message(f"Received data: {response}", level=logging.DEBUG)
         last_status = None
-        return None
+        return {"status": "error", "message": f"JSON decode error: {str(e)}"}
     except Exception as e:
         log_message(f"Unexpected error when getting daemon status: {
                     e}", level=logging.ERROR)
         log_message(f"Error details: {
                     traceback.format_exc()}", level=logging.DEBUG)
         last_status = None
-        return None
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
 
 def create_sync_now_handler(job_key):

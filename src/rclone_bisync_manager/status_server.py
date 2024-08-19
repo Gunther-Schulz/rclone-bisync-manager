@@ -2,11 +2,14 @@ import os
 import socket
 import json
 import threading
+from pathlib import Path
 
 from pydantic import BaseModel
 from rclone_bisync_manager.config import config, sync_state
 from typing import Any
 from datetime import datetime, date
+
+from rclone_bisync_manager.logging_utils import log_error
 
 
 def start_status_server():
@@ -67,40 +70,45 @@ def handle_client(conn):
 
 
 def generate_status_report():
-    status = {
-        "pid": os.getpid(),
-        "running": config.running,
-        "shutting_down": config.shutting_down,
-        "in_limbo": config.in_limbo,
-        "config_invalid": config.config_invalid,
-        "config_error_message": getattr(config, 'config_error_message', None),
-        "currently_syncing": config.currently_syncing,
-        "queued_paths": list(config.queued_paths),
-        "config_changed_on_disk": config.config_changed_on_disk,
-        "config_file_location": config.config_file,
-        "log_file_location": config._config.log_file_path if config._config else None,
-        "sync_errors": config.sync_errors,
-        "config": {},
-        "sync_jobs": {}
-    }
+    try:
+        status = {
+            "pid": os.getpid(),
+            "running": config.running,
+            "shutting_down": config.shutting_down,
+            "in_limbo": config.in_limbo,
+            "config_invalid": config.config_invalid,
+            "config_error_message": getattr(config, 'config_error_message', None),
+            "currently_syncing": config.currently_syncing,
+            "queued_paths": list(config.queued_paths),
+            "config_changed_on_disk": config.config_changed_on_disk,
+            "config_file_location": str(config.config_file),
+            "log_file_location": str(config._config.log_file_path) if config._config else None,
+            "sync_errors": config.sync_errors,
+            "config": {},
+            "sync_jobs": {}
+        }
 
-    if config._config and not config.in_limbo and not config.config_invalid:
-        # Add all fields from ConfigSchema
-        status["config"] = model_to_dict(config._config)
+        if config._config and not config.in_limbo and not config.config_invalid:
+            # Add all fields from ConfigSchema
+            status["config"] = model_to_dict(config._config)
 
-        for key, value in config._config.sync_jobs.items():
-            if value.active:
-                job_state = sync_state.get_job_state(key)
-                status["sync_jobs"][key] = model_to_dict(value)
-                status["sync_jobs"][key].update({
-                    "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
-                    "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
-                    "sync_status": job_state["sync_status"],
-                    "resync_status": job_state["resync_status"],
-                    "hash_warnings": config.hash_warnings.get(key, False)
-                })
+            for key, value in config._config.sync_jobs.items():
+                if value.active:
+                    job_state = sync_state.get_job_state(key)
+                    status["sync_jobs"][key] = model_to_dict(value)
+                    status["sync_jobs"][key].update({
+                        "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
+                        "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
+                        "sync_status": job_state["sync_status"],
+                        "resync_status": job_state["resync_status"],
+                        "hash_warnings": config.hash_warnings.get(key, False)
+                    })
 
-    return json.dumps(status, default=json_serializer)
+        return json.dumps(status, default=json_serializer)
+    except Exception as e:
+        error_message = f"Error generating status report: {str(e)}"
+        log_error(error_message)
+        return json.dumps({"status": "error", "message": error_message})
 
 
 def model_to_dict(obj: Any) -> dict:
@@ -112,4 +120,6 @@ def json_serializer(obj: Any) -> str:
         return model_to_dict(obj)
     elif isinstance(obj, (datetime, date)):
         return obj.isoformat()
+    elif isinstance(obj, Path):
+        return str(obj)
     raise TypeError(f"Type {type(obj)} not serializable")
