@@ -175,14 +175,17 @@ class DaemonManager:
         else:
             menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
 
-        # Add the "Edit Configuration" option for specific states
-        if current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID,
-                             DaemonState.CONFIG_CHANGED, DaemonState.LIMBO,
-                             DaemonState.SYNC_ISSUES]:
-            menu_items.extend([
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Edit Configuration", open_config_editor),
-            ])
+        # Add experimental features if the flag is set
+        if args.enable_experimental:
+            if current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID,
+                                 DaemonState.CONFIG_CHANGED, DaemonState.LIMBO,
+                                 DaemonState.SYNC_ISSUES]:
+                menu_items.extend([
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem(
+                        "Edit Configuration (experimental)", open_config_editor),
+                    # Add other experimental features here in the future
+                ])
 
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
         return menu_items
@@ -839,6 +842,8 @@ def run_tray():
                         default=40, help='Set the thickness of the icon lines')
     parser.add_argument('--log-level', type=str, choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         default='NONE', help='Set the logging level')
+    parser.add_argument('--enable-experimental', action='store_true',
+                        help='Enable experimental features')
     args = parser.parse_args()
 
     # Set up logging based on the argument
