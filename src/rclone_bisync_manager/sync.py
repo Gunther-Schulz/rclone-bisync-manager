@@ -104,9 +104,18 @@ def get_rclone_args(options, operation_type, job_key):
     else:
         default_options = {}
 
-    # Merge default options with rclone_options
-    merged_options = {**config._config.rclone_options,
-                      **default_options, **options}
+    # Merge options in the correct order of precedence
+    job_options = config._config.sync_jobs[job_key].rclone_options
+    merged_options = {
+        **config._config.rclone_options,  # Global options
+        **default_options,                # Operation-specific options
+        **job_options,                    # Job-specific options
+        **options                         # Function-call specific options
+    }
+
+    # Apply CLI overrides
+    merged_options['dry_run'] = config._config.dry_run
+    merged_options['force'] = config._config.sync_jobs[job_key].force_operation
 
     for key, value in merged_options.items():
         option_key = f"--{key.replace('_', '-')}"
@@ -124,16 +133,8 @@ def get_rclone_args(options, operation_type, job_key):
     if hasattr(config._config, 'exclusion_rules_file') and os.path.exists(config._config.exclusion_rules_file):
         args.extend(['--exclude-from', config._config.exclusion_rules_file])
 
-    # Always add --dry-run if path_dry_run is True
-    if config._config.dry_run:
-        args.append('--dry-run')
-    if config._config.sync_jobs[job_key].force_operation:
-        args.append('--force')
     if config._config.redirect_rclone_log_output and hasattr(config._config, 'log_file_path'):
         args.extend(['--log-file', config._config.log_file_path])
-
-    if merged_options.get('ignore_size', False):
-        args.append('--ignore-size')
 
     return args
 

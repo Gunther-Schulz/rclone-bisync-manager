@@ -227,7 +227,8 @@ class Config:
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
-        self._update_config_with_args(config_data, args)
+        # Merge CLI arguments into config_data
+        self._merge_cli_args(config_data, args)
 
         try:
             new_config = ConfigSchema(**config_data)
@@ -248,10 +249,24 @@ class Config:
         self._populate_status_file_paths()
         self._update_internal_fields(args)
 
-    def _update_config_with_args(self, config_data, args):
-        config_data.update({
-            'dry_run': args.dry_run,
-        })
+    def _merge_cli_args(self, config_data, args):
+        # Override global options
+        config_data['dry_run'] = args.dry_run
+
+        # Override sync job options
+        if args.specific_sync_jobs:
+            for job_key in args.specific_sync_jobs:
+                if job_key in config_data['sync_jobs']:
+                    config_data['sync_jobs'][job_key]['active'] = True
+
+        if args.force_resync:
+            for job_key in (args.resync or []):
+                if job_key in config_data['sync_jobs']:
+                    config_data['sync_jobs'][job_key]['force_resync'] = True
+
+        if args.force_operation:
+            for job_key in config_data['sync_jobs']:
+                config_data['sync_jobs'][job_key]['force_operation'] = True
 
     def _update_internal_fields(self, args):
         self.console_log = args.console_log
