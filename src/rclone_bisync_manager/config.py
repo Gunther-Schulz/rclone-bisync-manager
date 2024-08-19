@@ -11,7 +11,24 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rclone_bisync_manager.logging_utils import log_message, log_error
 
 
-class SyncJobConfig(BaseModel):
+class OptionsValidatorMixin(BaseModel):
+    rclone_options: Dict[str, Any] = Field(default_factory=dict)
+    bisync_options: Dict[str, Any] = Field(default_factory=dict)
+    resync_options: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('rclone_options', 'bisync_options', 'resync_options')
+    @classmethod
+    def validate_options(cls, v, field):
+        disallowed_keys = {'resync', 'bisync', 'log-file'}
+
+        invalid_keys = set(v.keys()) & disallowed_keys
+        if invalid_keys:
+            raise ValueError(f"The following keys are not allowed in {
+                             field.name}: {', '.join(invalid_keys)}")
+        return v
+
+
+class SyncJobConfig(OptionsValidatorMixin):
     local: str
     rclone_remote: str
     remote: str
@@ -20,9 +37,6 @@ class SyncJobConfig(BaseModel):
     dry_run: bool = Field(default=False)
     force_resync: bool = Field(default=False)
     force_operation: bool = Field(default=False)
-    rclone_options: Dict[str, Any] = Field(default_factory=dict)
-    bisync_options: Dict[str, Any] = Field(default_factory=dict)
-    resync_options: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('schedule')
     @classmethod
@@ -63,7 +77,7 @@ class SyncState:
 sync_state = SyncState()
 
 
-class ConfigSchema(BaseModel):
+class ConfigSchema(OptionsValidatorMixin):
     # Base path for local files to be synced
     local_base_path: DirectoryPath
 
@@ -81,15 +95,6 @@ class ConfigSchema(BaseModel):
 
     # Whether to run initial sync on startup
     run_initial_sync_on_startup: bool = True
-
-    # Global rclone options
-    rclone_options: Dict[str, Any] = Field(default_factory=dict)
-
-    # Global bisync options
-    bisync_options: Dict[str, Any] = Field(default_factory=dict)
-
-    # Global resync options
-    resync_options: Dict[str, Any] = Field(default_factory=dict)
 
     # Sync job configurations
     sync_jobs: Dict[str, SyncJobConfig]
@@ -377,3 +382,22 @@ def signal_handler(signum, frame):
         log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
         if hasattr(config, 'lock_fd'):
             config.lock_fd.close()
+
+
+def get_config_schema():
+    def model_schema(model):
+        if hasattr(model, 'model_json_schema'):
+            # For newer Pydantic versions
+            return model.model_json_schema()
+        elif hasattr(model, 'schema'):
+            # For older Pydantic versions
+            return model.schema()
+        else:
+            raise AttributeError(
+                f"Model {model.__name__} has no schema method")
+
+    return {
+        "ConfigSchema": model_schema(ConfigSchema),
+        "SyncJobConfig": model_schema(SyncJobConfig),
+        "OptionsValidatorMixin": model_schema(OptionsValidatorMixin)
+    }

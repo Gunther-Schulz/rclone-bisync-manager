@@ -19,6 +19,7 @@ import traceback
 import queue
 from queue import Queue
 from threading import Thread, Lock
+from rclone_bisync_manager_tray.config_editor import edit_config
 
 
 # Global variables
@@ -100,7 +101,11 @@ class DaemonManager:
         if status is None:
             return DaemonState.OFFLINE
         elif isinstance(status, dict):
-            if status.get('error'):
+            if status.get('status') == 'error':
+                self.daemon_start_error = status.get(
+                    'message', 'Unknown error occurred')
+                return DaemonState.FAILED
+            elif status.get('error'):
                 return DaemonState.FAILED
             elif status.get('shutting_down'):
                 return DaemonState.SHUTTING_DOWN
@@ -119,6 +124,7 @@ class DaemonManager:
             else:
                 return DaemonState.OFFLINE
         else:
+            self.daemon_start_error = f"Unexpected status type: {type(status)}"
             return DaemonState.FAILED
 
     def _has_sync_issues(self, status):
@@ -163,14 +169,20 @@ class DaemonManager:
         menu_items.append(pystray.Menu.SEPARATOR)
 
         # Add Start/Stop Daemon menu item
-        if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
-            menu_items.append(pystray.MenuItem(
-                "Start Daemon", lambda: start_daemon()))
-        elif current_state not in [DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]:
+        daemon_status = get_daemon_status()
+        if daemon_status is None:
+            menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+        else:
             menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
-        elif current_state == DaemonState.SHUTTING_DOWN:
-            menu_items.append(pystray.MenuItem(
-                "Shutting Down", lambda: None, enabled=False))
+
+        # Add the "Edit Configuration" option for specific states
+        if current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID,
+                             DaemonState.CONFIG_CHANGED, DaemonState.LIMBO,
+                             DaemonState.SYNC_ISSUES]:
+            menu_items.extend([
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Edit Configuration", open_config_editor),
+            ])
 
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
         return menu_items
@@ -182,9 +194,9 @@ class DaemonManager:
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append(pystray.MenuItem(
             f"Error: {error_message.split('\n')[0]}", None, enabled=False))
-        if self.daemon_start_error:
+        if self.daemon_start_error or (status and status.get("error")):
             items.append(pystray.MenuItem("Show Full Error", lambda: show_text_window(
-                "Daemon Crash Log", self.daemon_start_error)))
+                "Daemon Error Log", self.daemon_start_error or status.get("error"))))
         return items
 
     def _get_limbo_menu_items(self, status):
@@ -341,14 +353,14 @@ def get_daemon_status():
                     e}", level=logging.ERROR)
         log_message(f"Received data: {response}", level=logging.DEBUG)
         last_status = None
-        return None
+        return {"status": "error", "message": f"JSON decode error: {str(e)}"}
     except Exception as e:
         log_message(f"Unexpected error when getting daemon status: {
                     e}", level=logging.ERROR)
         log_message(f"Error details: {
                     traceback.format_exc()}", level=logging.DEBUG)
         last_status = None
-        return None
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
 
 def create_sync_now_handler(job_key):
@@ -376,7 +388,7 @@ def stop_daemon():
 
 def start_daemon():
     global daemon_manager
-    log_message("----Starting daemon", level=logging.DEBUG)
+    log_message("Starting daemon", level=logging.DEBUG)
     # First, check if the daemon is already running
     current_status = get_daemon_status()
     if current_status is not None:
@@ -980,6 +992,14 @@ def check_crash_log():
         # os.remove(crash_log_path)  # Remove the file after reading
         return crash_message
     return None
+
+
+def open_config_editor():
+    config_file_path = get_config_file_path()
+    if config_file_path:
+        edit_config(config_file_path)
+    else:
+        log_message("Config file path not found", level=logging.ERROR)
 
 
 def main():
