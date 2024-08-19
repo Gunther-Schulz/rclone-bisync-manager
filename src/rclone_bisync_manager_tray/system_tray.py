@@ -36,10 +36,12 @@ daemon_manager = None
 
 # At the top of the file, after imports
 debug = False
+args = None
 
 
 def log_message(message, level=logging.INFO):
-    if args.log_level != 'NONE':
+    global args, debug
+    if args and args.log_level != 'NONE':
         logging.log(level, message)
     elif debug:
         print(message)
@@ -180,6 +182,9 @@ class DaemonManager:
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append(pystray.MenuItem(
             f"Error: {error_message.split('\n')[0]}", None, enabled=False))
+        if self.daemon_start_error:
+            items.append(pystray.MenuItem("Show Full Error", lambda: show_text_window(
+                "Daemon Crash Log", self.daemon_start_error)))
         return items
 
     def _get_limbo_menu_items(self, status):
@@ -580,7 +585,8 @@ def show_status_window():
         if daemon_manager.daemon_start_error:
             error_frame = ttk.LabelFrame(window, text="Error Details")
             error_frame.pack(pady=10, padx=10, fill='x')
-            error_text = tkinter.Text(error_frame, wrap=tkinter.WORD, height=5)
+            error_text = tkinter.Text(
+                error_frame, wrap=tkinter.WORD, height=25)
             error_text.pack(pady=5, padx=5, fill='both', expand=True)
             error_text.insert(tkinter.END, daemon_manager.daemon_start_error)
             error_text.config(state=tkinter.DISABLED)
@@ -798,6 +804,16 @@ def ensure_daemon_running():
     return False
 
 
+def clear_crash_log():
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    if os.path.exists(crash_log_path):
+        try:
+            os.remove(crash_log_path)
+            log_message("Cleared existing crash log", level=logging.INFO)
+        except Exception as e:
+            log_message(f"Error clearing crash log: {e}", level=logging.ERROR)
+
+
 def run_tray():
     global icon, daemon_manager, args, debug, update_queue
     daemon_manager = DaemonManager()
@@ -820,6 +836,8 @@ def run_tray():
     else:
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
+
+    clear_crash_log()
 
     initial_status = get_daemon_status()
     initial_state = daemon_manager.get_current_state(initial_status)
@@ -897,23 +915,39 @@ def update_menu_and_icon():
 def check_status_and_update():
     global daemon_manager
     last_status = None
+    last_state = None
     while True:
         try:
+            crash_message = check_crash_log()
+            if crash_message:
+                current_state = DaemonState.FAILED
+                if current_state != last_state or daemon_manager.daemon_start_error != crash_message:
+                    daemon_manager.daemon_start_error = crash_message
+                    daemon_manager.update_state(current_state)
+                    update_queue.put(True)
+                    log_message(f"Daemon crashed. Current state: {
+                                current_state.name}", level=logging.ERROR)
+                    log_message(f"Crash message: {
+                                crash_message}", level=logging.ERROR)
+                    last_state = current_state
+                continue
+
             current_status = get_daemon_status()
             current_state = daemon_manager.get_current_state(current_status)
 
             # Update the daemon manager state
-            daemon_manager.update_state(current_state)
+            state_changed = daemon_manager.update_state(current_state)
 
-            # Check if the status has changed
-            if current_status != last_status:
+            # Check if the status or state has changed
+            if current_status != last_status or state_changed:
                 log_message(
-                    "Status changed. Updating menu and icon.", level=logging.INFO)
+                    "Status or state changed. Updating menu and icon.", level=logging.INFO)
                 log_message(f"New status: {
                             current_status}", level=logging.DEBUG)
                 update_queue.put(True)
 
             last_status = current_status
+            last_state = current_state
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
@@ -935,6 +969,16 @@ def handle_updates():
                         traceback.format_exc()}", level=logging.DEBUG)
         finally:
             update_queue.task_done()
+
+
+def check_crash_log():
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    if os.path.exists(crash_log_path):
+        with open(crash_log_path, 'r') as f:
+            crash_message = f.read()
+        # os.remove(crash_log_path)  # Remove the file after reading
+        return crash_message
+    return None
 
 
 def main():
