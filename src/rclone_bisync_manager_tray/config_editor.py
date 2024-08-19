@@ -1,67 +1,80 @@
-import tkinter
-from tkinter import ttk, messagebox
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
 import yaml
+import re
 
 
 def edit_config(config_file_path):
     with open(config_file_path, 'r') as file:
-        config = yaml.safe_load(file)
+        config_str = file.read()
+        config = yaml.safe_load(config_str)
 
-    root = tkinter.Tk()
+    root = tk.Tk()
     root.title("Edit Configuration")
-    root.geometry("600x400")
+    root.geometry("800x600")
 
     main_frame = ttk.Frame(root)
-    main_frame.pack(fill=tkinter.BOTH, expand=True)
+    main_frame.pack(fill=tk.BOTH, expand=True)
 
-    canvas = tkinter.Canvas(main_frame)
-    scrollbar = ttk.Scrollbar(
-        main_frame, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+    notebook = ttk.Notebook(main_frame)
+    notebook.pack(fill=tk.BOTH, expand=True)
 
-    scrollable_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")
+    def create_tab(name, config_section):
+        tab = ttk.Frame(notebook)
+        notebook.add(tab, text=name)
+
+        canvas = tk.Canvas(tab)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-    )
 
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-    main_frame.pack(fill=tkinter.BOTH, expand=True)
-    canvas.pack(side="left", fill=tkinter.BOTH, expand=True)
-    scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-    def update_config(key, value):
+        return scrollable_frame, config_section
+
+    def update_config(section, key, value):
         keys = key.split('.')
-        d = config
+        d = section
         for k in keys[:-1]:
             if k not in d:
                 d[k] = {}
             d = d[k]
         d[keys[-1]] = value
 
-    def create_input(parent, key, value, row):
+    def create_input(parent, section, key, value, row):
         ttk.Label(parent, text=key).grid(
             row=row, column=0, sticky="w", padx=5, pady=2)
         if isinstance(value, bool):
-            var = tkinter.BooleanVar(value=value)
+            var = tk.BooleanVar(value=value)
             ttk.Checkbutton(parent, variable=var, command=lambda: update_config(
-                key, var.get())).grid(row=row, column=1, sticky="w", padx=5, pady=2)
+                section, key, var.get())).grid(row=row, column=1, sticky="w", padx=5, pady=2)
         elif isinstance(value, int):
-            var = tkinter.StringVar(value=str(value))
+            var = tk.StringVar(value=str(value))
             ttk.Entry(parent, textvariable=var).grid(
                 row=row, column=1, sticky="we", padx=5, pady=2)
-            var.trace("w", lambda *args: update_config(key,
+            var.trace("w", lambda *args: update_config(section, key,
                       int(var.get()) if var.get().isdigit() else 0))
+        elif isinstance(value, list):
+            text = tk.Text(parent, height=3, width=40)
+            text.grid(row=row, column=1, sticky="we", padx=5, pady=2)
+            text.insert(tk.END, '\n'.join(map(str, value)))
+            text.bind("<FocusOut>", lambda e: update_config(
+                section, key, text.get("1.0", tk.END).strip().split('\n')))
         else:
-            var = tkinter.StringVar(value=str(value))
+            var = tk.StringVar(value=str(value))
             ttk.Entry(parent, textvariable=var).grid(
                 row=row, column=1, sticky="we", padx=5, pady=2)
-            var.trace("w", lambda *args: update_config(key, var.get()))
+            var.trace("w", lambda *args: update_config(section, key, var.get()))
 
-    def create_inputs(parent, config_dict, prefix=''):
+    def create_inputs(parent, config_dict, section, prefix=''):
         row = 0
         for key, value in config_dict.items():
             full_key = f"{prefix}{key}" if prefix else key
@@ -69,17 +82,62 @@ def edit_config(config_file_path):
                 ttk.Label(parent, text=key, font=("", 10, "bold")).grid(
                     row=row, column=0, sticky="w", padx=5, pady=5)
                 row += 1
-                row = create_inputs(parent, value, f"{full_key}.")
+                row = create_inputs(parent, value, section, f"{full_key}.")
             else:
-                create_input(parent, full_key, value, row)
+                create_input(parent, section, full_key, value, row)
                 row += 1
         return row
 
-    create_inputs(scrollable_frame, config)
+    general_frame, general_config = create_tab("General", config)
+    create_inputs(general_frame, {k: v for k, v in config.items() if k != 'sync_jobs' and k !=
+                  'rclone_options' and k != 'bisync_options' and k != 'resync_options'}, general_config)
+
+    sync_jobs_frame, sync_jobs_config = create_tab(
+        "Sync Jobs", config['sync_jobs'])
+    create_inputs(sync_jobs_frame, config['sync_jobs'], sync_jobs_config)
+
+    rclone_options_frame, rclone_options_config = create_tab(
+        "Rclone Options", config['rclone_options'])
+    create_inputs(rclone_options_frame,
+                  config['rclone_options'], rclone_options_config)
+
+    bisync_options_frame, bisync_options_config = create_tab(
+        "Bisync Options", config['bisync_options'])
+    create_inputs(bisync_options_frame,
+                  config['bisync_options'], bisync_options_config)
+
+    resync_options_frame, resync_options_config = create_tab(
+        "Resync Options", config['resync_options'])
+    create_inputs(resync_options_frame,
+                  config['resync_options'], resync_options_config)
 
     def save_config():
+        # Preserve comments and structure
+        with open(config_file_path, 'r') as file:
+            lines = file.readlines()
+
+        def update_value(lines, path, value):
+            pattern = re.compile(r'^(\s*{}: ).*$'.format(re.escape(path)))
+            for i, line in enumerate(lines):
+                if pattern.match(line):
+                    lines[i] = pattern.sub(r'\1{}\n'.format(value), line)
+                    return True
+            return False
+
+        def update_config_lines(config_dict, prefix=''):
+            for key, value in config_dict.items():
+                full_key = f"{prefix}{key}" if prefix else key
+                if isinstance(value, dict):
+                    update_config_lines(value, f"{full_key}.")
+                else:
+                    if not update_value(lines, full_key, value):
+                        lines.append(f"{full_key}: {value}\n")
+
+        update_config_lines(config)
+
         with open(config_file_path, 'w') as file:
-            yaml.dump(config, file)
+            file.writelines(lines)
+
         messagebox.showinfo("Success", "Configuration saved successfully")
         root.destroy()
 

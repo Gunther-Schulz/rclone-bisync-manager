@@ -173,6 +173,15 @@ class DaemonManager:
             menu_items.append(pystray.MenuItem(
                 "Shutting Down", lambda: None, enabled=False))
 
+        # Add the "Edit Configuration" option for specific states
+        if current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID,
+                             DaemonState.CONFIG_CHANGED, DaemonState.LIMBO,
+                             DaemonState.SYNC_ISSUES]:
+            menu_items.extend([
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Edit Configuration", open_config_editor),
+            ])
+
         menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
         return menu_items
 
