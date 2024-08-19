@@ -88,13 +88,27 @@ def edit_config(config_file_path):
                 row += 1
         return row
 
+    def create_sync_jobs_tab(parent, sync_jobs):
+        row = 0
+        for job_name, job_config in sync_jobs.items():
+            ttk.Label(parent, text=job_name, font=("", 12, "bold")).grid(
+                row=row, column=0, sticky="w", padx=5, pady=10)
+            row += 1
+            for key, value in job_config.items():
+                create_input(parent, sync_jobs, f"{
+                             job_name}.{key}", value, row)
+                row += 1
+            ttk.Separator(parent, orient='horizontal').grid(
+                row=row, column=0, columnspan=2, sticky="ew", pady=10)
+            row += 1
+
     general_frame, general_config = create_tab("General", config)
     create_inputs(general_frame, {k: v for k, v in config.items() if k != 'sync_jobs' and k !=
                   'rclone_options' and k != 'bisync_options' and k != 'resync_options'}, general_config)
 
     sync_jobs_frame, sync_jobs_config = create_tab(
         "Sync Jobs", config['sync_jobs'])
-    create_inputs(sync_jobs_frame, config['sync_jobs'], sync_jobs_config)
+    create_sync_jobs_tab(sync_jobs_frame, config['sync_jobs'])
 
     rclone_options_frame, rclone_options_config = create_tab(
         "Rclone Options", config['rclone_options'])
