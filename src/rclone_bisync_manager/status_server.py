@@ -92,7 +92,7 @@ def generate_status_report():
             "config_file_location": str(config.config_file),
             "log_file_location": str(config._config.log_file_path) if config._config else None,
             "sync_errors": config.sync_errors,
-            "config_schema": get_config_schema()
+            # "config_schema": get_config_schema()
         }
 
         if config._config and not config.in_limbo and not config.config_invalid:
