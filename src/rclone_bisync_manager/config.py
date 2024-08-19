@@ -19,14 +19,7 @@ class OptionsValidatorMixin(BaseModel):
     @field_validator('rclone_options', 'bisync_options', 'resync_options')
     @classmethod
     def validate_options(cls, v, field):
-        global_disallowed_keys = {'resync', 'bisync', 'log-file'}
-        job_disallowed_keys = {'local', 'rclone_remote', 'remote',
-                               'schedule', 'active', 'dry_run', 'force_resync', 'force_operation'}
-
-        if cls.__name__ == 'ConfigSchema':
-            disallowed_keys = global_disallowed_keys
-        else:  # SyncJobConfig
-            disallowed_keys = job_disallowed_keys
+        disallowed_keys = {'resync', 'bisync', 'log-file'}
 
         invalid_keys = set(v.keys()) & disallowed_keys
         if invalid_keys:
