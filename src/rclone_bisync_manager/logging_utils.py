@@ -3,7 +3,6 @@ from datetime import datetime
 import sys
 
 config = None  # We'll set this later
-daemon_console_log = False
 
 
 class BasicLogger:

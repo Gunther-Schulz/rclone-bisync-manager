@@ -10,8 +10,6 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, DirectoryPath
 from rclone_bisync_manager.logging_utils import log_message, log_error
 
-debug = False
-
 
 class SyncJobConfig(BaseModel):
     local: str
@@ -119,10 +117,6 @@ class ConfigSchema(BaseModel):
     @field_validator('sync_jobs', mode='before')
     @classmethod
     def validate_sync_jobs(cls, v):
-        if debug:
-            print("Entering validate_sync_jobs method")
-            print(f"Input value: {v}")
-
         if v is None:
             raise ValueError(
                 "sync_jobs cannot be None. Please provide at least one sync job.")
@@ -168,9 +162,6 @@ class ConfigSchema(BaseModel):
             raise ValueError(
                 "No valid sync jobs found. Please provide at least one valid sync job.")
 
-        if debug:
-            print("Exiting validate_sync_jobs method")
-            print(f"Validated jobs: {validated_jobs}")
         return validated_jobs
 
 
@@ -228,38 +219,18 @@ class Config:
         self._update_internal_fields(args)
 
     def load_and_validate_config(self, args):
-        if debug:
-            print("Entering load_and_validate_config method")
         self.args = args
         if not os.path.exists(self.config_file):
-            if debug:
-                print(f"Error: Configuration file not found: {
-                      self.config_file}")
             raise FileNotFoundError(
                 f"Configuration file not found: {self.config_file}")
 
         with open(self.config_file, 'r') as f:
             config_data = yaml.safe_load(f)
 
-        if debug:
-            print("Config data loaded from file:")
-            print(json.dumps(config_data, indent=2))
-
         self._update_config_with_args(config_data, args)
 
-        if debug:
-            print("Config data after updating with args:")
-            print(json.dumps(config_data, indent=2))
-
         try:
-            if debug:
-                print("Attempting to create ConfigSchema")
             new_config = ConfigSchema(**config_data)
-            if debug:
-                print("ConfigSchema created successfully")
-                print("Sync jobs after validation:")
-                print(json.dumps({k: v.model_dump()
-                      for k, v in new_config.sync_jobs.items()}, indent=2))
 
             if self._config != new_config:
                 self._config = new_config
@@ -267,11 +238,7 @@ class Config:
             self.config_invalid = False
             self.config_error_message = None
         except ValidationError as e:
-            if debug:
-                print(f"ValidationError caught: {e}")
             error_message = self._format_validation_errors(e)
-            if debug:
-                print(f"Formatted error message:\n{error_message}")
 
             log_error(f"Configuration on disk is invalid: {error_message}")
             self.config_invalid = True
@@ -280,8 +247,6 @@ class Config:
 
         self._populate_status_file_paths()
         self._update_internal_fields(args)
-        if debug:
-            print("Exiting load_and_validate_config method")
 
     def _update_config_with_args(self, config_data, args):
         config_data.update({

@@ -387,6 +387,7 @@ def start_daemon():
 
     daemon_manager.update_state(DaemonState.STARTING)
 
+    clear_crash_log()  # Clear the crash log before starting the daemon
     daemon_manager.daemon_start_error = None
 
     try:
@@ -837,7 +838,7 @@ def run_tray():
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
 
-    clear_crash_log()
+    clear_crash_log()  # Clear the crash log before starting
 
     initial_status = get_daemon_status()
     initial_state = daemon_manager.get_current_state(initial_status)

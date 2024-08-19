@@ -53,7 +53,6 @@ def check_tools():
             log_error(
                 f"{tool} is not installed or not in PATH. Please install it and try again.")
             exit(1)
-    # log_message("All required tools are available.")
 
 
 def ensure_rclone_dir():
@@ -61,7 +60,6 @@ def ensure_rclone_dir():
     if not os.access(rclone_dir, os.W_OK):
         os.makedirs(rclone_dir, exist_ok=True)
         os.chmod(rclone_dir, 0o777)
-    # log_message(f"Ensured rclone directory: {rclone_dir}")
 
 
 def handle_filter_changes():
