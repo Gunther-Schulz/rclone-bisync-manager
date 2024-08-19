@@ -36,10 +36,12 @@ daemon_manager = None
 
 # At the top of the file, after imports
 debug = False
+args = None
 
 
 def log_message(message, level=logging.INFO):
-    if args.log_level != 'NONE':
+    global args, debug
+    if args and args.log_level != 'NONE':
         logging.log(level, message)
     elif debug:
         print(message)
@@ -180,6 +182,9 @@ class DaemonManager:
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append(pystray.MenuItem(
             f"Error: {error_message.split('\n')[0]}", None, enabled=False))
+        if self.daemon_start_error:
+            items.append(pystray.MenuItem("Show Full Error", lambda: show_text_window(
+                "Daemon Crash Log", self.daemon_start_error)))
         return items
 
     def _get_limbo_menu_items(self, status):
@@ -382,6 +387,7 @@ def start_daemon():
 
     daemon_manager.update_state(DaemonState.STARTING)
 
+    clear_crash_log()  # Clear the crash log before starting the daemon
     daemon_manager.daemon_start_error = None
 
     try:
@@ -568,44 +574,45 @@ def show_status_window():
 
     window = tkinter.Tk()
     window.title("RClone BiSync Manager Status")
-    window.geometry("600x500")
+    window.geometry("400x300")
 
     style = ttk.Style()
     style.theme_use('clam')
 
-    notebook = ttk.Notebook(window)
-    notebook.pack(expand=True, fill='both')
+    if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
+        ttk.Label(window, text="⚠️ Daemon is not running",
+                  foreground="red", font=("", 14, "bold")).pack(pady=(20, 10))
 
-    if current_state in [DaemonState.OFFLINE, DaemonState.INITIAL, DaemonState.FAILED]:
-        error_frame = ttk.Frame(notebook)
-        notebook.add(error_frame, text='Status')
+        if daemon_manager.daemon_start_error:
+            error_frame = ttk.LabelFrame(window, text="Error Details")
+            error_frame.pack(pady=10, padx=10, fill='x')
+            error_text = tkinter.Text(
+                error_frame, wrap=tkinter.WORD, height=25)
+            error_text.pack(pady=5, padx=5, fill='both', expand=True)
+            error_text.insert(tkinter.END, daemon_manager.daemon_start_error)
+            error_text.config(state=tkinter.DISABLED)
 
-        if current_state == DaemonState.INITIAL:
-            status_text = "Daemon is initializing..."
-        else:
-            status_text = "⚠️ Daemon is not running"
-
-        status_label = ttk.Label(error_frame, text=status_text,
-                                 foreground="red" if current_state != DaemonState.INITIAL else "black")
-        status_label.pack(pady=(10, 0))
-
-        error_text = tkinter.Text(error_frame, wrap=tkinter.WORD, height=10)
-        error_text.pack(pady=(0, 10), padx=10, fill='both', expand=True)
-
-        if current_state == DaemonState.INITIAL:
-            error_message = "The daemon is currently initializing. Please wait..."
-        elif daemon_manager.daemon_start_error:
-            error_message = f"Error occurred while starting the daemon:\n\n{
-                daemon_manager.daemon_start_error}"
-        else:
-            error_message = "The daemon is currently not running. You can start it using the 'Start Daemon' option in the system tray menu."
-
-        error_text.insert(tkinter.END, error_message)
-        error_text.config(state=tkinter.DISABLED)
-
+        ttk.Button(window, text="Start Daemon", command=lambda: [
+                   start_daemon(), window.destroy()]).pack(pady=20)
     else:
+        notebook = ttk.Notebook(window)
+        notebook.pack(expand=True, fill='both')
+
         general_frame = ttk.Frame(notebook)
         notebook.add(general_frame, text='General')
+
+        if current_state == DaemonState.LIMBO:
+            status_text = "⚠️ Daemon is in limbo state"
+        elif current_state == DaemonState.INITIAL:
+            status_text = "Daemon is initializing..."
+        elif current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
+            status_text = "⚠️ Daemon is not running"
+        else:
+            status_text = "Daemon is running"
+
+        status_label = ttk.Label(general_frame, text=status_text,
+                                 foreground="red" if current_state in [DaemonState.OFFLINE, DaemonState.FAILED, DaemonState.LIMBO] else "black")
+        status_label.pack(pady=(10, 0))
 
         ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
             'config_invalid', False) else 'Invalid'}").pack(pady=5)
@@ -666,28 +673,46 @@ def show_status_window():
             ttk.Label(errors_frame, text="No sync errors at this time.").pack(
                 pady=20)
 
-        # Config pane only when daemon is running
         config_frame = ttk.Frame(notebook)
         notebook.add(config_frame, text='Config')
 
         config_text = tkinter.Text(config_frame, wrap=tkinter.WORD)
-        config_text.pack(expand=True, fill='both')
+        config_text.pack(pady=10, padx=10, fill='both', expand=True)
 
         config_file_path = status.get('config_file_location')
         if config_file_path and os.path.exists(config_file_path):
             with open(config_file_path, 'r') as config_file:
-                config_content = config_file.read()
-            config_text.insert(tkinter.END, config_content)
+                config_message = config_file.read()
         else:
-            config_text.insert(
-                tkinter.END, "Config file not found or inaccessible.")
+            config_message = "Config file not found or inaccessible."
 
+        config_text.insert(tkinter.END, config_message)
         config_text.config(state=tkinter.DISABLED)
 
         config_scrollbar = ttk.Scrollbar(
             config_frame, orient="vertical", command=config_text.yview)
         config_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
         config_text.configure(yscrollcommand=config_scrollbar.set)
+
+        if current_state == DaemonState.LIMBO:
+            error_frame = ttk.Frame(notebook)
+            notebook.add(error_frame, text='Config Error Details')
+
+            error_text = tkinter.Text(error_frame, wrap=tkinter.WORD)
+            error_text.pack(pady=10, padx=10, fill='both', expand=True)
+
+            error_message = "Daemon is in limbo state. Config error details:\n\n"
+            if status.get("config_invalid", False):
+                error_message += f"Config is invalid.\nError: {
+                    status.get('config_error_message', 'Unknown error')}\n\n"
+            if status.get("config_changed_on_disk", False):
+                error_message += "Config has changed on disk.\n\n"
+            error_message += "Full config details:\n"
+            error_message += json.dumps(
+                status.get("config_details", {}), indent=2)
+
+            error_text.insert(tkinter.END, error_message)
+            error_text.config(state=tkinter.DISABLED)
 
     window.mainloop()
 
@@ -780,6 +805,16 @@ def ensure_daemon_running():
     return False
 
 
+def clear_crash_log():
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    if os.path.exists(crash_log_path):
+        try:
+            os.remove(crash_log_path)
+            log_message("Cleared existing crash log", level=logging.INFO)
+        except Exception as e:
+            log_message(f"Error clearing crash log: {e}", level=logging.ERROR)
+
+
 def run_tray():
     global icon, daemon_manager, args, debug, update_queue
     daemon_manager = DaemonManager()
@@ -802,6 +837,8 @@ def run_tray():
     else:
         logging.disable(logging.CRITICAL)  # Disable all logging
         debug = False
+
+    clear_crash_log()  # Clear the crash log before starting
 
     initial_status = get_daemon_status()
     initial_state = daemon_manager.get_current_state(initial_status)
@@ -879,23 +916,39 @@ def update_menu_and_icon():
 def check_status_and_update():
     global daemon_manager
     last_status = None
+    last_state = None
     while True:
         try:
+            crash_message = check_crash_log()
+            if crash_message:
+                current_state = DaemonState.FAILED
+                if current_state != last_state or daemon_manager.daemon_start_error != crash_message:
+                    daemon_manager.daemon_start_error = crash_message
+                    daemon_manager.update_state(current_state)
+                    update_queue.put(True)
+                    log_message(f"Daemon crashed. Current state: {
+                                current_state.name}", level=logging.ERROR)
+                    log_message(f"Crash message: {
+                                crash_message}", level=logging.ERROR)
+                    last_state = current_state
+                continue
+
             current_status = get_daemon_status()
             current_state = daemon_manager.get_current_state(current_status)
 
             # Update the daemon manager state
-            daemon_manager.update_state(current_state)
+            state_changed = daemon_manager.update_state(current_state)
 
-            # Check if the status has changed
-            if current_status != last_status:
+            # Check if the status or state has changed
+            if current_status != last_status or state_changed:
                 log_message(
-                    "Status changed. Updating menu and icon.", level=logging.INFO)
+                    "Status or state changed. Updating menu and icon.", level=logging.INFO)
                 log_message(f"New status: {
                             current_status}", level=logging.DEBUG)
                 update_queue.put(True)
 
             last_status = current_status
+            last_state = current_state
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
@@ -917,6 +970,16 @@ def handle_updates():
                         traceback.format_exc()}", level=logging.DEBUG)
         finally:
             update_queue.task_done()
+
+
+def check_crash_log():
+    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    if os.path.exists(crash_log_path):
+        with open(crash_log_path, 'r') as f:
+            crash_message = f.read()
+        # os.remove(crash_log_path)  # Remove the file after reading
+        return crash_message
+    return None
 
 
 def main():
