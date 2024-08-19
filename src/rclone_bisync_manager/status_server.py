@@ -2,7 +2,11 @@ import os
 import socket
 import json
 import threading
+
+from pydantic import BaseModel
 from rclone_bisync_manager.config import config, sync_state
+from typing import Any
+from datetime import datetime, date
 
 
 def start_status_server():
@@ -76,20 +80,36 @@ def generate_status_report():
         "config_file_location": config.config_file,
         "log_file_location": config._config.log_file_path if config._config else None,
         "sync_errors": config.sync_errors,
+        "config": {},
         "sync_jobs": {}
     }
 
     if config._config and not config.in_limbo and not config.config_invalid:
+        # Add all fields from ConfigSchema
+        status["config"] = model_to_dict(config._config)
+
         for key, value in config._config.sync_jobs.items():
             if value.active:
                 job_state = sync_state.get_job_state(key)
-                status["sync_jobs"][key] = {
+                status["sync_jobs"][key] = model_to_dict(value)
+                status["sync_jobs"][key].update({
                     "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
                     "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
                     "sync_status": job_state["sync_status"],
                     "resync_status": job_state["resync_status"],
-                    "force_resync": value.force_resync,
                     "hash_warnings": config.hash_warnings.get(key, False)
-                }
+                })
 
-    return json.dumps(status)
+    return json.dumps(status, default=json_serializer)
+
+
+def model_to_dict(obj: Any) -> dict:
+    return {k: v for k, v in obj.model_dump().items() if v is not None}
+
+
+def json_serializer(obj: Any) -> str:
+    if isinstance(obj, BaseModel):
+        return model_to_dict(obj)
+    elif isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
