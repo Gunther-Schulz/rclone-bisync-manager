@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, simpledialog
 import yaml
 import re
 
@@ -89,18 +89,57 @@ def edit_config(config_file_path):
         return row
 
     def create_sync_jobs_tab(parent, sync_jobs):
-        row = 0
-        for job_name, job_config in sync_jobs.items():
-            ttk.Label(parent, text=job_name, font=("", 12, "bold")).grid(
-                row=row, column=0, sticky="w", padx=5, pady=10)
-            row += 1
-            for key, value in job_config.items():
-                create_input(parent, sync_jobs, f"{
-                             job_name}.{key}", value, row)
-                row += 1
-            ttk.Separator(parent, orient='horizontal').grid(
-                row=row, column=0, columnspan=2, sticky="ew", pady=10)
-            row += 1
+        def refresh_sync_jobs():
+            for widget in parent.winfo_children():
+                widget.destroy()
+            create_sync_jobs_content(parent, sync_jobs)
+
+        def add_sync_job():
+            job_name = simpledialog.askstring(
+                "Add Sync Job", "Enter the name for the new sync job:")
+            if job_name:
+                if job_name in sync_jobs:
+                    messagebox.showerror("Error", f"A job with the name '{
+                                         job_name}' already exists.")
+                else:
+                    sync_jobs[job_name] = {
+                        "local": "",
+                        "rclone_remote": "",
+                        "remote": "",
+                        "schedule": ""
+                    }
+                    refresh_sync_jobs()
+
+        def remove_sync_job(job_name):
+            if messagebox.askyesno("Remove Sync Job", f"Are you sure you want to remove the sync job '{job_name}'?"):
+                del sync_jobs[job_name]
+                refresh_sync_jobs()
+
+        def create_sync_jobs_content(parent, sync_jobs):
+            row = 0
+            for job_name, job_config in sync_jobs.items():
+                job_frame = ttk.Frame(parent)
+                job_frame.grid(row=row, column=0, columnspan=2,
+                               sticky="ew", padx=5, pady=5)
+
+                ttk.Label(job_frame, text=job_name, font=("", 12, "bold")).grid(
+                    row=0, column=0, sticky="w", padx=5, pady=5)
+                ttk.Button(job_frame, text="Remove", command=lambda name=job_name: remove_sync_job(
+                    name)).grid(row=0, column=1, sticky="e", padx=5, pady=5)
+
+                for key, value in job_config.items():
+                    create_input(job_frame, sync_jobs, f"{
+                                 job_name}.{key}", value, row+1)
+                    row += 1
+
+                ttk.Separator(parent, orient='horizontal').grid(
+                    row=row+1, column=0, columnspan=2, sticky="ew", pady=10)
+                row += 2
+
+            ttk.Button(parent, text="Add Sync Job", command=add_sync_job).grid(
+                row=row, column=0, columnspan=2, pady=10)
+
+        create_sync_jobs_content(parent, sync_jobs)
 
     general_frame, general_config = create_tab("General", config)
     create_inputs(general_frame, {k: v for k, v in config.items() if k != 'sync_jobs' and k !=
