@@ -126,7 +126,80 @@ resync_options:
   error_on_no_transfer: null
 ```
 
-Adjust the configuration to match your specific sync requirements.
+Adjust the configuration to match your specific sync requirements. Here's an explanation of the different option sections:
+
+### Global Options
+
+These options apply to the overall behavior of RClone BiSync Manager:
+
+- `local_base_path`: The base directory for all local sync paths.
+- `exclusion_rules_file`: Optional: Path to a file containing exclusion rules for syncing.
+- `redirect_rclone_log_output`: Whether to redirect rclone's log output to the manager's log file.
+- `run_missed_jobs`: Whether to run missed jobs when the daemon starts.
+- `run_initial_sync_on_startup`: Whether to perform an initial sync when the daemon starts.
+- `max_cpu_usage_percent`: Maximum CPU usage allowed for sync operations.
+
+### sync_jobs
+
+This section defines individual sync jobs. Each job is identified by a unique key and has the following options:
+
+- `local`: The local directory path (relative to `local_base_path`) for this sync job.
+- `rclone_remote`: The name of the rclone remote to use.
+- `remote`: The path on the remote storage for this sync job.
+- `schedule`: A cron-style schedule for when this job should run.
+- `dry_run`: Whether to perform a dry run (no actual changes) for this job. Default: false.
+- `active`: Whether this job is active and should be run by the daemon. Default: true.
+- `rclone_options`: Job-specific rclone options that override general options (see below).
+- `bisync_options`: Job-specific bisync options that override general options (see below).
+- `resync_options`: Job-specific resync options that override general options (see below).
+
+Example sync job configuration:
+
+```yaml
+sync_jobs:
+  documents:
+    local: Documents
+    rclone_remote: gdrive
+    remote: backup/documents
+    schedule: "0 * * * *"
+    dry_run: false
+    rclone_options:
+      log_level: INFO
+```
+
+This configuration will sync the local "Documents" folder with the "backup/documents" folder on the "gdrive" remote every hour.
+
+### rclone_options
+
+These are general rclone options that apply to all operations. Some common options include:
+
+- `recover`, `resilient`: Set to `null` to enable these flags without a value.
+- `max_delete`: Maximum number of files to delete during sync.
+- `log_level`: Logging verbosity (DEBUG, INFO, NOTICE, ERROR).
+- `max_lock`: Maximum time to hold locks.
+- `retries`, `low_level_retries`: Number of retry attempts for failed operations.
+- `compare`: Criteria for file comparison.
+- `create_empty_src_dirs`, `check_access`: Set to `null` to enable these flags.
+- `exclude`: List of patterns to exclude from sync.
+
+### bisync_options
+
+These options are specific to the bisync operation:
+
+- `conflict_resolve`: How to resolve conflicts (e.g., "newer", "older", "larger", "smaller").
+- `conflict_loser`: What to do with the loser of a conflict (e.g., "delete", "num", "left", "right").
+- `conflict_suffix`: Suffix to add to conflict loser files.
+- `track_renames`: Set to `null` to enable rename tracking.
+
+### resync_options
+
+These options are used during the resync operation:
+
+- `error_on_no_transfer`: Set to `null` to make resync fail if no files were transferred.
+
+Note: When an option is set to `null`, it means the flag will be passed to rclone without a value. This is useful for boolean flags that don't require a value but need to be present to be activated.
+
+You can find a complete list of available options in the [rclone documentation](https://rclone.org/flags/).
 
 ## Usage
 
