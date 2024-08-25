@@ -50,6 +50,17 @@ Clicking the tray icon provides a menu with options to control the daemon, view 
 
 ## Installation
 
+### Arch Linux
+
+For Arch Linux, you can install the package from the AUR:
+
+```
+yay -S rclone-bisync-manager-git
+yay -S rclone-bisync-manager-tray-git
+```
+
+### Other Linux
+
 You can install RClone BiSync Manager using pip:
 
 ```
