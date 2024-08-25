@@ -2,20 +2,52 @@
 
 RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files using RClone. It provides a flexible and configurable way to manage multiple sync jobs with customizable schedules and options.
 
-**_WARNING: This is still under development and not ready for production use and may never be._**
-**_WARNING: This README is neither complete not necessarily correct._**
+**_WARNING: This is still under development and not ready for production use._**
 
 ## Features
+
+RClone BiSync Manager offers a comprehensive set of features, including:
 
 - Daemon-based operation for continuous background syncing
 - Support for multiple sync jobs with individual configurations
 - Customizable sync schedules using cron syntax
 - Global and per-job RClone options
-- System tray application for easy status monitoring and control
+- System tray application for easy status monitoring and control, featuring:
+  - Real-time status monitoring of the daemon and sync jobs
+  - Quick access to start/stop the daemon
+  - Easy configuration reloading
+  - Ability to trigger manual syncs
+  - Access to configuration and log files
+  - Visual indicators for sync status and issues
 - Dry-run mode for testing configurations
 - CPU usage limiting to prevent system overload
 - Configurable exclusion rules
 - Automatic handling of missed sync jobs
+
+To start the system tray application:
+
+```
+rclone-bisync-manager-tray [options]
+```
+
+Options:
+
+- `--icon-style <1|2>`: Choose between two different icon styles (default: 1)
+- `--icon-thickness <value>`: Set the thickness of the icon lines (default: 40)
+- `--log-level <NONE|DEBUG|INFO|WARNING|ERROR|CRITICAL>`: Set the logging level (default: NONE)
+- `--enable-experimental`: Enable experimental features
+
+The tray application will start the daemon if it is not already running.
+
+The system tray icon changes color and shape to indicate the current status of the sync jobs:
+
+- Green: Daemon running normally
+- Blue: Sync in progress
+- Yellow: Initializing or configuration changed
+- Red: Sync issues or errors
+- Gray: Daemon offline
+
+Clicking the tray icon provides a menu with options to control the daemon, view status, and access configuration settings.
 
 ## Installation
 
@@ -112,6 +144,14 @@ To check the status of the daemon:
 rclone-bisync-manager daemon status
 ```
 
+### Reloading Configuration
+
+To reload the daemon configuration without restarting:
+
+```
+rclone-bisync-manager daemon reload
+```
+
 ### Running a Manual Sync
 
 To run a manual sync for specific jobs:
@@ -122,20 +162,15 @@ rclone-bisync-manager sync [job1] [job2] ...
 
 If no job names are specified, all active jobs will be synced.
 
-### System Tray Application
+### Adding Sync Jobs
 
-To start the system tray application:
+To add sync jobs to the queue while the daemon is running:
 
 ```
-rclone-bisync-manager-tray [options]
+rclone-bisync-manager add-sync [job1] [job2] ...
 ```
 
-Options:
-
-- `--icon-style <1|2>`: Choose between two different icon styles (default: 1)
-- `--icon-thickness <value>`: Set the thickness of the icon lines (default: 40)
-
-This provides a convenient way to monitor sync status and control the daemon. The system tray icon changes color and shape to indicate the current status of the sync jobs.
+This command allows you to manually trigger sync jobs without stopping the daemon.
 
 ## Desktop Integration
 
@@ -152,7 +187,7 @@ After installation, you should be able to find and launch the RClone BiSync Mana
 
 ## Systemd Service
 
-RClone BiSync Manager can be run as a user service, which is recommended for most users. This allows the service to run under your user account without requiring root privileges.
+RClone BiSync Manager can be run as a user service, which is recommended if you decide not to use the tray application although both can be used at the same time. This allows the service to run under your user account without requiring root privileges.
 
 To set up RClone BiSync Manager as a user service:
 
@@ -202,6 +237,32 @@ By running RClone BiSync Manager as a user service, it will start automatically 
 ### Running as a System Service (Alternative)
 
 If you prefer to run RClone BiSync Manager as a system-wide service, you can create the service file in `/etc/systemd/system/` instead and use `sudo` with the systemctl commands. However, this is generally not recommended unless you have a specific reason to run it system-wide.
+
+## Error Handling and Logging
+
+RClone BiSync Manager provides comprehensive error handling and logging:
+
+- Sync errors are logged and can be viewed in the status report.
+- A crash log is maintained at `/tmp/rclone_bisync_manager_crash.log`.
+- The daemon enters a "limbo" state if the configuration becomes invalid, allowing for recovery without stopping the service.
+- Hash warnings for special file types (e.g., Live Photos) are detected and reported.
+
+You can view the full log file location in the status report or system tray application.
+
+## Status Server
+
+RClone BiSync Manager runs a status server that provides real-time information about the daemon and sync jobs. This server is used by the system tray application and the `daemon status` command to retrieve current status information.
+
+The status report includes:
+
+- Daemon process information
+- Configuration status
+- Currently syncing jobs
+- Queued sync jobs
+- Sync job details (last sync time, next scheduled run, sync status)
+- Error information
+
+You can access this information programmatically by connecting to the Unix socket at `/tmp/rclone_bisync_manager_status.sock`.
 
 ## License
 
