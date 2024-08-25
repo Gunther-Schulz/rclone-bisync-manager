@@ -1,5 +1,10 @@
 # TODO
 
+## Known Issues
+
+- [ ] More than 3 sync_jobs will cause `JSON decode error: Expecting ',' delimiter: line 1 column 4089 (char 4088)` returned by the status command.
+- [ ] The tray displays "Daemon Offline" even when the daemon is running in the state described in the last point above.
+
 ## Testing
 
 - [ ] Test if missed runs are still processed
