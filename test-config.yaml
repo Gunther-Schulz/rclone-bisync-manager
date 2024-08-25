@@ -1,0 +1,112 @@
+# JSON decode error: Expecting ',' delimiter: line 1 column 4089 (char 4088)
+# config-this-fails-and-shows-dameon-not-running-even-though-it-is in tray. start/stop dameon is displayed correctly, need ot make sure that all other errors really only depend on actual state of the dameon
+# like "Daemon is not running" both in menu and status window
+# also that json decode error is not very helpful
+# the issue seesm to be having more than 4 sync jobs?? So theer are two separate issues:
+# I cannot have more than 3 sync jobs (dameon realted)
+# False dameon offline message even though its online (Dameon start button shows correcty, also i can reload config)
+
+# rclone-bisync-manager daemon status                                                                                                            ✔
+# Error communicating with daemon: Expecting value: line 1 column 4086 (char 4085)
+
+# Also in that state I canot shut down the daemon, even though ots running
+
+# Base path for local files to be synced
+local_base_path: /home/g/hidrive
+
+# If this file is updated then on the next sync run a resync is done. This file applies global to all sync jobs. This is because rclone requires a resync after any filter change.
+exclusion_rules_file: /home/g/hidrive/filter.txt
+
+redirect_rclone_log_output: true
+
+# CPU usage limit as a percentage
+max_cpu_usage_percent: 100
+
+run_missed_jobs: true
+
+run_initial_sync_on_startup: false
+
+# Define the paths to be synchronized
+# sync_jobs:
+#   pbs-public:
+#     local: "Öffentlich Planungsbüro Schulz"
+#     rclone_remote: pbs
+#     remote: "Öffentlich Planungsbüro Schulz"
+#     schedule: "*/30 * * * *" # Every 30 minutes
+#     # dry_run: true
+#   pbs-private:
+#     local: ProjektePrivat
+#     rclone_remote: pbs
+#     remote: users/pb-schulz/ProjektePrivat
+#     schedule: "*/30 * * * *" # Every 30 minutes
+#     # dry_run: true
+#   pbs-software:
+#     local: Software
+#     rclone_remote: pbs
+#     remote: users/pb-schulz/Software
+#     # schedule: "0 0 * * 0" # Weekly at midnight on Sunday
+#     schedule: "0 0 * * *" # Daily at midnight
+#     # schedule: "*/30 * * * *"
+#     # dry_run: true
+#   gunther:
+#     local: gunther
+#     rclone_remote: gunther
+#     remote: users/gunther
+#     schedule: "0 0 * * *" # Daily at midnight
+  v:
+    local: v # Local directory name
+    rclone_remote: pbs # Name of the rclone remote to use
+    remote: users/pb-schulz/v # Path on the remote storage
+    schedule: "* * * * *"
+    dry_run: false
+  software-dry:
+    dry_run: true
+    local: Software
+    rclone_remote: pbs
+    remote: users/pb-schulz/Software
+    # schedule: "* * * * *"
+    schedule: "0 0 * * *" # Daily at midnight
+    # schedule: "*/30 * * * *"
+  c:
+    local: v # Local directory name
+    rclone_remote: pbs # Name of the rclone remote to use
+    remote: users/pb-schulz/v # Path on the remote storage
+    # interval: 1m
+    # jum: true
+    schedule: "*/30 * * * *"
+    dry_run: false
+
+# New customizable options
+rclone_options:
+  recover: null
+  resilient: null
+  max_delete: 5
+  log_level: INFO
+  max_lock: 15m
+  retries: 3
+  low_level_retries: 10
+  compare: "size,modtime,checksum"
+  create_empty_src_dirs: null
+  check_access: null
+  exclude:
+    - "*.tmp"
+    - "*.log"
+    - "._*"
+    - ".DS_Store"
+    - ".Spotlight-V100/**"
+    - ".Trashes/**"
+    - ".fseventsd/**"
+    - ".AppleDouble/**"
+    - ".VolumeIcon.icns"
+
+bisync_options:
+  conflict_resolve: newer
+  conflict_loser: num
+  conflict_suffix: rc-conflict
+  track_renames: null
+  # Add any additional bisync-specific options here
+  # custom_bisync_option: value
+
+resync_options:
+  error_on_no_transfer: null # Add any additional resync-specific options here
+  # custom_resync_option: value

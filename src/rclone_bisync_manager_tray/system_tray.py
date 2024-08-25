@@ -407,8 +407,11 @@ def start_daemon():
 
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
+        command = ["rclone-bisync-manager", "daemon", "start"]
+        if args.config:
+            command.extend(["--config", args.config])
         process = subprocess.Popen(
-            ["rclone-bisync-manager", "daemon", "start"],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
@@ -431,12 +434,6 @@ def start_daemon():
             # Process is still running, which is expected
             log_message(
                 "Daemon process started, waiting for it to initialize...", level=logging.INFO)
-
-        # # Log the output if available
-        # if stdout:
-        #     log_message(f"Daemon start stdout: {stdout}", level=logging.DEBUG)
-        # if stderr:
-        #     log_message(f"Daemon start stderr: {stderr}", level=logging.DEBUG)
 
     except subprocess.CalledProcessError as e:
         error_message = f"Error starting daemon: return code {
@@ -844,6 +841,8 @@ def run_tray():
                         default='NONE', help='Set the logging level')
     parser.add_argument('--enable-experimental', action='store_true',
                         help='Enable experimental features')
+    parser.add_argument('--config', type=str,
+                        help='Specify a custom config file location')
     args = parser.parse_args()
 
     # Set up logging based on the argument

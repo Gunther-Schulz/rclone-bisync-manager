@@ -10,6 +10,8 @@ def parse_args():
                                help='Print log messages to the console in addition to the log files.')
     global_parser.add_argument('-d', '--dry-run', action='store_true',
                                help='Perform a dry run without making any changes.')
+    global_parser.add_argument('--config', type=str,
+                               help='Specify a custom config file location.')
 
     subparsers = parser.add_subparsers(dest='command', required=True)
 

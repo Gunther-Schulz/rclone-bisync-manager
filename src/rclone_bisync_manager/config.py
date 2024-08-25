@@ -218,6 +218,8 @@ class Config:
 
     def initialize_config(self, args):
         self.args = args
+        if args.config:
+            self.config_file = args.config
         self._init_file_paths()
         self._init_logging_paths()
         self.load_sync_state()
