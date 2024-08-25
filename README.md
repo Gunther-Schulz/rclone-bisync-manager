@@ -1,3 +1,5 @@
+![RClone BiSync Manager](desktop/rclone-bisync-manager.svg)
+
 # RClone BiSync Manager
 
 RClone BiSync Manager is a daemon-based solution for automated, bidirectional synchronization of files using RClone. It provides a flexible and configurable way to manage multiple sync jobs with customizable schedules and options.
@@ -12,6 +14,7 @@ RClone BiSync Manager offers a comprehensive set of features, including:
 - Support for multiple sync jobs with individual configurations
 - Customizable sync schedules using cron syntax
 - Global and per-job RClone options
+- Automatic handling of missed sync jobs
 - System tray application for easy status monitoring and control, featuring:
   - Real-time status monitoring of the daemon and sync jobs
   - Quick access to start/stop the daemon
@@ -19,10 +22,6 @@ RClone BiSync Manager offers a comprehensive set of features, including:
   - Ability to trigger manual syncs
   - Access to configuration and log files
   - Visual indicators for sync status and issues
-- Dry-run mode for testing configurations
-- CPU usage limiting to prevent system overload
-- Configurable exclusion rules
-- Automatic handling of missed sync jobs
 
 To start the system tray application:
 
