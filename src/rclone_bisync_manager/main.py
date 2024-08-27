@@ -25,10 +25,13 @@ def main():
             try:
                 # Initialize config without validation
                 config.initialize_config(args)
+                # Add this line to set the config file path
+                config.config_file = args.config if args.config else config.config_file
                 set_config(config)  # Set the config for logging_utils
                 ensure_log_file_path()
                 setup_loggers(args.console_log)
                 log_config_file_location(config.config_file)
+                log_message("Daemon initialization started")
             except Exception as e:
                 print(f"Error initializing configuration: {str(e)}")
                 sys.exit(1)
@@ -69,6 +72,7 @@ def main():
                 log_error(f"Error starting daemon: {str(e)}\n{error_trace}")
                 print(f"Error starting daemon: {
                       str(e)}\nFull traceback:\n{error_trace}")
+                sys.exit(1)
         elif args.action == 'stop':
             stop_daemon()
         elif args.action == 'status':

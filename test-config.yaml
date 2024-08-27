@@ -27,32 +27,32 @@ run_missed_jobs: true
 run_initial_sync_on_startup: false
 
 # Define the paths to be synchronized
-# sync_jobs:
-#   pbs-public:
-#     local: "Öffentlich Planungsbüro Schulz"
-#     rclone_remote: pbs
-#     remote: "Öffentlich Planungsbüro Schulz"
-#     schedule: "*/30 * * * *" # Every 30 minutes
-#     # dry_run: true
-#   pbs-private:
-#     local: ProjektePrivat
-#     rclone_remote: pbs
-#     remote: users/pb-schulz/ProjektePrivat
-#     schedule: "*/30 * * * *" # Every 30 minutes
-#     # dry_run: true
-#   pbs-software:
-#     local: Software
-#     rclone_remote: pbs
-#     remote: users/pb-schulz/Software
-#     # schedule: "0 0 * * 0" # Weekly at midnight on Sunday
-#     schedule: "0 0 * * *" # Daily at midnight
-#     # schedule: "*/30 * * * *"
-#     # dry_run: true
-#   gunther:
-#     local: gunther
-#     rclone_remote: gunther
-#     remote: users/gunther
-#     schedule: "0 0 * * *" # Daily at midnight
+sync_jobs:
+  #   pbs-public:
+  #     local: "Öffentlich Planungsbüro Schulz"
+  #     rclone_remote: pbs
+  #     remote: "Öffentlich Planungsbüro Schulz"
+  #     schedule: "*/30 * * * *" # Every 30 minutes
+  #     # dry_run: true
+  #   pbs-private:
+  #     local: ProjektePrivat
+  #     rclone_remote: pbs
+  #     remote: users/pb-schulz/ProjektePrivat
+  #     schedule: "*/30 * * * *" # Every 30 minutes
+  #     # dry_run: true
+  #   pbs-software:
+  #     local: Software
+  #     rclone_remote: pbs
+  #     remote: users/pb-schulz/Software
+  #     # schedule: "0 0 * * 0" # Weekly at midnight on Sunday
+  #     schedule: "0 0 * * *" # Daily at midnight
+  #     # schedule: "*/30 * * * *"
+  #     # dry_run: true
+  #   gunther:
+  #     local: gunther
+  #     rclone_remote: gunther
+  #     remote: users/gunther
+  #     schedule: "0 0 * * *" # Daily at midnight
   v:
     local: v # Local directory name
     rclone_remote: pbs # Name of the rclone remote to use
@@ -71,8 +71,6 @@ run_initial_sync_on_startup: false
     local: v # Local directory name
     rclone_remote: pbs # Name of the rclone remote to use
     remote: users/pb-schulz/v # Path on the remote storage
-    # interval: 1m
-    # jum: true
     schedule: "*/30 * * * *"
     dry_run: false
 
