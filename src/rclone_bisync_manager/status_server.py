@@ -96,7 +96,7 @@ def generate_status_report():
         }
 
         if config._config and not config.in_limbo and not config.config_invalid:
-            status["current_config"] = model_to_dict(config._config)
+            # status["current_config"] = model_to_dict(config._config)
             status["sync_jobs"] = {}
             for key, value in config._config.sync_jobs.items():
                 if value.active:
