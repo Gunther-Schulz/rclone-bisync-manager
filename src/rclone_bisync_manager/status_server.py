@@ -38,7 +38,6 @@ def start_status_server():
 def handle_client(conn):
     try:
         data = conn.recv(4096).decode().strip()
-        log_message(f"Received command: {data}")
 
         if data == "RELOAD":
             from rclone_bisync_manager.daemon_functions import reload_config
@@ -62,7 +61,6 @@ def handle_client(conn):
                 "message": "Invalid command"
             })
 
-        log_message(f"Sending response (length: {len(response)})")
         conn.sendall(response.encode())
     except Exception as e:
         log_error(f"Error handling client request: {str(e)}")
@@ -103,7 +101,11 @@ def generate_status_report():
                         "hash_warnings": config.hash_warnings.get(key, False)
                     })
 
-        return json.dumps(status, default=json_serializer, ensure_ascii=False)
+        try:
+            return json.dumps(status, default=json_serializer, ensure_ascii=False)
+        except TypeError as e:
+            log_error(f"JSON serialization error: {str(e)}")
+            return json.dumps({"status": "error", "message": f"Error serializing status report: {str(e)}"})
     except Exception as e:
         error_message = f"Error generating status report: {str(e)}"
         log_error(error_message)

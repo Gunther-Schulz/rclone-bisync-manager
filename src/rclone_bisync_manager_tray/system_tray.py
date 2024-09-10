@@ -941,21 +941,18 @@ def update_menu_and_icon():
 def check_status_and_update():
     global daemon_manager
     last_status = None
-    last_state = None
     while True:
         try:
             crash_message = check_crash_log()
             if crash_message:
                 current_state = DaemonState.FAILED
-                if current_state != last_state or daemon_manager.daemon_start_error != crash_message:
+                if daemon_manager.update_state(current_state) or daemon_manager.daemon_start_error != crash_message:
                     daemon_manager.daemon_start_error = crash_message
-                    daemon_manager.update_state(current_state)
                     update_queue.put(True)
                     log_message(f"Daemon crashed. Current state: {
                                 current_state.name}", level=logging.ERROR)
                     log_message(f"Crash message: {
                                 crash_message}", level=logging.ERROR)
-                    last_state = current_state
                 continue
 
             current_status = get_daemon_status()
@@ -973,7 +970,6 @@ def check_status_and_update():
                 update_queue.put(True)
 
             last_status = current_status
-            last_state = current_state
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
