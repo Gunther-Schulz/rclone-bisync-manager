@@ -16,8 +16,8 @@ def perform_sync_operations(key):
 
     ensure_local_directory(local_path)
 
-    log_message(f"Performing sync operation for {key}. Force resync: {
-                value.force_resync}, Dry run: {config._config.dry_run}")
+    log_message(f"Performing sync operation for {key}. Force bisync: {
+                value.force_operation}, Force resync: {value.force_resync}, Dry run: {config._config.dry_run}")
 
     status = read_status(key)
     log_message(f"Current resync status for {key}: {status['resync_status']}")
@@ -40,8 +40,8 @@ def perform_sync_operations(key):
                       key}. Manual intervention or force resync required.")
             return
     else:
-        log_message(f"Skipping resync for {
-                    key}, proceeding with bisync. Resync status: {status['resync_status']}")
+        log_message(f"Proceeding with bisync for {
+                    key}. Force bisync: {value.force_operation}")
         bisync_result = bisync(key, remote_path, local_path)
         write_status(key, {"sync_status": bisync_result})
 
@@ -53,8 +53,9 @@ def perform_sync_operations(key):
 
 
 def bisync(key, remote_path, local_path):
-    log_message(f"Bisync started for {local_path} at {datetime.now(
-    )}" + (" - Performing a dry run" if config._config.dry_run else ""))
+    log_message(f"Bisync started for {local_path} at {datetime.now()}" +
+                (" - Performing a dry run" if config._config.dry_run else "") +
+                (" - Force bisync enabled" if config._config.sync_jobs[key].force_operation else ""))
 
     # Set the initial log position
     config._last_log_position = get_log_file_position()
@@ -140,12 +141,15 @@ def get_rclone_args(options, operation_type, job_key):
 
 
 def run_rclone_command(rclone_args):
+
     if is_cpulimit_installed():
         cpulimit_command = ['cpulimit',
                             f'--limit={config._config.max_cpu_usage_percent}', '--']
         cpulimit_command.extend(rclone_args)
+        log_message(f"Running with cpulimit: {' '.join(cpulimit_command)}")
         return subprocess.run(cpulimit_command, capture_output=True, text=True)
     else:
+        log_message(f"Rclone command parameters: {' '.join(rclone_args)}")
         return subprocess.run(rclone_args, capture_output=True, text=True)
 
 
