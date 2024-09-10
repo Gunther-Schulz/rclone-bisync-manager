@@ -6,7 +6,7 @@ from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import config, sync_state
 
 
-def perform_sync_operations(key, force_bisync=False, resync=False):
+def perform_sync_operations(key, force_bisync=False, force_resync=False):
     value = config._config.sync_jobs[key]
     local_path = os.path.join(config._config.local_base_path, value.local)
     remote_path = f"{value.rclone_remote}:{value.remote}"
@@ -16,32 +16,26 @@ def perform_sync_operations(key, force_bisync=False, resync=False):
 
     ensure_local_directory(local_path)
 
-    log_message(f"Performing sync operation for {key}. Force bisync: {
-                force_bisync}, Force resync: {resync}, Dry run: {config._config.dry_run}")
+    log_message(f"Performing sync operation for {key}. Force bisync: {force_bisync}, Force resync: {force_resync}, Dry run: {config._config.dry_run}")
 
     status = read_status(key)
     log_message(f"Current resync status for {key}: {status['resync_status']}")
 
-    if resync or status["resync_status"] in ["NONE", "IN_PROGRESS"]:
-        log_message(f"Initiating resync for {key}. Force resync: {
-                    resync}, Resync status: {status['resync_status']}")
+    if force_resync or status["resync_status"] in ["NONE", "IN_PROGRESS"]:
+        log_message(f"Initiating resync for {key}. Force resync: {force_resync}, Resync status: {status['resync_status']}")
         write_status(key, {"resync_status": "IN_PROGRESS"})
         resync_result = resync(key, remote_path, local_path)
 
         if resync_result == "COMPLETED":
             log_message(f"Resync completed for {key}, proceeding with bisync.")
             bisync_result = bisync(key, remote_path, local_path, force_bisync)
-            write_status(key, {"sync_status": bisync_result,
-                         "resync_status": "COMPLETED"})
+            write_status(key, {"sync_status": bisync_result, "resync_status": "COMPLETED"})
         else:
-            write_status(key, {"sync_status": "FAILED",
-                         "resync_status": resync_result})
-            log_error(f"Resync failed for {
-                      key}. Manual intervention or force resync required.")
+            write_status(key, {"sync_status": "FAILED", "resync_status": resync_result})
+            log_error(f"Resync failed for {key}. Manual intervention or force resync required.")
             return
     else:
-        log_message(f"Proceeding with bisync for {
-                    key}. Force bisync: {force_bisync}")
+        log_message(f"Proceeding with bisync for {key}. Force bisync: {force_bisync}")
         bisync_result = bisync(key, remote_path, local_path, force_bisync)
         write_status(key, {"sync_status": bisync_result})
 

@@ -136,7 +136,7 @@ def process_sync_queue():
     while not config.sync_queue.empty() and not config.shutting_down:
         with config.sync_lock:
             if config.currently_syncing is None:
-                key, force_bisync, resync = config.sync_queue.get_nowait()
+                key, force_bisync, force_resync = config.sync_queue.get_nowait()
                 config.currently_syncing = key
                 config.queued_paths.remove(key)
                 config.current_sync_start_time = datetime.now()
@@ -144,7 +144,7 @@ def process_sync_queue():
                 break
 
         if key in config._config.sync_jobs and not config.shutting_down:
-            perform_sync_operations(key, force_bisync, resync)
+            perform_sync_operations(key, force_bisync, force_resync)
 
         with config.sync_lock:
             config.currently_syncing = None
