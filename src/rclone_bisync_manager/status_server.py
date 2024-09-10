@@ -55,6 +55,8 @@ def handle_client(conn):
             })
         elif data == "STATUS":
             response = generate_status_report()
+        elif data == "GET_CONFIG":
+            response = generate_config_report()
         else:
             response = json.dumps({
                 "status": "error",
@@ -82,8 +84,7 @@ def generate_status_report():
             "config_changed_on_disk": config.config_changed_on_disk,
             "config_file_location": str(config.config_file),
             "log_file_location": str(config._config.log_file_path) if config._config else None,
-            "sync_errors": config.sync_errors,
-            "config_schema": get_config_schema()
+            "sync_errors": config.sync_errors
         }
 
         if config._config and not config.in_limbo and not config.config_invalid:
@@ -101,11 +102,7 @@ def generate_status_report():
                         "hash_warnings": config.hash_warnings.get(key, False)
                     })
 
-        try:
-            return json.dumps(status, default=json_serializer, ensure_ascii=False)
-        except TypeError as e:
-            log_error(f"JSON serialization error: {str(e)}")
-            return json.dumps({"status": "error", "message": f"Error serializing status report: {str(e)}"})
+        return json.dumps(status, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         error_message = f"Error generating status report: {str(e)}"
         log_error(error_message)
@@ -135,3 +132,15 @@ def json_serializer(obj: Any) -> Any:
     elif isinstance(obj, list):
         return [json_serializer(v) for v in obj]
     return str(obj)  # Convert any other types to strings
+
+
+def generate_config_report():
+    try:
+        config_data = {
+            "config_schema": get_config_schema()
+        }
+        return json.dumps(config_data, default=json_serializer, ensure_ascii=False)
+    except Exception as e:
+        error_message = f"Error generating config report: {str(e)}"
+        log_error(error_message)
+        return json.dumps({"status": "error", "message": error_message})
