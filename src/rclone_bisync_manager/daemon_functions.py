@@ -18,38 +18,51 @@ from queue import Queue
 
 
 def daemon_main():
+    print("Entering daemon_main()")
     lock_fd, error_message = check_and_create_lock_file()
     if error_message:
         log_error(f"Error starting daemon: {error_message}")
+        print(f"Error starting daemon: {error_message}")
         return
 
     try:
+        print("Daemon started in limbo state")
         log_message("Daemon started in limbo state")
 
+        print("Setting up signal handlers")
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
 
+        print("Starting status server thread")
         status_thread = threading.Thread(
             target=start_status_server, daemon=True)
         status_thread.start()
 
+        print("Starting add-sync request handler thread")
         add_sync_thread = threading.Thread(
             target=handle_add_sync_request, daemon=True)
         add_sync_thread.start()
 
-        # Attempt to load and validate config
+        print("Attempting to load and validate config")
         try:
             config.load_and_validate_config(config.args)
+            print("Configuration loaded and validated successfully")
             log_message(
                 "Configuration loaded and validated successfully. Exiting limbo state.")
             config.in_limbo = False
-            scheduler.schedule_tasks()  # Start the scheduler here
-        except ValueError as e:
-            log_error(f"Configuration error: {str(e)}")
+            print("Scheduling tasks")
+            scheduler.schedule_tasks()
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            print(f"Configuration error: {str(e)}")
+            print(f"Full traceback:\n{error_trace}")
+            log_error(f"Configuration error: {str(e)}\n{error_trace}")
             config.in_limbo = True
             config.config_invalid = True
             config.config_error_message = str(e)
+            return  # Exit the daemon_main function if there's a config error
 
+        print("Entering main daemon loop")
         last_config_check = time.time()
         config_check_interval = 1
 
@@ -65,9 +78,12 @@ def daemon_main():
 
             time.sleep(1)
             if config.shutting_down:
+                print("Shutdown signal received, initiating graceful shutdown")
                 log_message(
                     "Shutdown signal received, initiating graceful shutdown")
                 break
+
+        print("Exiting main daemon loop")
 
         # Graceful shutdown
         log_message('Daemon shutting down...')
@@ -187,18 +203,33 @@ def print_daemon_status():
         client.settimeout(5)  # Set a 5-second timeout
         client.connect(socket_path)
         client.sendall(b"STATUS")
-        status = client.recv(4096).decode()
+
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        response = b''.join(chunks).decode()
         client.close()
 
-        if status.startswith("Error:"):
-            print(f"Error getting daemon status: {status}")
-        else:
-            status_dict = json.loads(status)
+        if not response:
+            print("Error: No response received from daemon.")
+            return
+
+        try:
+            status_dict = json.loads(response)
             if status_dict.get("shutting_down", False):
                 print("Daemon is shutting down. Current status:")
             print(json.dumps(status_dict, ensure_ascii=False, indent=2))
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON: {e}")
+            print("Raw status data:")
+            print(response)
     except Exception as e:
         print(f"Error communicating with daemon: {e}")
+        print("Traceback:")
+        print(traceback.format_exc())
 
 
 def handle_add_sync_request():

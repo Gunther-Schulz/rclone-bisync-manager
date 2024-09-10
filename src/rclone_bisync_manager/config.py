@@ -172,9 +172,11 @@ class ConfigSchema(OptionsValidatorMixin):
 
 class Config:
     def __init__(self):
+        self.default_config_file = os.path.join(os.environ.get(
+            'XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'rclone-bisync-manager', 'config.yaml')
+        self.config_file = self.default_config_file
         self._config = None
         self.args = None
-        self.config_file = None
         self.config_invalid = False
         self.config_error_message = None
         self.LOCK_FILE_PATH = '/tmp/rclone_bisync_manager.lock'
@@ -197,15 +199,13 @@ class Config:
         self.sync_errors = {}
         self.sync_errors_file = os.path.join(
             self.cache_dir, 'sync_errors.json')
-        self.load_sync_state()
         self.last_config_status = None
         self.config_changed_on_disk = False
         self.last_config_mtime = None
         self.in_limbo = True
+        self.load_sync_state()  # Call load_sync_state only once during initialization
 
     def _init_file_paths(self):
-        self.config_file = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser(
-            '~/.config')), 'rclone-bisync-manager', 'config.yaml')
         self.cache_dir = os.path.join(os.environ.get(
             'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
         self.rclone_test_file_name = "RCLONE_TEST"
@@ -216,11 +216,15 @@ class Config:
         self.log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager.log')
 
-    def initialize_config(self, args):
-        self.args = args
+    def set_config_file(self, config_file):
+        self.config_file = os.path.expanduser(config_file)
         self._init_file_paths()
         self._init_logging_paths()
-        self.load_sync_state()
+
+    def initialize_config(self, args):
+        self.args = args
+        if hasattr(args, 'config') and args.config:
+            self.set_config_file(args.config)
         self._update_internal_fields(args)
 
     def load_and_validate_config(self, args):
@@ -259,25 +263,27 @@ class Config:
         config_data['dry_run'] = args.dry_run
 
         # Override sync job options
-        if args.specific_sync_jobs:
+        if hasattr(args, 'specific_sync_jobs') and args.specific_sync_jobs:
             for job_key in args.specific_sync_jobs:
                 if job_key in config_data['sync_jobs']:
                     config_data['sync_jobs'][job_key]['active'] = True
 
-        if args.force_resync:
+        if hasattr(args, 'force_resync') and args.force_resync:
             for job_key in (args.resync or []):
                 if job_key in config_data['sync_jobs']:
                     config_data['sync_jobs'][job_key]['force_resync'] = True
 
-        if args.force_operation:
+        if hasattr(args, 'force_operation') and args.force_operation:
             for job_key in config_data['sync_jobs']:
                 config_data['sync_jobs'][job_key]['force_operation'] = True
 
     def _update_internal_fields(self, args):
         self.console_log = args.console_log
-        self.specific_sync_jobs = args.specific_sync_jobs
-        self.force_operation = args.force_operation
-        self.daemon_mode = args.daemon_mode
+        self.specific_sync_jobs = args.sync_jobs if hasattr(
+            args, 'sync_jobs') else None
+        self.force_operation = args.force_bisync if hasattr(
+            args, 'force_bisync') else False
+        self.daemon_mode = args.command == 'daemon'
 
     def _format_validation_errors(self, e):
         error_messages = []
@@ -318,21 +324,31 @@ class Config:
 
     def load_sync_state(self):
         state_file = os.path.join(self.cache_dir, 'sync_state.json')
-        if os.path.exists(state_file):
-            with open(state_file, 'r') as f:
-                state = json.load(f)
-                sync_state.sync_status = state.get("sync_status", {})
-                sync_state.resync_status = state.get("resync_status", {})
-                sync_state.last_sync_times = {k: datetime.fromisoformat(
-                    v) for k, v in state.get("last_sync_times", {}).items()}
-                sync_state.next_run_times = {k: datetime.fromisoformat(
-                    v) for k, v in state.get("next_run_times", {}).items()}
+        if os.path.exists(state_file) and os.path.getsize(state_file) > 0:
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+                    sync_state.sync_status = state.get("sync_status", {})
+                    sync_state.resync_status = state.get("resync_status", {})
+                    sync_state.last_sync_times = {k: datetime.fromisoformat(
+                        v) for k, v in state.get("last_sync_times", {}).items()}
+                    sync_state.next_run_times = {k: datetime.fromisoformat(
+                        v) for k, v in state.get("next_run_times", {}).items()}
+            except json.JSONDecodeError:
+                log_error(
+                    "Error decoding sync_state.json. Initializing with empty state.")
+                self._initialize_empty_sync_state()
         else:
-            sync_state.sync_status = {}
-            sync_state.resync_status = {}
-            sync_state.last_sync_times = {}
-            sync_state.next_run_times = {}
+            log_message(
+                "sync_state.json is empty or doesn't exist. Initializing with empty state.")
+            self._initialize_empty_sync_state()
         self.load_sync_errors()
+
+    def _initialize_empty_sync_state(self):
+        sync_state.sync_status = {}
+        sync_state.resync_status = {}
+        sync_state.last_sync_times = {}
+        sync_state.next_run_times = {}
 
     def check_config_changed(self):
         current_mtime = os.path.getmtime(self.config_file)
