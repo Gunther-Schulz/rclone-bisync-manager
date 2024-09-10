@@ -20,6 +20,8 @@ import queue
 from queue import Queue
 from threading import Thread, Lock
 from rclone_bisync_manager_tray.config_editor import edit_config
+import sys
+from pystray import MenuItem as item
 
 
 # Global variables
@@ -130,8 +132,8 @@ class DaemonManager:
     def _has_sync_issues(self, status):
         return (
             any(
-                job["sync_status"] not in ["COMPLETED", "NONE", None, "IN_PROGRESS"] or
-                job["resync_status"] not in ["COMPLETED", "NONE", None, "IN_PROGRESS"] or
+                job["sync_status"] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
+                job["resync_status"] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
                 job.get("hash_warnings", False)
                 for job in status.get("sync_jobs", {}).values()
             ) or
@@ -187,7 +189,7 @@ class DaemonManager:
                     # Add other experimental features here in the future
                 ])
 
-        menu_items.append(pystray.MenuItem("Exit", lambda: icon.stop()))
+        menu_items.append(pystray.MenuItem("Exit", exit_tray))
         return menu_items
 
     def _get_failed_menu_items(self, status):
@@ -905,7 +907,10 @@ def run_tray():
     if initial_state == DaemonState.OFFLINE:
         Thread(target=start_daemon, daemon=True).start()
 
-    icon.run()
+    try:
+        icon.run()
+    except KeyboardInterrupt:
+        exit_tray()
 
 
 def update_menu_and_icon():
@@ -1037,6 +1042,20 @@ def edit_config():
     except Exception as e:
         log_message(f"Error editing config: {str(e)}", level=logging.ERROR)
         messagebox.showerror("Error", f"Failed to edit config: {str(e)}")
+
+
+def exit_tray():
+    log_message("Exiting tray application", level=logging.INFO)
+    icon.stop()
+    sys.exit(0)
+
+
+def show_notification(title, message):
+    global icon
+    if icon:
+        icon.notify(message, title)
+    else:
+        log_message(f"Notification: {title} - {message}", level=logging.INFO)
 
 
 def main():

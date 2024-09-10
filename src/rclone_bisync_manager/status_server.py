@@ -97,8 +97,8 @@ def generate_status_report():
                     status["sync_jobs"][key].update({
                         "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
                         "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
-                        "sync_status": job_state["sync_status"],
-                        "resync_status": job_state["resync_status"],
+                        "sync_status": standardize_status(job_state["sync_status"]),
+                        "resync_status": standardize_status(job_state["resync_status"]),
                         "hash_warnings": config.hash_warnings.get(key, False)
                     })
 
@@ -144,3 +144,11 @@ def generate_config_report():
         error_message = f"Error generating config report: {str(e)}"
         log_error(error_message)
         return json.dumps({"status": "error", "message": error_message})
+
+
+def standardize_status(status):
+    if isinstance(status, dict):
+        # If it's a dict, return the most relevant status
+        # Adjust this logic based on your specific requirements
+        return next((v for v in status.values() if v != "NONE"), "NONE")
+    return status if status is not None else "NONE"
