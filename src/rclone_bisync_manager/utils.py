@@ -78,10 +78,10 @@ def handle_filter_changes():
             with open(stored_md5_file, 'w') as f:
                 f.write(current_md5)
             log_message("Filter file has changed. A resync is required.")
-            config._config.force_resync = True
+            for job_key in config._config.sync_jobs:
+                config._config.sync_jobs[job_key].force_resync = True
     else:
-        log_message(f"Exclusion rules file not found: {
-                    config._config.exclusion_rules_file}")
+        log_message(f"Exclusion rules file not found: {config._config.exclusion_rules_file}")
 
 
 def calculate_md5(file_path):
