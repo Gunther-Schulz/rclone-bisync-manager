@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from tkinter import ttk
+from tkinter import messagebox, ttk
 import tkinter
 import pystray
 from PIL import Image
@@ -183,7 +183,7 @@ class DaemonManager:
                 menu_items.extend([
                     pystray.Menu.SEPARATOR,
                     pystray.MenuItem(
-                        "Edit Configuration (experimental)", open_config_editor),
+                        "Edit Configuration (experimental)", edit_config),
                     # Add other experimental features here in the future
                 ])
 
@@ -327,6 +327,12 @@ class DaemonManager:
             return "FAIL"
         else:
             return "RUN"
+
+    def get_config_file_path(self):
+        status = get_daemon_status()
+        if status and isinstance(status, dict):
+            return status.get('config_file_location')
+        return None
 
 
 def get_daemon_status():
@@ -1017,12 +1023,20 @@ def check_crash_log():
     return None
 
 
-def open_config_editor():
-    config_file_path = get_config_file_path()
-    if config_file_path:
-        edit_config(config_file_path)
-    else:
-        log_message("Config file path not found", level=logging.ERROR)
+def edit_config():
+    global daemon_manager
+    try:
+        config_file = daemon_manager.get_config_file_path()
+        if config_file:
+            from rclone_bisync_manager_tray.config_editor import edit_config as config_editor
+            config_editor(config_file)
+            reload_config()
+        else:
+            log_message("Config file path not available", level=logging.ERROR)
+            messagebox.showerror("Error", "Config file path not available")
+    except Exception as e:
+        log_message(f"Error editing config: {str(e)}", level=logging.ERROR)
+        messagebox.showerror("Error", f"Failed to edit config: {str(e)}")
 
 
 def main():
