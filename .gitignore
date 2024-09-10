@@ -7,3 +7,5 @@ src/rclone_bisync_manager.egg-info/
 
 *.pyc
 
+
+test-config.yaml
