@@ -10,6 +10,7 @@ from typing import Any
 from datetime import datetime, date
 
 from rclone_bisync_manager.logging_utils import log_error
+from rclone_bisync_manager.logging_utils import log_message
 
 
 def start_status_server():
@@ -36,7 +37,9 @@ def start_status_server():
 
 def handle_client(conn):
     try:
-        data = conn.recv(1024).decode()
+        data = conn.recv(4096).decode().strip()
+        log_message(f"Received command: {data}")
+
         if data == "RELOAD":
             from rclone_bisync_manager.daemon_functions import reload_config
             success = reload_config()
@@ -59,20 +62,10 @@ def handle_client(conn):
                 "message": "Invalid command"
             })
 
-        # Check response size
-        if len(response) > 1048576:  # 1 MB limit
-            response = json.dumps({
-                "status": "error",
-                "message": "Status report too large. Please check the log file for complete information."
-            })
-
+        log_message(f"Sending response (length: {len(response)})")
         conn.sendall(response.encode())
     except Exception as e:
-        error_response = json.dumps({
-            "status": "error",
-            "message": f"Error: {str(e)}"
-        })
-        conn.sendall(error_response.encode())
+        log_error(f"Error handling client request: {str(e)}")
     finally:
         conn.close()
 
@@ -92,7 +85,7 @@ def generate_status_report():
             "config_file_location": str(config.config_file),
             "log_file_location": str(config._config.log_file_path) if config._config else None,
             "sync_errors": config.sync_errors,
-            # "config_schema": get_config_schema()
+            "config_schema": get_config_schema()
         }
 
         if config._config and not config.in_limbo and not config.config_invalid:

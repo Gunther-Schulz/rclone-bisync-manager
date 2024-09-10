@@ -216,8 +216,17 @@ def check_for_hash_warnings(key):
         if current_position > config._last_log_position:
             with open(log_file_path, 'r') as log_file:
                 log_file.seek(config._last_log_position)
-                new_content = log_file.read()
-                if "WARNING: hash unexpectedly blank despite Fs support" in new_content:
+                chunk_size = 4096
+                warning_detected = False
+                while True:
+                    chunk = log_file.read(chunk_size)
+                    if not chunk:
+                        break
+                    if "WARNING: hash unexpectedly blank despite Fs support" in chunk:
+                        warning_detected = True
+                        break
+
+                if warning_detected:
                     warning_message = f"WARNING: Detected blank hash warnings for {
                         key}. This may indicate issues with Live Photos or other special file types. You should try to resync and if that is not successful you should consider using --ignore-size for future syncs."
                     log_message(warning_message)

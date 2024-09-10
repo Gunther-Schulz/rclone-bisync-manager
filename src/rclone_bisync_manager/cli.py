@@ -10,6 +10,8 @@ def parse_args():
                                help='Print log messages to the console in addition to the log files.')
     global_parser.add_argument('-d', '--dry-run', action='store_true',
                                help='Perform a dry run without making any changes.')
+    global_parser.add_argument('--config', type=str,
+                               help='Specify a custom config file location.')
 
     subparsers = parser.add_subparsers(dest='command', required=True)
 
@@ -36,10 +38,5 @@ def parse_args():
         'sync_jobs', nargs='+', help='Names of the sync jobs to add')
 
     args = parser.parse_args()
-
-    args.force_resync = args.command == 'sync' and args.resync
-    args.specific_sync_jobs = args.sync_jobs if args.command == 'sync' and args.sync_jobs else None
-    args.force_operation = args.command == 'sync' and args.force_bisync
-    args.daemon_mode = args.command == 'daemon'
 
     return args
