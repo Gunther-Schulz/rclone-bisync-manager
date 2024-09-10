@@ -6,7 +6,7 @@ from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import config, sync_state
 
 
-def perform_sync_operations(key):
+def perform_sync_operations(key, force_bisync=False, resync=False):
     value = config._config.sync_jobs[key]
     local_path = os.path.join(config._config.local_base_path, value.local)
     remote_path = f"{value.rclone_remote}:{value.remote}"
@@ -17,20 +17,20 @@ def perform_sync_operations(key):
     ensure_local_directory(local_path)
 
     log_message(f"Performing sync operation for {key}. Force bisync: {
-                value.force_operation}, Force resync: {value.force_resync}, Dry run: {config._config.dry_run}")
+                force_bisync}, Force resync: {resync}, Dry run: {config._config.dry_run}")
 
     status = read_status(key)
     log_message(f"Current resync status for {key}: {status['resync_status']}")
 
-    if value.force_resync or status["resync_status"] in ["NONE", "IN_PROGRESS"]:
+    if resync or status["resync_status"] in ["NONE", "IN_PROGRESS"]:
         log_message(f"Initiating resync for {key}. Force resync: {
-                    value.force_resync}, Resync status: {status['resync_status']}")
+                    resync}, Resync status: {status['resync_status']}")
         write_status(key, {"resync_status": "IN_PROGRESS"})
         resync_result = resync(key, remote_path, local_path)
 
         if resync_result == "COMPLETED":
             log_message(f"Resync completed for {key}, proceeding with bisync.")
-            bisync_result = bisync(key, remote_path, local_path)
+            bisync_result = bisync(key, remote_path, local_path, force_bisync)
             write_status(key, {"sync_status": bisync_result,
                          "resync_status": "COMPLETED"})
         else:
@@ -41,8 +41,8 @@ def perform_sync_operations(key):
             return
     else:
         log_message(f"Proceeding with bisync for {
-                    key}. Force bisync: {value.force_operation}")
-        bisync_result = bisync(key, remote_path, local_path)
+                    key}. Force bisync: {force_bisync}")
+        bisync_result = bisync(key, remote_path, local_path, force_bisync)
         write_status(key, {"sync_status": bisync_result})
 
     sync_state.update_job_state(key, sync_status=bisync_result if 'bisync_result' in locals() else "FAILED",
@@ -52,10 +52,10 @@ def perform_sync_operations(key):
     config.save_sync_state()
 
 
-def bisync(key, remote_path, local_path):
+def bisync(key, remote_path, local_path, force_bisync):
     log_message(f"Bisync started for {local_path} at {datetime.now()}" +
                 (" - Performing a dry run" if config._config.dry_run else "") +
-                (" - Force bisync enabled" if config._config.sync_jobs[key].force_operation else ""))
+                (f" - Force bisync {'enabled' if force_bisync else 'disabled'}"))
 
     # Set the initial log position
     config._last_log_position = get_log_file_position()
@@ -63,6 +63,9 @@ def bisync(key, remote_path, local_path):
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
     rclone_args.extend(get_rclone_args(
         config._config.bisync_options, 'bisync', key))
+
+    if force_bisync:
+        rclone_args.append('--force')
 
     result = run_rclone_command(rclone_args)
 

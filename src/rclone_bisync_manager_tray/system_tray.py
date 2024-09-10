@@ -373,7 +373,10 @@ def get_daemon_status():
 
 def create_sync_now_handler(job_key, force_bisync=False, resync=False):
     def handler(item):
-        add_to_sync_queue(job_key, force_bisync, resync)
+        success = add_to_sync_queue(job_key, force_bisync, resync)
+        if not success:
+            show_notification("Sync Error", f"Failed to add sync job '{
+                              job_key}' to queue. Check the logs for more information.")
     return handler
 
 
@@ -518,9 +521,14 @@ def add_to_sync_queue(job_key, force_bisync=False, resync=False):
         client.close()
         log_message(f"Add to sync queue response: {
                     response}", level=logging.INFO)
+
+        # Trigger an immediate update of the menu and icon
+        update_queue.put(True)
+        return True
     except Exception as e:
         log_message(f"Error adding job to sync queue: {
                     str(e)}", level=logging.ERROR)
+        return False
 
 
 def determine_arrow_color(color, icon_text):
