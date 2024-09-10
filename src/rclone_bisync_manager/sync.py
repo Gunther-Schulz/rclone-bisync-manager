@@ -23,26 +23,26 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False):
 
     if force_resync or status["resync_status"] in ["NONE", "IN_PROGRESS"]:
         log_message(f"Initiating resync for {key}. Force resync: {force_resync}, Resync status: {status['resync_status']}")
-        write_status(key, {"resync_status": "IN_PROGRESS"})
+        write_status(key, resync_status="IN_PROGRESS")
         resync_result = resync(key, remote_path, local_path)
+        write_status(key, resync_status=resync_result)
 
         if resync_result == "COMPLETED":
             log_message(f"Resync completed for {key}, proceeding with bisync.")
             bisync_result = bisync(key, remote_path, local_path, force_bisync)
-            write_status(key, {"sync_status": bisync_result, "resync_status": "COMPLETED"})
+            write_status(key, sync_status=bisync_result)
         else:
-            write_status(key, {"sync_status": "FAILED", "resync_status": resync_result})
             log_error(f"Resync failed for {key}. Manual intervention or force resync required.")
             return
     else:
         log_message(f"Proceeding with bisync for {key}. Force bisync: {force_bisync}")
         bisync_result = bisync(key, remote_path, local_path, force_bisync)
-        write_status(key, {"sync_status": bisync_result})
+        write_status(key, sync_status=bisync_result)
 
-    sync_state.update_job_state(key, sync_status=bisync_result if 'bisync_result' in locals() else "FAILED",
-                                resync_status="COMPLETED" if 'resync_result' in locals(
-    ) and resync_result == "COMPLETED" else status["resync_status"],
-        last_sync=datetime.now())
+    sync_state.update_job_state(key, 
+                                sync_status=bisync_result if 'bisync_result' in locals() else status["sync_status"],
+                                resync_status=resync_result if 'resync_result' in locals() else status["resync_status"],
+                                last_sync=datetime.now())
     config.save_sync_state()
 
 

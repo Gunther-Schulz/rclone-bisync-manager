@@ -22,6 +22,7 @@ from threading import Thread, Lock
 from rclone_bisync_manager_tray.config_editor import edit_config
 import sys
 from pystray import MenuItem as item
+# os.environ['PYSTRAY_BACKEND'] = 'gtk'  # or 'qt'
 
 
 # Global variables
@@ -40,6 +41,9 @@ daemon_manager = None
 # At the top of the file, after imports
 debug = False
 args = None
+
+# Add this global variable at the top of the file
+status_window = None
 
 
 def log_message(message, level=logging.INFO):
@@ -174,6 +178,8 @@ class DaemonManager:
         daemon_status = get_daemon_status()
         if daemon_status is None:
             menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+        elif current_state == DaemonState.SHUTTING_DOWN:
+            menu_items.append(pystray.MenuItem("Daemon is down...", lambda: None, enabled=False))
         else:
             menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
 
@@ -189,7 +195,7 @@ class DaemonManager:
                     # Add other experimental features here in the future
                 ])
 
-        menu_items.append(pystray.MenuItem("Exit", exit_tray))
+        menu_items.append(pystray.MenuItem("Exit Tray", exit_tray))
         return menu_items
 
     def _get_failed_menu_items(self, status):
@@ -611,23 +617,31 @@ def determine_text_color(background_color):
 
 
 def show_status_window():
-    global daemon_manager
+    global daemon_manager, status_window
+
+    # Check if the window is already open
+    if status_window is not None and status_window.winfo_exists():
+        # If it exists, just focus on it
+        status_window.lift()
+        status_window.focus_force()
+        return
+
     status = get_daemon_status()
     current_state = daemon_manager.get_current_state(status)
 
-    window = tkinter.Tk()
-    window.title("RClone BiSync Manager Status")
-    window.geometry("400x300")
+    status_window = tkinter.Tk()
+    status_window.title("RClone BiSync Manager Status")
+    status_window.geometry("400x300")
 
     style = ttk.Style()
     style.theme_use('clam')
 
     if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
-        ttk.Label(window, text="⚠️ Daemon is not running",
+        ttk.Label(status_window, text="⚠️ Daemon is not running",
                   foreground="red", font=("", 14, "bold")).pack(pady=(20, 10))
 
         if daemon_manager.daemon_start_error:
-            error_frame = ttk.LabelFrame(window, text="Error Details")
+            error_frame = ttk.LabelFrame(status_window, text="Error Details")
             error_frame.pack(pady=10, padx=10, fill='x')
             error_text = tkinter.Text(
                 error_frame, wrap=tkinter.WORD, height=25)
@@ -635,10 +649,10 @@ def show_status_window():
             error_text.insert(tkinter.END, daemon_manager.daemon_start_error)
             error_text.config(state=tkinter.DISABLED)
 
-        ttk.Button(window, text="Start Daemon", command=lambda: [
-                   start_daemon(), window.destroy()]).pack(pady=20)
+        ttk.Button(status_window, text="Start Daemon", command=lambda: [
+                   start_daemon(), status_window.destroy()]).pack(pady=20)
     else:
-        notebook = ttk.Notebook(window)
+        notebook = ttk.Notebook(status_window)
         notebook.pack(expand=True, fill='both')
 
         general_frame = ttk.Frame(notebook)
@@ -757,7 +771,14 @@ def show_status_window():
             error_text.insert(tkinter.END, error_message)
             error_text.config(state=tkinter.DISABLED)
 
-    window.mainloop()
+    # Add this at the end of the function
+    def on_close():
+        global status_window
+        status_window.destroy()
+        status_window = None
+
+    status_window.protocol("WM_DELETE_WINDOW", on_close)
+    status_window.mainloop()
 
 
 def open_config_file():
