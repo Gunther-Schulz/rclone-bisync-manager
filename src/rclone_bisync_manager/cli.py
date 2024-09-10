@@ -39,9 +39,4 @@ def parse_args():
 
     args = parser.parse_args()
 
-    args.force_resync = args.command == 'sync' and args.resync
-    args.specific_sync_jobs = args.sync_jobs if args.command == 'sync' and args.sync_jobs else None
-    args.force_operation = args.command == 'sync' and args.force_bisync
-    args.daemon_mode = args.command == 'daemon'
-
     return args

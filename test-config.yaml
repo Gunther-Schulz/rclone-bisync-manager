@@ -67,26 +67,36 @@ sync_jobs:
   #   # schedule: "* * * * *"
   #   schedule: "0 0 * * *" # Daily at midnight
   #   # schedule: "*/30 * * * *"
-  pbs-public:
-    local: "Öffentlich Planungsbüro Schulz"
-    rclone_remote: pbs
-    remote: "Öffentlich Planungsbüro Schulz"
-    schedule: "*/30 * * * *"
+  # pbs-public:
+  #   local: "Öffentlich Planungsbüro Schulz"
+  #   rclone_remote: pbs
+  #   remote: "Öffentlich Planungsbüro Schulz"
+  #   schedule: "0 0 * * *" # Daily at midnight
+  #   # schedule: "*/30 * * * *"
+  a:
+    local: v # Local directory name
+    rclone_remote: pbs # Name of the rclone remote to use
+    remote: users/pb-schulz/v # Path on the remote storage
+    schedule: "0 0 * * *" # Daily at midnight
+    # schedule: "*/30 * * * *"
   b:
     local: v # Local directory name
     rclone_remote: pbs # Name of the rclone remote to use
     remote: users/pb-schulz/v # Path on the remote storage
-    schedule: "*/30 * * * *"
+    schedule: "0 0 * * *" # Daily at midnight
+    # schedule: "*/30 * * * *"
   c:
     local: v # Local directory name
     rclone_remote: pbs # Name of the rclone remote to use
     remote: users/pb-schulz/v # Path on the remote storage
-    schedule: "*/30 * * * *"
+    schedule: "0 0 * * *" # Daily at midnight
+    # schedule: "*/30 * * * *"
   d:
     local: v # Local directory name
     rclone_remote: pbs # Name of the rclone remote to use
     remote: users/pb-schulz/v # Path on the remote storage
-    schedule: "*/30 * * * *"
+    schedule: "0 0 * * *" # Daily at midnight
+    # schedule: "*/30 * * * *"
 
 # New customizable options
 rclone_options:

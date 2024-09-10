@@ -130,8 +130,8 @@ class DaemonManager:
     def _has_sync_issues(self, status):
         return (
             any(
-                job["sync_status"] not in ["COMPLETED", "NONE", None] or
-                job["resync_status"] not in ["COMPLETED", "NONE", None] or
+                job["sync_status"] not in ["COMPLETED", "NONE", None, "IN_PROGRESS"] or
+                job["resync_status"] not in ["COMPLETED", "NONE", None, "IN_PROGRESS"] or
                 job.get("hash_warnings", False)
                 for job in status.get("sync_jobs", {}).values()
             ) or
@@ -333,7 +333,15 @@ def get_daemon_status():
         client.settimeout(5)  # Set a timeout of 5 seconds
         client.connect(socket_path)
         client.sendall(b"STATUS")
-        response = client.recv(4096).decode()
+
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        response = b''.join(chunks).decode()
+
         status = json.loads(response)
         client.close()
 
@@ -341,29 +349,22 @@ def get_daemon_status():
             log_message("Daemon status changed", level=logging.INFO)
             log_message(f"New status: {json.dumps(status)[
                         :100]}...", level=logging.DEBUG)
-            last_status = status
 
+        last_status = status
+        last_offline_log_time = 0
         return status
-    except socket.error as e:
-        current_time = time.time()
-        if current_time - last_offline_log_time > 60:  # Log offline status once per minute
-            log_message("Daemon is offline", level=logging.INFO)
-            last_offline_log_time = current_time
-        last_status = None
+    except socket.timeout:
+        log_message("Timeout while getting daemon status",
+                    level=logging.WARNING)
         return None
     except json.JSONDecodeError as e:
-        log_message(f"JSON decode error when getting daemon status: {
-                    e}", level=logging.ERROR)
-        log_message(f"Received data: {response}", level=logging.DEBUG)
-        last_status = None
-        return {"status": "error", "message": f"JSON decode error: {str(e)}"}
+        log_message(f"Error decoding daemon status: {
+                    str(e)}", level=logging.ERROR)
+        return None
     except Exception as e:
-        log_message(f"Unexpected error when getting daemon status: {
-                    e}", level=logging.ERROR)
-        log_message(f"Error details: {
-                    traceback.format_exc()}", level=logging.DEBUG)
-        last_status = None
-        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+        log_message(f"Error communicating with daemon: {
+                    str(e)}", level=logging.ERROR)
+        return None
 
 
 def create_sync_now_handler(job_key):
@@ -500,7 +501,15 @@ def add_to_sync_queue(job_key):
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
         client.sendall(json.dumps([job_key]).encode())
-        response = client.recv(1024).decode()
+
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        response = b''.join(chunks).decode()
+
         client.close()
         log_message(f"Add to sync queue response: {response}")
     except Exception as e:

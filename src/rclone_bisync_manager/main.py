@@ -20,40 +20,50 @@ import json
 def main():
     args = parse_args()
 
+    if args.config:
+        config.set_config_file(args.config)
+    else:
+        config.set_config_file(config.default_config_file)
+
+    print(f"Using config file: {config.config_file}")
+
+    try:
+        config.load_and_validate_config(args)
+        print(f"Configuration loaded successfully from: {config.config_file}")
+    except Exception as e:
+        print(f"Error loading configuration: {str(e)}")
+        sys.exit(1)
+
     if args.command == 'daemon':
         if args.action == 'start':
             try:
-                # Initialize config without validation
+                print("Initializing daemon...")
                 config.initialize_config(args)
-                # Add this line to set the config file path
-                config.config_file = args.config if args.config else config.config_file
-                set_config(config)  # Set the config for logging_utils
+                set_config(config)
                 ensure_log_file_path()
                 setup_loggers(args.console_log)
                 log_config_file_location(config.config_file)
                 log_message("Daemon initialization started")
-            except Exception as e:
-                print(f"Error initializing configuration: {str(e)}")
-                sys.exit(1)
-
-            check_tools()
-            ensure_rclone_dir()
-            handle_filter_changes()
-
-            # Log home directory
-            home_dir = os.environ.get('HOME')
-            if not home_dir:
-                log_error("Unable to determine home directory")
-                sys.exit(1)
-
-            lock_fd, error_message = check_and_create_lock_file()
-            if error_message:
-                print(f"Error: {error_message}")
-                if "Daemon is already running" in error_message:
+                if hasattr(config, '_config') and config._config is not None and hasattr(config._config, 'log_file_path'):
+                    print(f"Using log file: {config._config.log_file_path}")
+                else:
                     print(
-                        "Use 'daemon status' to check its status or 'daemon stop' to stop it.")
-                sys.exit(1)
-            try:
+                        "Warning: Log file path not set or configuration not loaded properly.")
+                print("Checking tools and directories...")
+                check_tools()
+                ensure_rclone_dir()
+                handle_filter_changes()
+
+                home_dir = os.environ.get('HOME')
+                if not home_dir:
+                    raise ValueError("Unable to determine home directory")
+
+                print("Creating lock file...")
+                lock_fd, error_message = check_and_create_lock_file()
+                if error_message:
+                    raise ValueError(f"Error: {error_message}")
+
+                print("Starting daemon process...")
                 log_message("Starting daemon in limbo state...")
                 with daemon.DaemonContext(
                     working_directory='/',
@@ -66,6 +76,7 @@ def main():
                     stderr=sys.stderr
                 ):
                     config.args = args
+                    print("Daemon process started. Calling daemon_main()...")
                     daemon_main()
             except Exception as e:
                 error_trace = traceback.format_exc()
@@ -87,7 +98,13 @@ def main():
                 client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 client.connect(socket_path)
                 client.sendall(b"RELOAD")
-                response = client.recv(1024).decode()
+                chunks = []
+                while True:
+                    chunk = client.recv(4096)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                response = b''.join(chunks).decode()
                 client.close()
                 print(response)
             except Exception as e:
@@ -130,7 +147,7 @@ def main():
             lock_fd.close()
             os.unlink(config.LOCK_FILE_PATH)
     elif args.command == 'add-sync':
-        add_sync_jobs(args)
+        add_sync_jobs(args.sync_jobs)
 
 
 def add_sync_jobs(sync_jobs):

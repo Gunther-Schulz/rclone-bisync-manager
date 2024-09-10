@@ -2,7 +2,7 @@
 
 ## Known Issues
 
-- [ ] More than 3 sync_jobs will cause `JSON decode error: Expecting ',' delimiter: line 1 column 4089 (char 4088)` returned by the status command.
+- [ ] More than 3 sync_jobs will cause `JSON decode error: Expecting ',' delimiter: line 1 column 4089 (char 4088)` returned by the status command. - fixed by removing config objects from the status
 - [ ] The tray displays "Daemon Offline" even when the daemon is running in the state described in the last point above.
 - [ ] Stopping the dameon does not reliably work during tray status RUNNING
 - [ ] The tray does not reliably display the RUNNING status. It's status window does however.
