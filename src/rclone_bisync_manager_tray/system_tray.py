@@ -257,7 +257,9 @@ class DaemonManager:
                         pystray.MenuItem(
                             "⚡ Sync Now", create_sync_now_handler(job_key)),
                         pystray.MenuItem(
-                            "🔄 Force Sync Now", create_sync_now_handler(job_key, force_bisync=True)),
+                            "⚡ Force Sync Now", create_sync_now_handler(job_key, force_bisync=True)),
+                        pystray.MenuItem(
+                            "⚡ Resync + Sync Now", create_sync_now_handler(job_key, resync=True)),
                         pystray.MenuItem(
                             f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
                         pystray.MenuItem(
@@ -369,9 +371,9 @@ def get_daemon_status():
         return None
 
 
-def create_sync_now_handler(job_key, force_bisync=False):
+def create_sync_now_handler(job_key, force_bisync=False, resync=False):
     def handler(item):
-        add_to_sync_queue(job_key, force_bisync)
+        add_to_sync_queue(job_key, force_bisync, resync)
     return handler
 
 
@@ -497,13 +499,13 @@ def reload_config():
         return False
 
 
-def add_to_sync_queue(job_key, force_bisync=False):
+def add_to_sync_queue(job_key, force_bisync=False, resync=False):
     socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
         client.sendall(json.dumps(
-            {"job_key": job_key, "force_bisync": force_bisync}).encode())
+            {"job_key": job_key, "force_bisync": force_bisync, "resync": resync}).encode())
 
         chunks = []
         while True:

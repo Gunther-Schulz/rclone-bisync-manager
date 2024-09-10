@@ -250,11 +250,14 @@ def handle_add_sync_request():
             sync_request = json.loads(data)
             job = sync_request['job_key']
             force_bisync = sync_request.get('force_bisync', False)
+            resync = sync_request.get('resync', False)
 
             if job in config._config.sync_jobs:
-                add_to_sync_queue(job, force_bisync)
-                log_message(f"Added sync job '{
-                            job}' to queue (Force bisync: {force_bisync})")
+                config._config.sync_jobs[job].force_operation = force_bisync
+                config._config.sync_jobs[job].force_resync = resync
+                add_to_sync_queue(job)
+                log_message(f"Added sync job '{job}' to queue (Force bisync: {
+                            force_bisync}, Resync: {resync})")
             else:
                 log_error(f"Sync job '{job}' not found in configuration")
             conn.sendall(b"OK")
