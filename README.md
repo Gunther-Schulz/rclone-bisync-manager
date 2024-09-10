@@ -6,6 +6,10 @@ RClone BiSync Manager is a daemon-based solution for automated, bidirectional sy
 
 **_WARNING: This is still under development and not ready for production use._**
 
+## Notes
+
+In Gnome, for the tray to work, you need to have the following extension installed: `AppIndicator and KStatusNotifierItem Support`
+
 ## Features
 
 RClone BiSync Manager offers a comprehensive set of features, including:
