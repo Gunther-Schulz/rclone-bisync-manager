@@ -22,6 +22,7 @@ from threading import Thread, Lock
 from rclone_bisync_manager_tray.config_editor import edit_config
 import sys
 from pystray import MenuItem as item
+# os.environ['PYSTRAY_BACKEND'] = 'gtk'  # or 'qt'
 
 
 # Global variables
@@ -177,6 +178,8 @@ class DaemonManager:
         daemon_status = get_daemon_status()
         if daemon_status is None:
             menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+        elif current_state == DaemonState.SHUTTING_DOWN:
+            menu_items.append(pystray.MenuItem("Daemon is down...", lambda: None, enabled=False))
         else:
             menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
 
@@ -192,7 +195,7 @@ class DaemonManager:
                     # Add other experimental features here in the future
                 ])
 
-        menu_items.append(pystray.MenuItem("Exit", exit_tray))
+        menu_items.append(pystray.MenuItem("Exit Tray", exit_tray))
         return menu_items
 
     def _get_failed_menu_items(self, status):
