@@ -257,6 +257,10 @@ class DaemonManager:
                         pystray.MenuItem(
                             "⚡ Sync Now", create_sync_now_handler(job_key)),
                         pystray.MenuItem(
+                            "⚡ Force Sync Now", create_sync_now_handler(job_key, force_bisync=True)),
+                        pystray.MenuItem(
+                            "⚡ Resync + Sync Now", create_sync_now_handler(job_key, resync=True)),
+                        pystray.MenuItem(
                             f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
                         pystray.MenuItem(
                             f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
@@ -367,9 +371,12 @@ def get_daemon_status():
         return None
 
 
-def create_sync_now_handler(job_key):
+def create_sync_now_handler(job_key, force_bisync=False, resync=False):
     def handler(item):
-        add_to_sync_queue(job_key)
+        success = add_to_sync_queue(job_key, force_bisync, resync)
+        if not success:
+            show_notification("Sync Error", f"Failed to add sync job '{
+                              job_key}' to queue. Check the logs for more information.")
     return handler
 
 
@@ -495,12 +502,13 @@ def reload_config():
         return False
 
 
-def add_to_sync_queue(job_key):
+def add_to_sync_queue(job_key, force_bisync=False, resync=False):
     socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(socket_path)
-        client.sendall(json.dumps([job_key]).encode())
+        client.sendall(json.dumps(
+            {"job_key": job_key, "force_bisync": force_bisync, "resync": resync}).encode())
 
         chunks = []
         while True:
@@ -511,10 +519,16 @@ def add_to_sync_queue(job_key):
         response = b''.join(chunks).decode()
 
         client.close()
-        log_message(f"Add to sync queue response: {response}")
+        log_message(f"Add to sync queue response: {
+                    response}", level=logging.INFO)
+
+        # Trigger an immediate update of the menu and icon
+        update_queue.put(True)
+        return True
     except Exception as e:
         log_message(f"Error adding job to sync queue: {
                     str(e)}", level=logging.ERROR)
+        return False
 
 
 def determine_arrow_color(color, icon_text):
@@ -941,21 +955,18 @@ def update_menu_and_icon():
 def check_status_and_update():
     global daemon_manager
     last_status = None
-    last_state = None
     while True:
         try:
             crash_message = check_crash_log()
             if crash_message:
                 current_state = DaemonState.FAILED
-                if current_state != last_state or daemon_manager.daemon_start_error != crash_message:
+                if daemon_manager.update_state(current_state) or daemon_manager.daemon_start_error != crash_message:
                     daemon_manager.daemon_start_error = crash_message
-                    daemon_manager.update_state(current_state)
                     update_queue.put(True)
                     log_message(f"Daemon crashed. Current state: {
                                 current_state.name}", level=logging.ERROR)
                     log_message(f"Crash message: {
                                 crash_message}", level=logging.ERROR)
-                    last_state = current_state
                 continue
 
             current_status = get_daemon_status()
@@ -973,7 +984,6 @@ def check_status_and_update():
                 update_queue.put(True)
 
             last_status = current_status
-            last_state = current_state
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {

@@ -233,8 +233,16 @@ class Config:
             raise FileNotFoundError(
                 f"Configuration file not found: {self.config_file}")
 
-        with open(self.config_file, 'r') as f:
-            config_data = yaml.safe_load(f)
+        try:
+            with open(self.config_file, 'r') as f:
+                config_data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            error_message = f"Error parsing YAML in configuration file: {
+                str(e)}"
+            log_error(error_message)
+            self.config_invalid = True
+            self.config_error_message = error_message
+            raise ValueError(error_message)
 
         # Merge CLI arguments into config_data
         self._merge_cli_args(config_data, args)
@@ -249,7 +257,6 @@ class Config:
             self.config_error_message = None
         except ValidationError as e:
             error_message = self._format_validation_errors(e)
-
             log_error(f"Configuration on disk is invalid: {error_message}")
             self.config_invalid = True
             self.config_error_message = error_message
