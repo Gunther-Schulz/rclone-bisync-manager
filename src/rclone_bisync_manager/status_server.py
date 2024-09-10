@@ -38,7 +38,6 @@ def start_status_server():
 def handle_client(conn):
     try:
         data = conn.recv(4096).decode().strip()
-        log_message(f"Received command: {data}")
 
         if data == "RELOAD":
             from rclone_bisync_manager.daemon_functions import reload_config
@@ -56,13 +55,14 @@ def handle_client(conn):
             })
         elif data == "STATUS":
             response = generate_status_report()
+        elif data == "GET_CONFIG":
+            response = generate_config_report()
         else:
             response = json.dumps({
                 "status": "error",
                 "message": "Invalid command"
             })
 
-        log_message(f"Sending response (length: {len(response)})")
         conn.sendall(response.encode())
     except Exception as e:
         log_error(f"Error handling client request: {str(e)}")
@@ -84,8 +84,7 @@ def generate_status_report():
             "config_changed_on_disk": config.config_changed_on_disk,
             "config_file_location": str(config.config_file),
             "log_file_location": str(config._config.log_file_path) if config._config else None,
-            "sync_errors": config.sync_errors,
-            "config_schema": get_config_schema()
+            "sync_errors": config.sync_errors
         }
 
         if config._config and not config.in_limbo and not config.config_invalid:
@@ -133,3 +132,15 @@ def json_serializer(obj: Any) -> Any:
     elif isinstance(obj, list):
         return [json_serializer(v) for v in obj]
     return str(obj)  # Convert any other types to strings
+
+
+def generate_config_report():
+    try:
+        config_data = {
+            "config_schema": get_config_schema()
+        }
+        return json.dumps(config_data, default=json_serializer, ensure_ascii=False)
+    except Exception as e:
+        error_message = f"Error generating config report: {str(e)}"
+        log_error(error_message)
+        return json.dumps({"status": "error", "message": error_message})

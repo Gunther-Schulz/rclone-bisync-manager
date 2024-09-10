@@ -136,7 +136,7 @@ def process_sync_queue():
     while not config.sync_queue.empty() and not config.shutting_down:
         with config.sync_lock:
             if config.currently_syncing is None:
-                key = config.sync_queue.get_nowait()
+                key, force_bisync, resync = config.sync_queue.get_nowait()
                 config.currently_syncing = key
                 config.queued_paths.remove(key)
                 config.current_sync_start_time = datetime.now()
@@ -144,7 +144,7 @@ def process_sync_queue():
                 break
 
         if key in config._config.sync_jobs and not config.shutting_down:
-            perform_sync_operations(key)
+            perform_sync_operations(key, force_bisync, resync)
 
         with config.sync_lock:
             config.currently_syncing = None
@@ -170,9 +170,11 @@ def check_scheduled_tasks():
             break
 
 
-def add_to_sync_queue(key):
+def add_to_sync_queue(key, force_bisync=False, resync=False):
     if not config.shutting_down and key not in config.queued_paths and key != config.currently_syncing:
-        config.sync_queue.put_nowait(key)
+        config._config.sync_jobs[key].force_operation = force_bisync
+        config._config.sync_jobs[key].force_resync = resync
+        config.sync_queue.put_nowait((key, force_bisync, resync))
         config.queued_paths.add(key)
 
 
@@ -246,14 +248,22 @@ def handle_add_sync_request():
         try:
             conn, addr = server.accept()
             data = conn.recv(1024).decode()
-            sync_jobs = json.loads(data)
-            for job in sync_jobs:
-                if job in config._config.sync_jobs:
-                    add_to_sync_queue(job)
-                    log_message(f"Added sync job '{job}' to queue")
-                else:
-                    log_error(f"Sync job '{job}' not found in configuration")
-            conn.sendall(b"OK")
+            sync_request = json.loads(data)
+            job = sync_request['job_key']
+            force_bisync = sync_request.get('force_bisync', False)
+            resync = sync_request.get('resync', False)
+
+            if job in config._config.sync_jobs:
+                config._config.sync_jobs[job].force_operation = force_bisync
+                config._config.sync_jobs[job].force_resync = resync
+                add_to_sync_queue(
+                    job, force_bisync=force_bisync, resync=resync)
+                log_message(f"Added sync job '{job}' to queue (Force bisync: {
+                            force_bisync}, Resync: {resync})")
+                conn.sendall(b"OK")
+            else:
+                log_error(f"Sync job '{job}' not found in configuration")
+                conn.sendall(b"ERROR: Job not found")
             conn.close()
         except socket.timeout:
             continue
