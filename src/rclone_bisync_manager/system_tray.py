@@ -6,17 +6,15 @@ import time
 import subprocess
 import os
 import tempfile
-from dataclasses import dataclass
 from io import BytesIO
 from cairosvg import svg2png
 import argparse
 import logging
 import traceback
-import queue
 from queue import Queue
 from threading import Thread, Lock
 from rclone_bisync_manager.runtime_paths import clear_crash_log, read_crash_log
-from rclone_bisync_manager.logging_utils import log_message, log_error, set_config, setup_loggers
+from rclone_bisync_manager.logging_utils import log_message, set_config, setup_loggers
 from rclone_bisync_manager.daemon_client import (
     request_status,
     request_stop,
@@ -47,19 +45,16 @@ except (ImportError, ValueError):
 
 
 # Global variables
-update_queue = queue.Queue()
+update_queue = Queue()
 last_status = None
-last_offline_log_time = 0
+_last_status_lock = Lock()
 _offline_miss_count = 0
 
-global daemon_manager
 daemon_manager = None
 
 # Minimum time (seconds) to show syncing icon so quick syncs still give visible feedback
 MIN_SYNC_FEEDBACK_SECONDS = 2.0
 
-# At the top of the file, after imports
-debug = False
 args = None
 
 _indicator = None
@@ -69,27 +64,18 @@ _icon_index = 0
 _status_window_gtk = None
 
 
-@dataclass
-class StateInfo:
-    color: tuple
-    menu_items: list
-    icon_text: str
-
-
 class Colors:
     YELLOW = (255, 235, 59)
     GREEN = (76, 175, 80)
     BLUE = (33, 150, 243)
     GRAY = (158, 158, 158)
     PURPLE = (156, 39, 176)
-    ORANGE = (255, 152, 0)
     RED = (244, 67, 54)
     AMBER = (255, 193, 7)
 
 
 class DaemonManager:
     def __init__(self):
-        self.current_state = DaemonState.INITIAL
         self.daemon_start_error = None
         self.state_lock = Lock()
         # Show syncing icon until this monotonic time (so quick syncs always give visible feedback)
@@ -117,26 +103,17 @@ class DaemonManager:
                         self.sync_feedback_until = max(self.sync_feedback_until, now + MIN_SYNC_FEEDBACK_SECONDS)
                     self._last_sync_timestamps[job_key] = last_sync_str
 
-    def get_effective_state_for_icon(self):
-        """State to use for the tray icon.
-        Show SYNCING (blue) for min duration after a *successful* sync; never override error states with blue.
+    def get_effective_state_for_display(self, status):
+        """State to use for the tray icon. Derived from status at paint time (no cached current_state).
+        Show SYNCING (blue) for min duration after a sync; never override error states with blue.
         """
+        state = self.get_current_state(status)
         with self.state_lock:
             now = time.monotonic()
             in_feedback = self.sync_feedback_until > 0 and now < self.sync_feedback_until
-            # Don't show blue override when we're in an error/attention state (user should see red/amber immediately)
-            if in_feedback and self.current_state == DaemonState.RUNNING:
+            if in_feedback and state == DaemonState.RUNNING:
                 return DaemonState.SYNCING
-            return self.current_state
-
-    def update_state(self, new_state):
-        with self.state_lock:
-            if new_state != self.current_state:
-                log_message(f"State changing from {self.current_state} to {
-                            new_state}", level=logging.INFO)
-                self.current_state = new_state
-                return True
-        return False
+        return state
 
     def get_current_state(self, status):
         state = status_to_display_state(status, self.daemon_start_error)
@@ -173,8 +150,7 @@ class DaemonManager:
         spec.append({"type": "item", "label": "Show Status Window", "callback": show_status_window, "enabled": current_state != DaemonState.INITIAL})
         spec.append({"type": "separator"})
 
-        daemon_status = get_daemon_status()
-        if daemon_status is None:
+        if status is None:
             spec.append({"type": "item", "label": "Start Daemon", "callback": start_daemon, "enabled": True})
         elif current_state == DaemonState.SHUTTING_DOWN:
             spec.append({"type": "item", "label": "Daemon is down...", "callback": None, "enabled": False})
@@ -254,10 +230,6 @@ class DaemonManager:
         return items
 
 
-    def get_icon_color(self, status):
-        current_state = self.get_current_state(status)
-        return self._icon_color_for_state(current_state)
-
     def _icon_color_for_state(self, state):
         """Map DaemonState to tray icon color.
         Intended behavior:
@@ -294,39 +266,6 @@ class DaemonManager:
         else:
             return Colors.GRAY
 
-    def get_icon_text(self, status):
-        current_state = self.get_current_state(status)
-        return self._icon_text_for_state(current_state)
-
-    def _icon_text_for_state(self, state):
-        """Map DaemonState to icon text. Used so icon can use cached state without re-fetching."""
-        if state == DaemonState.INITIAL:
-            return "INIT"
-        elif state == DaemonState.STARTING:
-            return "START"
-        elif state == DaemonState.SYNCING:
-            return "SYNC"
-        elif state == DaemonState.CONFIG_INVALID:
-            return "CFG!"
-        elif state == DaemonState.CONFIG_CHANGED:
-            return "CFG?"
-        elif state == DaemonState.SYNC_ISSUES:
-            return "WARN"
-        elif state == DaemonState.LIMBO:
-            return "LIMBO"
-        elif state == DaemonState.SHUTTING_DOWN:
-            return "STOP"
-        elif state == DaemonState.FAILED:
-            return "FAIL"
-        else:
-            return "RUN"
-
-    def get_config_file_path(self):
-        status = get_daemon_status()
-        if status and isinstance(status, dict):
-            return status.get(sp.CONFIG_FILE_LOCATION)
-        return None
-
 
 def _build_gtk_menu(spec):
     """Build Gtk.Menu from menu spec list (used by AppIndicator backend)."""
@@ -357,19 +296,20 @@ def _build_gtk_menu(spec):
 
 
 def get_daemon_status():
-    global last_status, last_offline_log_time
+    global last_status
     try:
         status = request_status(timeout=8, retries=2, retry_delay=0.3)
         if status is None:
             return None
-        if status != last_status:
-            log_message("Daemon status changed", level=logging.INFO)
-            try:
-                log_message(f"New status: {json.dumps(status, default=str)[:100]}...", level=logging.DEBUG)
-            except (TypeError, ValueError):
-                log_message("New status: (unable to serialize for debug)", level=logging.DEBUG)
-        last_status = status
-        last_offline_log_time = 0
+        with _last_status_lock:
+            changed = status != last_status
+            last_status = status
+            if changed:
+                log_message("Daemon status changed", level=logging.INFO)
+                try:
+                    log_message(f"New status: {json.dumps(status, default=str)[:100]}...", level=logging.DEBUG)
+                except (TypeError, ValueError):
+                    log_message("New status: (unable to serialize for debug)", level=logging.DEBUG)
         return status
     except Exception as e:
         log_message(f"Error communicating with daemon: {
@@ -423,11 +363,8 @@ def start_daemon(widget=None):
     current_status = get_daemon_status()
     if current_status is not None:
         log_message("Daemon is already running", level=logging.INFO)
-        daemon_manager.update_state(DaemonState.RUNNING)
         update_queue.put(True)
         return
-
-    daemon_manager.update_state(DaemonState.STARTING)
 
     cleared = clear_crash_log()
     if cleared:
@@ -463,68 +400,45 @@ def start_daemon(widget=None):
             # Process is still running, which is expected
             log_message(
                 "Daemon process started, waiting for it to initialize...", level=logging.INFO)
+        update_queue.put(True)
 
     except subprocess.CalledProcessError as e:
         error_message = f"Error starting daemon: return code {
             e.returncode}\nstdout: {e.stdout}\nstderr: {e.stderr}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
-        daemon_manager.update_state(DaemonState.FAILED)
         update_queue.put(True)
     except Exception as e:
         error_message = f"Unexpected error starting daemon: {
             e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
-        daemon_manager.update_state(DaemonState.FAILED)
         update_queue.put(True)
 
 
 def reload_config(widget=None):
     """Reload daemon config. Accepts optional widget arg from GTK menu activate signal."""
-    global daemon_manager
     try:
         response_data = request_reload()
         if response_data is None:
             log_message("Error reloading configuration: daemon not running", level=logging.ERROR)
-            if daemon_manager is not None:
-                new_state = daemon_manager.get_current_state(None)
-                daemon_manager.update_state(new_state)
             update_queue.put(True)
             return False
         if not isinstance(response_data, dict):
             log_message("Unexpected reload response from daemon", level=logging.ERROR)
-            if daemon_manager is not None:
-                fresh_status = get_daemon_status()
-                new_state = daemon_manager.get_current_state(fresh_status)
-                daemon_manager.update_state(new_state)
             update_queue.put(True)
             return False
         if response_data.get(sp.STATUS) == "success":
             log_message("Configuration reloaded successfully")
-            # Refresh state from daemon so next UI paint shows RUNNING (green), not stale CONFIG_CHANGED (amber)
-            if daemon_manager is not None:
-                fresh_status = get_daemon_status()
-                if fresh_status is not None:
-                    new_state = daemon_manager.get_current_state(fresh_status)
-                    daemon_manager.update_state(new_state)
         else:
             log_message(f"Error reloading configuration: {
                         response_data.get(sp.MESSAGE, 'Unknown error')}", level=logging.ERROR)
-            if daemon_manager is not None:
-                fresh_status = get_daemon_status()
-                new_state = daemon_manager.get_current_state(fresh_status)
-                daemon_manager.update_state(new_state)
         update_queue.put(True)
         return response_data.get(sp.STATUS) == "success"
     except Exception as e:
         log_message(f"Error communicating with daemon: {
                     str(e)}", level=logging.ERROR)
-        if daemon_manager is not None:
-            fresh_status = get_daemon_status()
-            new_state = daemon_manager.get_current_state(fresh_status)
-            daemon_manager.update_state(new_state)
-        update_queue.put(True)  # Refresh UI so user sees current state
+        update_queue.put(True)
         return False
 
 
@@ -532,49 +446,28 @@ def add_to_sync_queue(job_key, force_bisync=False, resync=False):
     try:
         response = request_add_sync(job_key, force_bisync=force_bisync, resync=resync)
         log_message(f"Add to sync queue response: {response}", level=logging.INFO)
-        # Always refresh state before UI update so icon/menu reflect current daemon state
-        if daemon_manager is not None:
-            fresh_status = get_daemon_status()
-            if fresh_status is not None:
-                daemon_manager.update_sync_feedback(fresh_status)
-            new_state = daemon_manager.get_current_state(fresh_status)
-            daemon_manager.update_state(new_state)
         update_queue.put(True)
         return response == "OK"
     except Exception as e:
         log_message(f"Error adding job to sync queue: {
                     str(e)}", level=logging.ERROR)
-        if daemon_manager is not None:
-            fresh_status = get_daemon_status()
-            new_state = daemon_manager.get_current_state(fresh_status)
-            daemon_manager.update_state(new_state)
         update_queue.put(True)
         return False
 
 
-def determine_arrow_color(color, icon_text):
-    if color == (158, 158, 158):  # Gray (error state)
-        return "#FFFFFF"  # White for error (daemon not running)
-    elif color == (33, 150, 243):  # Blue (syncing)
-        return "#FFFFFF"  # White
-    elif color == (244, 67, 54):  # Red (config invalid)
-        return "#FFFFFF"  # White for invalid config
-    elif color == (255, 193, 7):  # Amber (config changed on disk)
-        return "#000000"  # Black for config changed on disk
-    elif color == (255, 152, 0):  # Orange (sync issues)
-        return "#000000"  # Black for sync issues
+def _normalize_icon_color_and_thickness(color, thickness):
+    """Return (hex_color_str, int_thickness) for SVG icon rendering."""
+    if isinstance(color, tuple) and len(color) >= 3:
+        hex_color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
     else:
-        return "#FFFFFF"  # White for normal operation
+        hex_color = '#9e9e9e'
+    thick = int(thickness) if thickness is not None else 40
+    return hex_color, thick
 
 
 def create_status_image_style1(color, thickness):
     size = 64
-
-    if isinstance(color, tuple) and len(color) >= 3:
-        color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
-    else:
-        color = '#9e9e9e'  # fallback gray if color not a 3-tuple
-    thickness = int(thickness) if thickness is not None else 40
+    color, thickness = _normalize_icon_color_and_thickness(color, thickness)
 
     svg_code = '''
     <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
@@ -593,12 +486,7 @@ def create_status_image_style1(color, thickness):
 
 def create_status_image_style2(color, thickness):
     size = 64
-
-    if isinstance(color, tuple) and len(color) >= 3:
-        color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
-    else:
-        color = '#9e9e9e'  # fallback gray if color not a 3-tuple
-    thickness = int(thickness) if thickness is not None else 40
+    color, thickness = _normalize_icon_color_and_thickness(color, thickness)
 
     svg_code = '''
     <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
@@ -615,20 +503,10 @@ def create_status_image_style2(color, thickness):
     return image
 
 
-def create_status_image(color, icon_text, style=1, thickness=40):
+def create_status_image(color, style=1, thickness=40):
     if style == 2:
         return create_status_image_style2(color, thickness)
-    else:
-        return create_status_image_style1(color, thickness)
-
-
-def determine_text_color(background_color):
-    # Simple logic to determine if text should be black or white based on background brightness
-    if not isinstance(background_color, (tuple, list)) or len(background_color) < 3:
-        return "#FFFFFF"
-    r, g, b = background_color[0], background_color[1], background_color[2]
-    brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-    return "#000000" if brightness > 0.5 else "#FFFFFF"
+    return create_status_image_style1(color, thickness)
 
 
 def _show_status_window_gtk():
@@ -779,14 +657,18 @@ def open_log_folder(widget=None):
         log_message("Log file path not found", level=logging.ERROR)
 
 
-def get_config_file_path():
+def _get_status_path(key):
+    """Return status[key] from fresh daemon status, or None if unavailable."""
     status = get_daemon_status()
-    return status.get(sp.CONFIG_FILE_LOCATION) if isinstance(status, dict) else None
+    return status.get(key) if isinstance(status, dict) else None
+
+
+def get_config_file_path():
+    return _get_status_path(sp.CONFIG_FILE_LOCATION)
 
 
 def get_log_file_path():
-    status = get_daemon_status()
-    return status.get(sp.LOG_FILE_LOCATION) if isinstance(status, dict) else None
+    return _get_status_path(sp.LOG_FILE_LOCATION)
 
 
 def _show_text_window_gtk(title, content):
@@ -809,62 +691,22 @@ def show_text_window(title, content):
     _show_text_window_gtk(title, content)
 
 
-def ensure_daemon_running():
-    global daemon_manager
-    timeout = 30  # Timeout in seconds
-    interval = 1  # Check interval in seconds
-
-    if daemon_manager is None:
-        return False
-    status = get_daemon_status()
-    if status is not None:
-        log_message("Daemon is already running", level=logging.INFO)
-        return True
-
-    log_message("Daemon not running. Attempting to start it.",
-                level=logging.INFO)
-
-    start_daemon()
-
-    if daemon_manager.daemon_start_error:
-        log_message(f"Failed to start daemon: {
-                    daemon_manager.daemon_start_error}", level=logging.ERROR)
-        return False
-
-    elapsed_time = 0
-    while elapsed_time < timeout:
-        log_message(f"Checking daemon status: Elapsed time {
-                    elapsed_time}s", level=logging.DEBUG)
-        status = get_daemon_status()
-        if status is not None:
-            log_message("Daemon started successfully", level=logging.INFO)
-            return True
-        time.sleep(interval)
-        elapsed_time += interval
-
-    log_message("Failed to start daemon within the timeout period",
-                level=logging.ERROR)
-    return False
-
-
-def _write_tray_icon_to_path(path):
-    """Write current status image to path (for AppIndicator).
-    Uses get_effective_state_for_icon() so the icon shows SYNCING for at least
-    MIN_SYNC_FEEDBACK_SECONDS after a sync (even when the sync was very quick).
-    """
+def _write_tray_icon_to_path(path, state):
+    """Write status image to path (for AppIndicator). state is derived at paint time from fresh status."""
     global daemon_manager, args
     if daemon_manager is None or args is None:
         return
-    state = daemon_manager.get_effective_state_for_icon()
-    color = daemon_manager._icon_color_for_state(state)
-    text = daemon_manager._icon_text_for_state(state)
-    img = create_status_image(color, text, style=args.icon_style, thickness=args.icon_thickness)
-    img.save(path, "PNG")
+    try:
+        color = daemon_manager._icon_color_for_state(state)
+        img = create_status_image(color, style=args.icon_style, thickness=args.icon_thickness)
+        img.save(path, "PNG")
+    except Exception as e:
+        log_message(f"Error writing tray icon: {e}", level=logging.ERROR)
 
 
 def _update_appindicator_ui():
     """Rebuild indicator menu and icon (run on main thread via GLib.idle_add).
-    Uses alternating icon paths so AppIndicator reloads the image (it caches by path).
+    Fetches status once; derives icon state at paint time so icon cannot be stale.
     """
     global _indicator, _icon_paths, _icon_index, daemon_manager, args
     try:
@@ -872,11 +714,15 @@ def _update_appindicator_ui():
             return False
         if daemon_manager is None:
             return False
+        status = get_daemon_status()
+        if status is not None:
+            daemon_manager.update_sync_feedback(status)
+        state = daemon_manager.get_effective_state_for_display(status)
         path = _icon_paths[_icon_index]
-        _write_tray_icon_to_path(path)
+        _write_tray_icon_to_path(path, state)
         _indicator.set_icon(path)
         _icon_index = 1 - _icon_index
-        spec = daemon_manager.get_menu_spec(get_daemon_status())
+        spec = daemon_manager.get_menu_spec(status)
         menu = _build_gtk_menu(spec)
         if menu is not None:
             _indicator.set_menu(menu)
@@ -888,9 +734,8 @@ def _update_appindicator_ui():
 
 def run_tray_appindicator():
     """Run tray using AppIndicator3 (SNI) + GTK (notifications, status window, config editor)."""
-    global daemon_manager, args, debug, update_queue, _indicator, _icon_paths, _icon_index
+    global daemon_manager, args, update_queue, _indicator, _icon_paths, _icon_index
     daemon_manager = DaemonManager()
-    update_queue = Queue()
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--icon-style", type=int, choices=[1, 2], default=1)
@@ -900,7 +745,6 @@ def run_tray_appindicator():
     parser.add_argument("--config", type=str)
     args = parser.parse_args()
 
-    debug = args.log_level == "DEBUG"
     minimal = type("TrayLogConfig", (), {})()
     minimal.console_log = args.log_level != "NONE"
     minimal.log_file_path = None
@@ -912,10 +756,9 @@ def run_tray_appindicator():
     if cleared:
         log_message("Cleared existing crash log", level=logging.INFO)
     initial_status = get_daemon_status()
-    initial_state = daemon_manager.get_current_state(initial_status)
     if initial_status is not None:
         daemon_manager.update_sync_feedback(initial_status)
-    daemon_manager.update_state(initial_state)
+    initial_state = daemon_manager.get_effective_state_for_display(initial_status)
 
     tmp = tempfile.gettempdir()
     _icon_paths = [
@@ -923,7 +766,7 @@ def run_tray_appindicator():
         os.path.join(tmp, "rclone-bisync-manager-tray-icon-1.png"),
     ]
     _icon_index = 0
-    _write_tray_icon_to_path(_icon_paths[0])
+    _write_tray_icon_to_path(_icon_paths[0], initial_state)
     _indicator = AppIndicator3.Indicator.new(
         "rclone-bisync-manager",
         _icon_paths[0],
@@ -964,12 +807,7 @@ def update_menu_and_icon():
     global daemon_manager
     if daemon_manager is None:
         return
-    current_status = get_daemon_status()
-    current_state = daemon_manager.get_current_state(current_status)
-    if current_status is not None:
-        daemon_manager.update_sync_feedback(current_status)
-    daemon_manager.update_state(current_state)
-    log_message(f"Updating menu and icon. Current state: {current_state.name}", level=logging.INFO)
+    log_message("Updating menu and icon.", level=logging.DEBUG)
     GLib.idle_add(_update_appindicator_ui)
 
 
@@ -984,12 +822,10 @@ def check_status_and_update():
             crash_message = read_crash_log()
             if crash_message:
                 crash_message = str(crash_message).strip()
-                current_state = DaemonState.FAILED
-                if daemon_manager.update_state(current_state) or daemon_manager.daemon_start_error != crash_message:
+                if daemon_manager.daemon_start_error != crash_message:
                     daemon_manager.daemon_start_error = crash_message
                     update_queue.put(True)
-                    log_message(f"Daemon crashed. Current state: {
-                                current_state.name}", level=logging.ERROR)
+                    log_message("Daemon crashed.", level=logging.ERROR)
                     log_message(f"Crash message: {
                                 crash_message}", level=logging.ERROR)
                 continue
@@ -997,13 +833,8 @@ def check_status_and_update():
             current_status = get_daemon_status()
             if current_status is None:
                 _offline_miss_count += 1
-                current_state = DaemonState.OFFLINE if _offline_miss_count >= 2 else daemon_manager.current_state
             else:
                 _offline_miss_count = 0
-                current_state = daemon_manager.get_current_state(current_status)
-
-            # Update sync feedback window (show syncing icon for min duration after a sync)
-            if current_status is not None:
                 daemon_manager.update_sync_feedback(current_status)
             # Clear expired feedback and trigger one more icon update when it expires
             with daemon_manager.state_lock:
@@ -1011,16 +842,11 @@ def check_status_and_update():
                     daemon_manager.sync_feedback_until = 0
                     update_queue.put(True)
 
-            # Update the daemon manager state
-            state_changed = daemon_manager.update_state(current_state)
-
-            # Check if the status or state has changed; skip UI refresh when holding sticky (first None tick)
+            # Refresh when status changed; skip when holding sticky (first None tick)
             holding_sticky = current_status is None and _offline_miss_count < 2
-            if not holding_sticky and (current_status != last_status or state_changed):
-                log_message(
-                    "Status or state changed. Updating menu and icon.", level=logging.INFO)
-                log_message(f"New status: {
-                            current_status}", level=logging.DEBUG)
+            if not holding_sticky and current_status != last_status:
+                log_message("Status or state changed. Updating menu and icon.", level=logging.DEBUG)
+                log_message(f"New status: {current_status}", level=logging.DEBUG)
                 update_queue.put(True)
 
             last_status = current_status
@@ -1040,7 +866,7 @@ def edit_config(widget=None):
         log_message("Daemon manager not available", level=logging.ERROR)
         return
     try:
-        config_file = daemon_manager.get_config_file_path()
+        config_file = get_config_file_path()
         if not config_file:
             log_message("Config file path not available", level=logging.ERROR)
             dlg = Gtk.MessageDialog(
