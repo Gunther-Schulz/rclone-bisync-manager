@@ -1,11 +1,11 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+"""GTK config editor for the tray. Uses only GTK (same stack as the tray); no tkinter."""
+
+import copy
 import re
 import yaml
 
 from rclone_bisync_manager.daemon_client import request_config_schema
 
-# GTK config editor (used when tray uses AppIndicator)
 _GTK_AVAILABLE = False
 try:
     import gi
@@ -15,245 +15,89 @@ try:
 except (ImportError, ValueError):
     Gtk = None
 
+# General (top-level) fields in display order with human labels
+GENERAL_FIELDS = [
+    ("local_base_path", "Local base path"),
+    ("exclusion_rules_file", "Exclusion rules file (optional)"),
+    ("max_cpu_usage_percent", "Max CPU usage (%)"),
+    ("redirect_rclone_log_output", "Redirect rclone log output"),
+    ("run_missed_jobs", "Run missed jobs"),
+    ("run_initial_sync_on_startup", "Run initial sync on startup"),
+    ("dry_run", "Dry run (global)"),
+    ("log_file_path", "Log file path"),
+]
 
-def get_config_schema():
-    try:
-        return request_config_schema()
-    except Exception as e:
-        messagebox.showerror(
-            "Error", f"Failed to fetch config schema: {str(e)}")
-        return {}
+GENERAL_TOOLTIPS = {
+    "local_base_path": "Base directory for local files. Sync job 'local' paths are relative to this.",
+    "exclusion_rules_file": "Path to a filter file. If updated, a resync is run on next sync (rclone requires resync after filter changes).",
+    "max_cpu_usage_percent": "CPU limit for rclone (0–100). Requires cpulimit; ignored if not installed.",
+    "redirect_rclone_log_output": "Whether to redirect rclone log output to the daemon log file.",
+    "run_missed_jobs": "If true, run jobs that would have run while the daemon was stopped.",
+    "run_initial_sync_on_startup": "If true, run an initial sync for each job when the daemon starts.",
+    "dry_run": "Global dry run: show what would be done without making changes.",
+    "log_file_path": "Path to the daemon log file.",
+}
 
+# Sync job fields in display order with human labels (scalar only; option dicts handled separately)
+SYNC_JOB_FIELDS = [
+    ("local", "Local path (relative to base)"),
+    ("rclone_remote", "Rclone remote name"),
+    ("remote", "Remote path"),
+    ("schedule", "Schedule (cron)"),
+    ("active", "Active"),
+    ("dry_run", "Dry run"),
+    ("force_resync", "Force resync"),
+    ("force_operation", "Force operation"),
+]
 
-def create_inputs(parent, config_dict, schema_dict, section, prefix=''):
-    row = 0
-    for key, value in config_dict.items():
-        full_key = f"{prefix}{key}" if prefix else key
-        schema_value = schema_dict.get(key, {})
-        if isinstance(value, dict):
-            ttk.Label(parent, text=key, font=("", 10, "bold")).grid(
-                row=row, column=0, sticky="w", padx=5, pady=5)
-            row += 1
-            row = create_inputs(parent, value, schema_value,
-                                section, f"{full_key}.")
-        else:
-            create_input(parent, section, full_key, value, schema_value, row)
-            row += 1
-    return row
+SYNC_JOB_TOOLTIPS = {
+    "local": "Path relative to local_base_path, e.g. 'my_folder'.",
+    "rclone_remote": "Name of the rclone remote (as in rclone config).",
+    "remote": "Path on the remote, e.g. 'path/to/folder'.",
+    "schedule": "Cron expression, e.g. '*/30 * * * *' for every 30 minutes. Use the preset dropdown or enter custom.",
+    "active": "Whether this job is enabled for scheduled runs.",
+    "dry_run": "Dry run for this job only.",
+    "force_resync": "If true, next run will do a full resync (--resync) before bisync.",
+    "force_operation": "If true, next run will use --force for bisync.",
+}
 
+# Schedule presets: (cron_value, display_label)
+SCHEDULE_PRESETS = [
+    ("*/5 * * * *", "Every 5 min"),
+    ("*/15 * * * *", "Every 15 min"),
+    ("*/30 * * * *", "Every 30 min"),
+    ("0 * * * *", "Hourly"),
+    ("0 */2 * * *", "Every 2 hours"),
+    ("0 0 * * *", "Daily (midnight)"),
+    ("0 0 * * 0", "Weekly (Sunday)"),
+]
 
-def create_input(parent, section, key, value, schema, row):
-    ttk.Label(parent, text=key).grid(
-        row=row, column=0, sticky="w", padx=5, pady=2)
+# Option keys that use a dropdown instead of free text (section -> key -> list of choices).
+# Values match rclone/bisync CLI: --compare, --log-level, --conflict-resolve, --conflict-loser.
+OPTION_DROPDOWNS = {
+    "rclone_options": {
+        "compare": ["size", "modtime", "checksum", "size,modtime", "size,modtime,checksum"],
+        "log_level": ["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR"],
+    },
+    "bisync_options": {
+        "conflict_resolve": ["none", "path1", "path2", "newer", "older", "larger", "smaller"],
+        "conflict_loser": ["num", "pathname", "delete"],
+    },
+}
 
-    if isinstance(value, bool):
-        var = tk.BooleanVar(value=value)
-        ttk.Checkbutton(parent, variable=var, command=lambda: update_config(
-            section, key, var.get())).grid(row=row, column=1, sticky="w", padx=5, pady=2)
-    elif isinstance(value, int):
-        var = tk.StringVar(value=str(value))
-        ttk.Entry(parent, textvariable=var).grid(
-            row=row, column=1, sticky="we", padx=5, pady=2)
-        var.trace("w", lambda *args: update_config(section, key,
-                  int(v) if (v := (var.get() or "")) and v.isdigit() else 0))
-    elif isinstance(value, list):
-        text = tk.Text(parent, height=3, width=40)
-        text.grid(row=row, column=1, sticky="we", padx=5, pady=2)
-        text.insert(tk.END, '\n'.join(map(str, value)))
-        text.bind("<FocusOut>", lambda e: update_config(
-            section, key, text.get("1.0", tk.END).strip().split('\n')))
-    else:
-        var = tk.StringVar(value=str(value))
-        ttk.Entry(parent, textvariable=var).grid(
-            row=row, column=1, sticky="we", padx=5, pady=2)
-        var.trace("w", lambda *args: update_config(section, key, var.get()))
+OPTION_TOOLTIPS = {
+    "compare": "Bisync compare options (comma-separated): size, modtime, checksum. Default: size,modtime.",
+    "log_level": "rclone log verbosity (DEBUG, INFO, NOTICE, WARNING, ERROR).",
+    "conflict_resolve": "Auto-resolve conflicts: none, path1, path2, newer, older, larger, smaller (rclone --conflict-resolve).",
+    "conflict_loser": "Action on conflict loser: num (rename with suffix), pathname (path-based suffix), delete (rclone --conflict-loser).",
+}
 
-
-def update_config(section, key, value):
-    if not key or not isinstance(key, str):
-        return
-    keys = key.split('.')
-    d = section
-    for k in keys[:-1]:
-        if k not in d:
-            d[k] = {}
-        d = d[k]
-    d[keys[-1]] = value
-
-
-def create_sync_jobs_tab(parent, sync_jobs, schema):
-    def refresh_sync_jobs():
-        for widget in parent.winfo_children():
-            widget.destroy()
-        create_sync_jobs_content(parent, sync_jobs, schema)
-
-    def add_sync_job():
-        job_name = simpledialog.askstring(
-            "Add Sync Job", "Enter the name for the new sync job:")
-        if job_name:
-            if job_name in sync_jobs:
-                messagebox.showerror("Error", f"A job with the name '{
-                                     job_name}' already exists.")
-            else:
-                sync_jobs[job_name] = {
-                    "local": "",
-                    "rclone_remote": "",
-                    "remote": "",
-                    "schedule": ""
-                }
-                refresh_sync_jobs()
-
-    def remove_sync_job(job_name):
-        if messagebox.askyesno("Remove Sync Job", f"Are you sure you want to remove the sync job '{job_name}'?"):
-            del sync_jobs[job_name]
-            refresh_sync_jobs()
-
-    def create_sync_jobs_content(parent, sync_jobs, schema):
-        row = 0
-        for job_name, job_config in sync_jobs.items():
-            job_frame = ttk.Frame(parent)
-            job_frame.grid(row=row, column=0, columnspan=2,
-                           sticky="ew", padx=5, pady=5)
-
-            ttk.Label(job_frame, text=job_name, font=("", 12, "bold")).grid(
-                row=0, column=0, sticky="w", padx=5, pady=5)
-            ttk.Button(job_frame, text="Remove", command=lambda name=job_name: remove_sync_job(
-                name)).grid(row=0, column=1, sticky="e", padx=5, pady=5)
-
-            create_inputs(job_frame, job_config, schema.get(
-                "properties", {}), sync_jobs, f"{job_name}.")
-            row += 1
-
-            ttk.Separator(parent, orient='horizontal').grid(
-                row=row, column=0, columnspan=2, sticky="ew", pady=10)
-            row += 1
-
-        ttk.Button(parent, text="Add Sync Job", command=add_sync_job).grid(
-            row=row, column=0, columnspan=2, pady=10)
-
-    create_sync_jobs_content(parent, sync_jobs, schema)
-
-
-def edit_config(config_file_path):
-    with open(config_file_path, 'r', encoding='utf-8', errors='replace') as file:
-        config_str = file.read()
-        config = yaml.safe_load(config_str) or {}
-
-    config_schema = get_config_schema()
-
-    root = tk.Tk()
-    root.title("Edit Configuration")
-    root.geometry("800x600")
-
-    main_frame = ttk.Frame(root)
-    main_frame.pack(fill=tk.BOTH, expand=True)
-
-    notebook = ttk.Notebook(main_frame)
-    notebook.pack(fill=tk.BOTH, expand=True)
-
-    def create_tab(name, config_section, schema_section):
-        tab = ttk.Frame(notebook)
-        notebook.add(tab, text=name)
-
-        canvas = tk.Canvas(tab)
-        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        return scrollable_frame, config_section, schema_section
-
-    # Create tabs for each section
-    general_frame, general_config, general_schema = create_tab(
-        "General",
-        {k: v for k, v in config.items() if k not in [
-            'sync_jobs', 'rclone_options', 'bisync_options', 'resync_options']},
-        config_schema.get("ConfigSchema", {}).get("properties", {})
-    )
-    create_inputs(general_frame, general_config, general_schema, config)
-
-    sync_jobs_frame, sync_jobs_config, sync_jobs_schema = create_tab(
-        "Sync Jobs",
-        config.get('sync_jobs', {}),
-        config_schema.get("ConfigSchema", {}).get(
-            "properties", {}).get("sync_jobs", {})
-    )
-    create_sync_jobs_tab(sync_jobs_frame, sync_jobs_config, sync_jobs_schema)
-
-    rclone_options_frame, rclone_options_config, rclone_options_schema = create_tab(
-        "Rclone Options",
-        config.get('rclone_options', {}),
-        config_schema.get("ConfigSchema", {}).get(
-            "properties", {}).get("rclone_options", {})
-    )
-    create_inputs(rclone_options_frame, rclone_options_config,
-                  rclone_options_schema, config.get('rclone_options', {}))
-
-    bisync_options_frame, bisync_options_config, bisync_options_schema = create_tab(
-        "Bisync Options",
-        config.get('bisync_options', {}),
-        config_schema.get("ConfigSchema", {}).get(
-            "properties", {}).get("bisync_options", {})
-    )
-    create_inputs(bisync_options_frame, bisync_options_config,
-                  bisync_options_schema, config.get('bisync_options', {}))
-
-    resync_options_frame, resync_options_config, resync_options_schema = create_tab(
-        "Resync Options",
-        config.get('resync_options', {}),
-        config_schema.get("ConfigSchema", {}).get(
-            "properties", {}).get("resync_options", {})
-    )
-    create_inputs(resync_options_frame, resync_options_config,
-                  resync_options_schema, config.get('resync_options', {}))
-
-    def save_config():
-        # Preserve comments and structure
-        with open(config_file_path, 'r', encoding='utf-8', errors='replace') as file:
-            lines = file.readlines()
-
-        def update_value(lines, path, value):
-            if not path:
-                return False
-            pattern = re.compile(r'^(\s*{}: ).*$'.format(re.escape(path)))
-            for i, line in enumerate(lines):
-                if pattern.match(line):
-                    # Use callable so value is literal; never interpret \1 etc. as backreference
-                    def repl(m):
-                        return m.group(1) + str(value) + "\n"
-                    lines[i] = pattern.sub(repl, line)
-                    return True
-            return False
-
-        def update_config_lines(config_dict, prefix=''):
-            for key, value in config_dict.items():
-                full_key = f"{prefix}{key}" if prefix else key
-                if isinstance(value, dict):
-                    update_config_lines(value, f"{full_key}.")
-                else:
-                    if not update_value(lines, full_key, value):
-                        lines.append(f"{full_key}: {value}\n")
-
-        update_config_lines(config)
-
-        with open(config_file_path, 'w', encoding='utf-8') as file:
-            file.writelines(lines)
-
-        messagebox.showinfo("Success", "Configuration saved successfully")
-        root.destroy()
-
-    ttk.Button(root, text="Save", command=save_config).pack(pady=10)
-
-    root.mainloop()
+# Tooltips for per-job YAML option areas (keyed by option key)
+SYNC_JOB_OPTION_TOOLTIPS = {
+    "rclone_options": "Per-job rclone options (e.g. log_level, compare). YAML format.",
+    "bisync_options": "Per-job bisync options (e.g. conflict_resolve, conflict_loser). YAML format.",
+    "resync_options": "Per-job resync options. YAML format.",
+}
 
 
 def _set_by_path(d, path, value):
@@ -265,14 +109,50 @@ def _set_by_path(d, path, value):
     d[keys[-1]] = value
 
 
+def _get_by_path(d, path):
+    """Get value from nested dict by path (e.g. 'sync_jobs.job1.local'). Returns None if missing."""
+    if not path or not isinstance(path, str):
+        return None
+    keys = path.split(".")
+    for k in keys:
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
+
+
+def _safe_yaml_dump(value):
+    """Serialize value for display in a text field; parse back with yaml.safe_load."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, dict)):
+        return yaml.dump(value, default_flow_style=False, allow_unicode=True).strip()
+    return str(value)
+
+
+def _safe_yaml_load(text):
+    """Parse text back to Python value; empty string -> None."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError:
+        return text  # fallback to string if invalid YAML
+
+
 def edit_config_gtk(config_file_path):
-    """GTK config editor (AppIndicator path only). No tkinter fallback."""
+    """Open GTK config editor for the given config file. No-op if GTK unavailable."""
     if not _GTK_AVAILABLE or Gtk is None:
         return
     with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
         config = yaml.safe_load(f.read()) or {}
+    # Cache original values so Revert restores state from when editor was opened (even after Save).
+    config_original = copy.deepcopy(config)
+    # What we last wrote to disk (or initial load). Used for dirty indicator: current widgets vs this.
+    last_saved_config = copy.deepcopy(config)
     try:
-        config_schema = request_config_schema()
+        request_config_schema()
     except Exception as e:
         dlg = Gtk.MessageDialog(
             transient_for=None, flags=0,
@@ -283,14 +163,24 @@ def edit_config_gtk(config_file_path):
         dlg.run()
         dlg.destroy()
         return
-    widgets = {}  # path -> (widget, type_str)
+    widgets = {}  # path -> (widget, type_str)  type: "bool"|"int"|"str"|"yaml"
 
     win = Gtk.Window(title="Edit Configuration")
-    win.set_default_size(800, 600)
-    nb = Gtk.Notebook()
-    win.add(nb)
+    win.set_default_size(820, 620)
+    status_label = Gtk.Label(label="Saved")
+    status_label.set_margin_start(4)
+    status_label.set_margin_end(4)
 
-    def add_tab(name, section_dict, prefix):
+    nb = Gtk.Notebook()
+
+    def _set_tooltip(widget, tooltips, key):
+        if tooltips and key in tooltips:
+            widget.set_tooltip_text(tooltips[key])
+
+    def add_tab(name, section_dict, prefix, field_order=None, allow_yaml=True, tooltips=None, option_dropdowns=None):
+        """Build a tab from section_dict. If field_order is given, use (key, label) list; else show all scalar keys.
+        If allow_yaml, use TextView for list/dict values (type 'yaml').
+        tooltips: optional dict key -> tooltip string. option_dropdowns: optional dict key -> list of choices (use ComboBox)."""
         sw = Gtk.ScrolledWindow()
         grid = Gtk.Grid()
         grid.set_margin_start(10)
@@ -300,30 +190,75 @@ def edit_config_gtk(config_file_path):
         sw.add(grid)
         nb.append_page(sw, Gtk.Label(label=name))
         row = 0
-        for key, value in (section_dict or {}).items():
-            if isinstance(value, dict):
-                continue
+        if field_order:
+            items = list(field_order)
+        else:
+            items = [(k, k.replace("_", " ").title()) for k in (section_dict or {}).keys() if not isinstance((section_dict or {}).get(k), dict)]
+        for key, label in items:
+            value = (section_dict or {}).get(key)
             full_key = f"{prefix}{key}" if prefix else key
-            grid.attach(Gtk.Label(label=key, xalign=0), 0, row, 1, 1)
-            if isinstance(value, bool):
+            # Skip nested dicts when we're not using yaml widget (e.g. in strict field_order without allow_yaml)
+            if isinstance(value, dict) and not allow_yaml:
+                continue
+            if isinstance(value, list) or (isinstance(value, dict) and allow_yaml):
+                grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
+                tv = Gtk.TextView()
+                tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+                tv.set_left_margin(4)
+                tv.set_right_margin(4)
+                tv.get_buffer().set_text(_safe_yaml_dump(value))
+                tv.set_size_request(-1, 80)
+                grid.attach(tv, 1, row, 1, 1)
+                _set_tooltip(tv, tooltips, key)
+                widgets[full_key] = (tv, "yaml")
+                row += 1
+            elif isinstance(value, bool):
+                grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
                 w = Gtk.CheckButton()
                 w.set_active(value)
+                grid.attach(w, 1, row, 1, 1)
+                _set_tooltip(w, tooltips, key)
                 widgets[full_key] = (w, "bool")
+                row += 1
             elif isinstance(value, int):
+                grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
                 w = Gtk.SpinButton.new_with_range(-1e9, 1e9, 1)
                 w.set_value(value)
+                grid.attach(w, 1, row, 1, 1)
+                _set_tooltip(w, tooltips, key)
                 widgets[full_key] = (w, "int")
-            else:
-                w = Gtk.Entry()
-                w.set_text(str(value))
+                row += 1
+            elif option_dropdowns and key in option_dropdowns:
+                choices = option_dropdowns[key]
+                grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
+                w = Gtk.ComboBoxText.new()
+                for c in choices:
+                    w.append_text(str(c))
+                val_str = str(value) if value is not None else ""
+                if val_str in choices:
+                    w.set_active(choices.index(val_str))
+                else:
+                    w.set_active(0)
                 w.set_hexpand(True)
+                grid.attach(w, 1, row, 1, 1)
+                _set_tooltip(w, tooltips, key)
+                widgets[full_key] = (w, "combo")
+                row += 1
+            else:
+                grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
+                w = Gtk.Entry()
+                w.set_text(str(value) if value is not None else "")
+                w.set_hexpand(True)
+                grid.attach(w, 1, row, 1, 1)
+                _set_tooltip(w, tooltips, key)
                 widgets[full_key] = (w, "str")
-            grid.attach(w, 1, row, 1, 1)
-            row += 1
+                row += 1
 
-    general = {k: v for k, v in config.items() if k not in ("sync_jobs", "rclone_options", "bisync_options", "resync_options")}
-    add_tab("General", general, "")
+    # General tab: all schema fields in order with human labels and tooltips
+    general = {k: config.get(k) for k in [x[0] for x in GENERAL_FIELDS]}
+    add_tab("General", general, "", field_order=GENERAL_FIELDS, allow_yaml=False, tooltips=GENERAL_TOOLTIPS)
 
+    # Sync Jobs tab: one frame per job; scalar fields + per-job option dicts as YAML text
     sync_jobs = config.get("sync_jobs", {})
     sync_sw = Gtk.ScrolledWindow()
     sync_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -341,38 +276,179 @@ def edit_config_gtk(config_file_path):
         fr.add(g)
         sync_box.pack_start(fr, False, False, 0)
         r = 0
-        for k, v in job_cfg.items():
-            if isinstance(v, dict):
+        for key, label in SYNC_JOB_FIELDS:
+            if key not in job_cfg:
                 continue
-            full = f"sync_jobs.{job_name}.{k}"
-            g.attach(Gtk.Label(label=k, xalign=0), 0, r, 1, 1)
+            v = job_cfg[key]
+            full = f"sync_jobs.{job_name}.{key}"
+            g.attach(Gtk.Label(label=label, xalign=0), 0, r, 1, 1)
             if isinstance(v, bool):
                 w = Gtk.CheckButton()
                 w.set_active(v)
+                _set_tooltip(w, SYNC_JOB_TOOLTIPS, key)
                 widgets[full] = (w, "bool")
+                g.attach(w, 1, r, 1, 1)
+            elif key == "schedule":
+                w = Gtk.ComboBoxText.new_with_entry()
+                for _cron, _label in SCHEDULE_PRESETS:
+                    w.append_text(_label)
+                sval = str(v).strip() if v is not None else ""
+                found = False
+                for idx, (cron, _) in enumerate(SCHEDULE_PRESETS):
+                    if cron == sval:
+                        w.set_active(idx)
+                        found = True
+                        break
+                if not found:
+                    w.set_active(-1)
+                    if w.get_child():
+                        w.get_child().set_text(sval)
+                w.set_hexpand(True)
+                _set_tooltip(w, SYNC_JOB_TOOLTIPS, key)
+                widgets[full] = (w, "schedule_combo")
+                g.attach(w, 1, r, 1, 1)
             else:
                 w = Gtk.Entry()
-                w.set_text(str(v))
+                w.set_text(str(v) if v is not None else "")
                 w.set_hexpand(True)
+                _set_tooltip(w, SYNC_JOB_TOOLTIPS, key)
                 widgets[full] = (w, "str")
-            g.attach(w, 1, r, 1, 1)
+                g.attach(w, 1, r, 1, 1)
+            r += 1
+        # Per-job option dicts as YAML text areas
+        for opt_key, opt_label in [("rclone_options", "Rclone options (YAML)"), ("bisync_options", "Bisync options (YAML)"), ("resync_options", "Resync options (YAML)")]:
+            full = f"sync_jobs.{job_name}.{opt_key}"
+            val = job_cfg.get(opt_key)
+            if not isinstance(val, dict):
+                val = {}
+            g.attach(Gtk.Label(label=opt_label, xalign=0), 0, r, 1, 1)
+            tv = Gtk.TextView()
+            tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            tv.set_left_margin(4)
+            tv.set_right_margin(4)
+            tv.get_buffer().set_text(_safe_yaml_dump(val))
+            tv.set_size_request(-1, 60)
+            _set_tooltip(tv, SYNC_JOB_OPTION_TOOLTIPS, opt_key)
+            g.attach(tv, 1, r, 1, 1)
+            widgets[full] = (tv, "yaml")
             r += 1
 
-    add_tab("Rclone Options", config.get("rclone_options", {}), "rclone_options.")
-    add_tab("Bisync Options", config.get("bisync_options", {}), "bisync_options.")
-    add_tab("Resync Options", config.get("resync_options", {}), "resync_options.")
+    # Option tabs: support list/dict via yaml; dropdowns and tooltips for known keys
+    add_tab("Rclone Options", config.get("rclone_options", {}), "rclone_options.", allow_yaml=True, tooltips=OPTION_TOOLTIPS, option_dropdowns=OPTION_DROPDOWNS.get("rclone_options"))
+    add_tab("Bisync Options", config.get("bisync_options", {}), "bisync_options.", allow_yaml=True, tooltips=OPTION_TOOLTIPS, option_dropdowns=OPTION_DROPDOWNS.get("bisync_options"))
+    add_tab("Resync Options", config.get("resync_options", {}), "resync_options.", allow_yaml=True, tooltips=OPTION_TOOLTIPS)
+
+    def get_widget_value(w, t):
+        if t == "bool":
+            return w.get_active()
+        if t == "int":
+            try:
+                return int(w.get_value())
+            except (TypeError, ValueError):
+                return 0
+        if t == "yaml":
+            buf = w.get_buffer()
+            start, end = buf.get_bounds()
+            return _safe_yaml_load(buf.get_text(start, end, False))
+        if t == "combo":
+            return w.get_active_text() or ""
+        if t == "schedule_combo":
+            i = w.get_active()
+            if 0 <= i < len(SCHEDULE_PRESETS):
+                return SCHEDULE_PRESETS[i][0]
+            return (w.get_child() and w.get_child().get_text()) or ""
+        return w.get_text() or ""
+
+    def set_widget_value(w, t, value):
+        """Set widget w of type t to value (used by Revert)."""
+        if t == "bool":
+            w.set_active(bool(value))
+        elif t == "int":
+            try:
+                w.set_value(int(value))
+            except (TypeError, ValueError):
+                w.set_value(0)
+        elif t == "yaml":
+            w.get_buffer().set_text(_safe_yaml_dump(value))
+        elif t == "combo":
+            store = w.get_model()
+            val_str = str(value) if value is not None else ""
+            for i in range(store.iter_n_children(None)):
+                it = store.iter_nth_child(None, i)
+                if store.get_value(it, 0) == val_str:
+                    w.set_active(i)
+                    return
+            w.set_active(0)
+        elif t == "schedule_combo":
+            sval = str(value).strip() if value is not None else ""
+            found = False
+            for idx, (cron, _) in enumerate(SCHEDULE_PRESETS):
+                if cron == sval:
+                    w.set_active(idx)
+                    found = True
+                    break
+            if not found:
+                w.set_active(-1)
+                if w.get_child():
+                    w.get_child().set_text(sval)
+        else:
+            w.set_text(str(value) if value is not None else "")
+
+    def build_config_from_widgets():
+        """Build current config dict from widget values (same structure as last_saved_config)."""
+        built = copy.deepcopy(last_saved_config)
+        for path, (w, t) in widgets.items():
+            val = get_widget_value(w, t)
+            _set_by_path(built, path, val)
+        return built
+
+    def update_dirty_indicator(*_args):
+        """Update status label and window title: Saved vs Unsaved changes (current widgets vs last_saved_config)."""
+        built = build_config_from_widgets()
+        try:
+            dirty = yaml.dump(built, sort_keys=True) != yaml.dump(last_saved_config, sort_keys=True)
+        except Exception:
+            dirty = True
+        if dirty:
+            status_label.set_text("Unsaved changes")
+            status_label.set_tooltip_text("Current form values differ from the last saved state (disk).")
+            win.set_title("Edit Configuration • Unsaved changes")
+        else:
+            status_label.set_text("Saved")
+            status_label.set_tooltip_text("Current form matches the last saved state (disk).")
+            win.set_title("Edit Configuration")
+
+    def connect_widget_change(w, t):
+        """Connect widget to call update_dirty_indicator when user changes it."""
+        def on_change(*args):
+            update_dirty_indicator()
+        if t == "yaml":
+            w.get_buffer().connect("changed", on_change)
+        elif t == "bool":
+            w.connect("toggled", on_change)
+        elif t == "int":
+            w.connect("value-changed", on_change)
+        else:
+            w.connect("changed", on_change)
+
+    def revert_config(btn):
+        """Restore all fields from the cached original config (state when editor was opened)."""
+        for path, (w, t) in widgets.items():
+            val = _get_by_path(config_original, path)
+            set_widget_value(w, t, val)
+        update_dirty_indicator()
+        dlg = Gtk.MessageDialog(
+            transient_for=win, flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="Reverted to the values from when the editor was opened.",
+        )
+        dlg.run()
+        dlg.destroy()
 
     def save_config_gtk(btn):
         for path, (w, t) in widgets.items():
-            if t == "bool":
-                val = w.get_active()
-            elif t == "int":
-                try:
-                    val = int(w.get_value())
-                except (TypeError, ValueError):
-                    val = 0
-            else:
-                val = w.get_text()
+            val = get_widget_value(w, t)
             _set_by_path(config, path, val)
         with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
@@ -380,45 +456,71 @@ def edit_config_gtk(config_file_path):
         def update_value(lines, path, value):
             if not path:
                 return False
+            if value is None:
+                value = ""
+            if isinstance(value, (list, dict)):
+                value_str = yaml.dump(value, default_flow_style=False, allow_unicode=True).strip()
+            else:
+                value_str = str(value)
             pat = re.compile(r"^(\s*{}: ).*$".format(re.escape(path)))
             for i, line in enumerate(lines):
                 if pat.match(line):
-                    # Use callable so value is literal; never interpret \1 etc. as backreference
-                    def repl(m):
-                        return m.group(1) + str(value) + "\n"
-                    lines[i] = pat.sub(repl, line)
+                    prefix = pat.match(line).group(1)
+                    if "\n" in value_str:
+                        parts = value_str.split("\n")
+                        lines[i] = prefix + parts[0] + "\n"
+                        for j, rest in enumerate(parts[1:]):
+                            lines.insert(i + 1 + j, "  " + rest + "\n")
+                    else:
+                        lines[i] = prefix + value_str + "\n"
                     return True
             return False
 
         def update_config_lines(cdict, pfx=""):
             for key, value in cdict.items():
                 full_key = f"{pfx}{key}" if pfx else key
-                if isinstance(value, dict):
+                if isinstance(value, dict) and not (key in ("rclone_options", "bisync_options", "resync_options") or pfx.startswith("sync_jobs.")):
                     update_config_lines(value, f"{full_key}.")
                 else:
                     if not update_value(lines, full_key, value):
-                        lines.append(f"{full_key}: {value}\n")
+                        val_str = yaml.dump(value, default_flow_style=False, allow_unicode=True).strip() if isinstance(value, (list, dict)) else str(value)
+                        lines.append(f"{full_key}: {val_str}\n")
 
         update_config_lines(config)
         with open(config_file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
+        last_saved_config.clear()
+        last_saved_config.update(copy.deepcopy(config))
+        update_dirty_indicator()
         dlg = Gtk.MessageDialog(
             transient_for=win, flags=0,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
-            text="Configuration saved successfully",
+            text="Configuration saved.\nReload config from the tray menu (Config & Logs → Reload Config) to apply.",
         )
         dlg.run()
         dlg.destroy()
         win.destroy()
 
-    vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-    win.remove(nb)
+    for path, (w, t) in widgets.items():
+        connect_widget_change(w, t)
+    update_dirty_indicator()
+
+    vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     vbox.pack_start(nb, True, True, 0)
-    btn_box = Gtk.Box()
-    btn_box.set_margin_top(10)
-    btn_box.set_margin_bottom(10)
+    hint = Gtk.Label(label="After saving, use Config & Logs → Reload Config in the tray menu to apply changes.", xalign=0)
+    hint.set_margin_start(4)
+    hint.set_margin_end(4)
+    vbox.pack_start(hint, False, False, 0)
+    vbox.pack_start(status_label, False, False, 0)
+    btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    btn_box.set_margin_top(4)
+    revert_btn = Gtk.Button(label="Revert")
+    revert_btn.set_tooltip_text("Restore all fields to the values from when the editor was opened (before any edits or saves).")
+    revert_btn.connect("clicked", revert_config)
+    btn_box.pack_start(revert_btn, False, False, 0)
     save_btn = Gtk.Button(label="Save")
+    save_btn.set_tooltip_text("Save configuration to file. Use Config & Logs → Reload Config in the tray to apply changes.")
     save_btn.connect("clicked", save_config_gtk)
     btn_box.pack_start(save_btn, False, False, 0)
     vbox.pack_start(btn_box, False, False, 0)
