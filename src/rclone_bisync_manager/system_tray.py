@@ -340,6 +340,7 @@ def stop_daemon(widget=None):
         if isinstance(result, dict) and result.get("status") == "success":
             log_message(
                 "Daemon is shutting down. Use 'daemon status' to check progress.")
+            show_notification("Daemon is shutting down", "The daemon will stop shortly.")
             Thread(target=_wait_then_refresh, daemon=True).start()
         else:
             msg = result.get("message", "Daemon may still be running.") if isinstance(result, dict) else (str(result) if result is not None else "Unknown error")
@@ -363,6 +364,7 @@ def start_daemon(widget=None):
     current_status = get_daemon_status()
     if current_status is not None:
         log_message("Daemon is already running", level=logging.INFO)
+        show_notification("Daemon already running", "The daemon is already running.")
         update_queue.put(True)
         return
 
@@ -403,16 +405,16 @@ def start_daemon(widget=None):
         update_queue.put(True)
 
     except subprocess.CalledProcessError as e:
-        error_message = f"Error starting daemon: return code {
-            e.returncode}\nstdout: {e.stdout}\nstderr: {e.stderr}"
+        error_message = f"Error starting daemon: return code {e.returncode}\nstdout: {e.stdout}\nstderr: {e.stderr}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
+        show_notification("Daemon failed to start", (e.stderr or e.stdout or str(e))[:200] or f"Exit code {e.returncode}")
         update_queue.put(True)
     except Exception as e:
-        error_message = f"Unexpected error starting daemon: {
-            e}\n{traceback.format_exc()}"
+        error_message = f"Unexpected error starting daemon: {e}\n{traceback.format_exc()}"
         log_message(error_message, level=logging.ERROR)
         daemon_manager.daemon_start_error = error_message
+        show_notification("Daemon failed to start", str(e)[:200])
         update_queue.put(True)
 
 
@@ -422,22 +424,26 @@ def reload_config(widget=None):
         response_data = request_reload()
         if response_data is None:
             log_message("Error reloading configuration: daemon not running", level=logging.ERROR)
+            show_notification("Config reload failed", "Daemon is not running.")
             update_queue.put(True)
             return False
         if not isinstance(response_data, dict):
             log_message("Unexpected reload response from daemon", level=logging.ERROR)
+            show_notification("Config reload failed", "Unexpected response from daemon.")
             update_queue.put(True)
             return False
         if response_data.get(sp.STATUS) == "success":
             log_message("Configuration reloaded successfully")
+            show_notification("Config reloaded", "Configuration was reloaded successfully.")
         else:
-            log_message(f"Error reloading configuration: {
-                        response_data.get(sp.MESSAGE, 'Unknown error')}", level=logging.ERROR)
+            msg = response_data.get(sp.MESSAGE, "Unknown error")
+            log_message(f"Error reloading configuration: {msg}", level=logging.ERROR)
+            show_notification("Config reload failed", msg[:200] if len(str(msg)) > 200 else msg)
         update_queue.put(True)
         return response_data.get(sp.STATUS) == "success"
     except Exception as e:
-        log_message(f"Error communicating with daemon: {
-                    str(e)}", level=logging.ERROR)
+        log_message(f"Error communicating with daemon: {str(e)}", level=logging.ERROR)
+        show_notification("Config reload failed", str(e)[:200])
         update_queue.put(True)
         return False
 
@@ -447,10 +453,12 @@ def add_to_sync_queue(job_key, force_bisync=False, resync=False):
         response = request_add_sync(job_key, force_bisync=force_bisync, resync=resync)
         log_message(f"Add to sync queue response: {response}", level=logging.INFO)
         update_queue.put(True)
-        return response == "OK"
+        if response == "OK":
+            show_notification("Sync queued", f"Job '{job_key}' was added to the sync queue.")
+            return True
+        return False
     except Exception as e:
-        log_message(f"Error adding job to sync queue: {
-                    str(e)}", level=logging.ERROR)
+        log_message(f"Error adding job to sync queue: {str(e)}", level=logging.ERROR)
         update_queue.put(True)
         return False
 
@@ -551,13 +559,31 @@ def _show_status_window_gtk():
             tv.get_buffer().set_text(str(daemon_manager.daemon_start_error or ""))
             sw.add(tv)
             box.pack_start(sw, True, True, 0)
+        btn_box = Gtk.Box(spacing=8)
         btn = Gtk.Button(label="Start Daemon")
-        btn.connect("clicked", lambda b: (start_daemon(), win.destroy()))
-        box.pack_start(btn, False, False, 0)
+        def _on_start_clicked(b):
+            start_daemon()
+            lbl.set_label("Starting daemon… The tray icon will update when ready.")
+            b.set_sensitive(False)
+        btn.connect("clicked", _on_start_clicked)
+        btn_box.pack_start(btn, False, False, 0)
+        btn_refresh = Gtk.Button(label="Refresh")
+        btn_refresh.connect("clicked", lambda b: (win.destroy(), GLib.idle_add(_show_status_window_gtk)))
+        btn_box.pack_start(btn_refresh, False, False, 0)
+        box.pack_start(btn_box, False, False, 0)
     else:
         status = status if isinstance(status, dict) else {}
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        outer.set_margin_top(10)
+        outer.set_margin_bottom(10)
+        outer.set_margin_start(10)
+        outer.set_margin_end(10)
+        win.add(outer)
         nb = Gtk.Notebook()
-        win.add(nb)
+        outer.pack_start(nb, True, True, 0)
+        btn_refresh = Gtk.Button(label="Refresh")
+        btn_refresh.connect("clicked", lambda b: (win.destroy(), GLib.idle_add(_show_status_window_gtk)))
+        outer.pack_start(btn_refresh, False, False, 0)
         # General
         gen_sw = Gtk.ScrolledWindow()
         gen_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -643,6 +669,7 @@ def open_config_file(widget=None):
             subprocess.call(('xdg-open', config_dir))
     else:
         log_message("Config file path not found", level=logging.ERROR)
+        show_notification("Config folder", "Path not available. Is the daemon running?")
 
 
 def open_log_folder(widget=None):
@@ -655,6 +682,7 @@ def open_log_folder(widget=None):
             subprocess.call(('xdg-open', log_dir))
     else:
         log_message("Log file path not found", level=logging.ERROR)
+        show_notification("Log folder", "Path not available. Is the daemon running?")
 
 
 def _get_status_path(key):
