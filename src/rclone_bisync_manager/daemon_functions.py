@@ -23,10 +23,9 @@ from rclone_bisync_manager.runtime_paths import (
 )
 from rclone_bisync_manager.daemon_client import request_stop, request_status
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 import fcntl
 from croniter import croniter
-from queue import Queue
 
 
 def _run_main_loop(state, status_thread):

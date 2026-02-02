@@ -12,8 +12,7 @@ from rclone_bisync_manager.sync_state_store import get_sync_state_store
 from typing import Any
 from datetime import datetime, date
 
-from rclone_bisync_manager.logging_utils import log_error
-from rclone_bisync_manager.logging_utils import log_message
+from rclone_bisync_manager.logging_utils import log_error, log_message
 from rclone_bisync_manager import status_protocol as sp
 
 

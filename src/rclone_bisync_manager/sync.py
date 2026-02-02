@@ -30,6 +30,9 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
     resync_status = status.get("resync_status", "NONE")
     log_message(f"Current resync status for {key}: {resync_status}")
 
+    resync_result = status.get("resync_status", "NONE")
+    bisync_result = status.get("sync_status", "NONE")
+
     if force_resync or resync_status in ["NONE", "IN_PROGRESS"]:
         log_message(f"Initiating resync for {key}. Force resync: {force_resync}, Resync status: {resync_status}")
         write_status(key, resync_status="IN_PROGRESS", context=context)
@@ -50,8 +53,8 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
 
     store = get_sync_state_store()
     store.sync_state.update_job_state(key,
-                                       sync_status=bisync_result if 'bisync_result' in locals() else status.get("sync_status", "NONE"),
-                                       resync_status=resync_result if 'resync_result' in locals() else status.get("resync_status", "NONE"),
+                                       sync_status=bisync_result,
+                                       resync_status=resync_result,
                                        last_sync=datetime.now())
     store.save()
 

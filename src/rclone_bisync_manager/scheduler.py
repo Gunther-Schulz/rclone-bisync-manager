@@ -81,8 +81,5 @@ class SyncScheduler:
         self.tasks.clear()
         self.task_map.clear()
 
-    def get_all_tasks(self) -> List[SyncTask]:
-        return sorted(self.tasks)
-
 
 scheduler = SyncScheduler()

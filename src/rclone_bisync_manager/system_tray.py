@@ -282,7 +282,7 @@ def _build_gtk_menu(spec):
             menu.append(Gtk.SeparatorMenuItem())
         elif item_type == "item":
             label = s.get("label", "")
-            item = Gtk.MenuItem.new_with_label(str(label).replace("&", "_"))
+            item = Gtk.MenuItem.new_with_label(str(label))
             item.set_sensitive(s.get("enabled", True))
             if s.get("submenu"):
                 sub = _build_gtk_menu(s["submenu"])

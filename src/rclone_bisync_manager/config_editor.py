@@ -1,8 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-import yaml
 import re
-import json
+import yaml
 
 from rclone_bisync_manager.daemon_client import request_config_schema
 

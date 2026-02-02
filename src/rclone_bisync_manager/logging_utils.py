@@ -85,40 +85,8 @@ def log_error(message):
             print(f"ERROR: {message}", file=sys.stderr)
 
 
-def log_home_directory():
-    home_dir = os.environ.get('HOME')
-    if home_dir:
-        log_message(f"Home directory: {home_dir}")
-    else:
-        log_error("Unable to determine home directory")
-
-
 def log_config_file_location(config_file):
     log_message(f"Config file location: {config_file}")
-
-
-def log_sync_start(key):
-    log_message(f"Starting sync for {key}")
-
-
-def log_sync_end(key, status):
-    log_message(f"Sync for {key} {status}")
-
-
-def log_daemon_start():
-    log_message("Daemon started")
-
-
-def log_daemon_stop():
-    log_message("Daemon stop request received. Shutting down.")
-
-
-def log_daemon_shutdown_complete():
-    log_message("Daemon shutdown complete.")
-
-
-def log_status_server_error(e):
-    log_error(f"Error in status server: {str(e)}")
 
 
 def set_config(cfg):

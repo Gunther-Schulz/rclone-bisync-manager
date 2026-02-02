@@ -49,14 +49,12 @@ def request_status(timeout=5, retries=0, retry_delay=0.5):
     path = get_status_socket_path()
     if not path or not os.path.exists(path):
         return None
-    last_err_retryable = False
     for attempt in range(1 + max(0, retries)):
         if attempt > 0:
             time.sleep(retry_delay)
-        result, retryable = _request_status_once(path, timeout)
+        result, _ = _request_status_once(path, timeout)
         if result is not None:
             return result
-        last_err_retryable = retryable
     return None
 
 

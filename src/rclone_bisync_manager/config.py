@@ -1,9 +1,8 @@
 import yaml
 import os
-from datetime import datetime
 import hashlib
 from croniter import croniter
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, DirectoryPath
 from rclone_bisync_manager.logging_utils import log_message, log_error
 
@@ -160,7 +159,6 @@ class Config:
         self.daemon_mode = False
         self.status_file_path = {}
         self._log_state = LogStatePersistence()
-        self.last_config_status = None
         self.config_changed_on_disk = False
         self.last_config_mtime = None
 
