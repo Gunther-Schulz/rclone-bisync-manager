@@ -9,6 +9,7 @@ import time
 import subprocess
 import os
 import enum
+import tempfile
 from dataclasses import dataclass
 from io import BytesIO
 from cairosvg import svg2png
@@ -28,7 +29,17 @@ from rclone_bisync_manager.daemon_client import (
 )
 import sys
 from pystray import MenuItem as item
-# os.environ['PYSTRAY_BACKEND'] = 'gtk'  # or 'qt'
+
+# AppIndicator3 (SNI / modern tray on GNOME); fall back to pystray if unavailable
+APPINDICATOR_AVAILABLE = False
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("AppIndicator3", "0.1")
+    from gi.repository import Gtk, GLib, AppIndicator3
+    APPINDICATOR_AVAILABLE = True
+except (ImportError, ValueError):
+    Gtk = GLib = AppIndicator3 = None
 
 
 # Global variables
@@ -50,6 +61,11 @@ args = None
 
 # Add this global variable at the top of the file
 status_window = None
+
+# AppIndicator backend state (when APPINDICATOR_AVAILABLE)
+_tray_backend = "pystray"
+_indicator = None
+_icon_path = None
 
 
 def log_message(message, level=logging.INFO):
@@ -150,147 +166,108 @@ class DaemonManager:
             bool(status.get("sync_errors"))
         )
 
-    def get_menu_items(self, status):
+    def get_menu_spec(self, status):
+        """Return a list of menu spec dicts (type, label, callback, enabled, submenu) for any backend."""
         current_state = self.get_current_state(status)
-        menu_items = []
+        spec = []
 
         if current_state == DaemonState.INITIAL:
-            menu_items.append(pystray.MenuItem(
-                "Initializing...", None, enabled=False))
+            spec.append({"type": "item", "label": "Initializing...", "callback": None, "enabled": False})
         elif current_state == DaemonState.FAILED:
-            menu_items.extend(self._get_failed_menu_items(status))
+            spec.extend(self._get_failed_spec(status))
         elif current_state == DaemonState.LIMBO:
-            menu_items.extend(self._get_limbo_menu_items(status))
+            spec.extend(self._get_limbo_spec(status))
         else:
-            menu_items.extend(self._get_normal_menu_items(status))
+            spec.extend(self._get_normal_spec(status))
 
-        menu_items.extend([
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Config & Logs", pystray.Menu(
-                pystray.MenuItem("Reload Config", reload_config, enabled=current_state not in [
-                    DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]),
-                pystray.MenuItem("Open Config Folder", open_config_file),
-                pystray.MenuItem("Open Log Folder", open_log_folder)
-            )),
-            pystray.Menu.SEPARATOR,
+        spec.extend([
+            {"type": "separator"},
+            {"type": "item", "label": "Config & Logs", "callback": None, "enabled": True, "submenu": [
+                {"type": "item", "label": "Reload Config", "callback": reload_config, "enabled": current_state not in [DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]},
+                {"type": "item", "label": "Open Config Folder", "callback": open_config_file, "enabled": True},
+                {"type": "item", "label": "Open Log Folder", "callback": open_log_folder, "enabled": True},
+            ]},
+            {"type": "separator"},
         ])
+        spec.append({"type": "item", "label": "Show Status Window", "callback": show_status_window, "enabled": current_state != DaemonState.INITIAL})
+        spec.append({"type": "separator"})
 
-        # Show Status Window menu item (enabled for all states except INITIAL)
-        menu_items.append(pystray.MenuItem(
-            "Show Status Window", show_status_window, enabled=current_state != DaemonState.INITIAL))
-        menu_items.append(pystray.Menu.SEPARATOR)
-
-        # Add Start/Stop Daemon menu item
         daemon_status = get_daemon_status()
         if daemon_status is None:
-            menu_items.append(pystray.MenuItem("Start Daemon", start_daemon))
+            spec.append({"type": "item", "label": "Start Daemon", "callback": start_daemon, "enabled": True})
         elif current_state == DaemonState.SHUTTING_DOWN:
-            menu_items.append(pystray.MenuItem("Daemon is down...", lambda: None, enabled=False))
+            spec.append({"type": "item", "label": "Daemon is down...", "callback": None, "enabled": False})
         else:
-            menu_items.append(pystray.MenuItem("Stop Daemon", stop_daemon))
+            spec.append({"type": "item", "label": "Stop Daemon", "callback": stop_daemon, "enabled": True})
 
-        # Add experimental features if the flag is set
-        if args.enable_experimental:
-            if current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID,
-                                 DaemonState.CONFIG_CHANGED, DaemonState.LIMBO,
-                                 DaemonState.SYNC_ISSUES]:
-                menu_items.extend([
-                    pystray.Menu.SEPARATOR,
-                    pystray.MenuItem(
-                        "Edit Configuration (experimental)", edit_config),
-                    # Add other experimental features here in the future
-                ])
+        if args.enable_experimental and current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]:
+            spec.append({"type": "separator"})
+            spec.append({"type": "item", "label": "Edit Configuration (experimental)", "callback": edit_config, "enabled": True})
 
-        menu_items.append(pystray.MenuItem("Exit Tray", exit_tray))
-        return menu_items
+        spec.append({"type": "item", "label": "Exit Tray", "callback": exit_tray, "enabled": True})
+        return spec
 
-    def _get_failed_menu_items(self, status):
-        items = [pystray.MenuItem(
-            "⚠️ Daemon is not running", None, enabled=False)]
+    def _get_failed_spec(self, status):
+        items = [{"type": "item", "label": "⚠️ Daemon is not running", "callback": None, "enabled": False}]
         error_message = status.get("error") if status else None
         error_message = error_message or self.daemon_start_error or "Unknown error"
-        items.append(pystray.MenuItem(
-            f"Error: {error_message.split('\n')[0]}", None, enabled=False))
+        items.append({"type": "item", "label": f"Error: {error_message.split(chr(10))[0]}", "callback": None, "enabled": False})
         if self.daemon_start_error or (status and status.get("error")):
-            items.append(pystray.MenuItem("Show Full Error", lambda: show_text_window(
-                "Daemon Error Log", self.daemon_start_error or status.get("error"))))
+            items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or status.get("error")), "enabled": True})
         return items
 
-    def _get_limbo_menu_items(self, status):
-        items = [pystray.MenuItem(
-            "⚠️ Daemon is in limbo state", None, enabled=False)]
+    def _get_limbo_spec(self, status):
+        items = [{"type": "item", "label": "⚠️ Daemon is in limbo state", "callback": None, "enabled": False}]
         if status:
             if status.get("config_invalid", False):
-                items.append(pystray.MenuItem(
-                    "⚠️ Config is invalid", None, enabled=False))
-                items.append(pystray.MenuItem(f"Error: {status.get(
-                    'config_error_message', 'Unknown error')[:30]}...", None, enabled=False))
+                items.append({"type": "item", "label": "⚠️ Config is invalid", "callback": None, "enabled": False})
+                items.append({"type": "item", "label": f"Error: {status.get('config_error_message', 'Unknown error')[:30]}...", "callback": None, "enabled": False})
             if status.get("config_changed_on_disk", False):
-                items.append(pystray.MenuItem(
-                    "⚠️ Config changed on disk", None, enabled=False))
+                items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
         return items
 
-    def _get_normal_menu_items(self, status):
+    def _get_normal_spec(self, status):
         items = []
         if status:
             if self._has_sync_issues(status):
-                items.append(pystray.MenuItem(
-                    "⚠ Sync issues detected", None, enabled=False))
+                items.append({"type": "item", "label": "⚠ Sync issues detected", "callback": None, "enabled": False})
             if status.get("config_changed_on_disk"):
-                items.append(pystray.MenuItem(
-                    "⚠️ Config changed on disk", None, enabled=False))
-
+                items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
             if self._has_sync_issues(status) or status.get("config_changed_on_disk"):
-                items.append(pystray.Menu.SEPARATOR)
-
-            currently_syncing = status.get('currently_syncing')
+                items.append({"type": "separator"})
+            currently_syncing = status.get("currently_syncing")
             if currently_syncing:
-                items.append(pystray.MenuItem(
-                    "Currently syncing:", None, enabled=False))
+                items.append({"type": "item", "label": "Currently syncing:", "callback": None, "enabled": False})
                 if isinstance(currently_syncing, str):
-                    items.append(pystray.MenuItem(
-                        f"  {currently_syncing.strip()}", None, enabled=False))
+                    items.append({"type": "item", "label": f"  {currently_syncing.strip()}", "callback": None, "enabled": False})
                 elif isinstance(currently_syncing, list):
                     for job in currently_syncing:
-                        items.append(pystray.MenuItem(
-                            f"  {job.strip()}", None, enabled=False))
-
-            queued_jobs = status.get('queued_paths', [])
+                        items.append({"type": "item", "label": f"  {job.strip()}", "callback": None, "enabled": False})
+            queued_jobs = status.get("queued_paths", [])
             if queued_jobs:
-                items.append(pystray.MenuItem(
-                    "Queued jobs:", None, enabled=False))
+                items.append({"type": "item", "label": "Queued jobs:", "callback": None, "enabled": False})
                 for job in queued_jobs:
-                    items.append(pystray.MenuItem(
-                        f"  {job}", None, enabled=False))
-
-            # Add sync jobs submenu
+                    items.append({"type": "item", "label": f"  {job}", "callback": None, "enabled": False})
             if "sync_jobs" in status:
                 jobs_submenu = []
                 for job_key, job_status in status["sync_jobs"].items():
-                    job_submenu = pystray.Menu(
-                        pystray.MenuItem(
-                            "⚡ Sync Now", create_sync_now_handler(job_key)),
-                        pystray.MenuItem(
-                            "⚡ Force Sync Now", create_sync_now_handler(job_key, force_bisync=True)),
-                        pystray.MenuItem(
-                            "⚡ Resync + Sync Now", create_sync_now_handler(job_key, resync=True)),
-                        pystray.MenuItem(
-                            f"Last sync: {job_status['last_sync'] or 'Never'}", None, enabled=False),
-                        pystray.MenuItem(
-                            f"Next run: {job_status['next_run'] or 'Not scheduled'}", None, enabled=False),
-                        pystray.MenuItem(
-                            f"Sync status: {job_status['sync_status']}", None, enabled=False),
-                        pystray.MenuItem(f"Resync status: {
-                                         job_status['resync_status']}", None, enabled=False),
-                    )
-                    jobs_submenu.append(pystray.MenuItem(job_key, job_submenu))
-                items.append(pystray.MenuItem(
-                    "Sync Jobs", pystray.Menu(*jobs_submenu)))
+                    job_submenu = [
+                        {"type": "item", "label": "⚡ Sync Now", "callback": create_sync_now_handler(job_key), "enabled": True},
+                        {"type": "item", "label": "⚡ Force Sync Now", "callback": create_sync_now_handler(job_key, force_bisync=True), "enabled": True},
+                        {"type": "item", "label": "⚡ Resync + Sync Now", "callback": create_sync_now_handler(job_key, resync=True), "enabled": True},
+                        {"type": "item", "label": f"Last sync: {job_status['last_sync'] or 'Never'}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Next run: {job_status['next_run'] or 'Not scheduled'}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Sync status: {job_status['sync_status']}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Resync status: {job_status['resync_status']}", "callback": None, "enabled": False},
+                    ]
+                    jobs_submenu.append({"type": "item", "label": job_key, "callback": None, "enabled": True, "submenu": job_submenu})
+                items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": True, "submenu": jobs_submenu})
             else:
-                items.append(pystray.MenuItem(
-                    "Sync Jobs", None, enabled=False))
-
+                items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": False})
         return items
+
+    def get_menu_items(self, status):
+        return _build_pystray_menu(self.get_menu_spec(status))
 
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
@@ -347,6 +324,42 @@ class DaemonManager:
         if status and isinstance(status, dict):
             return status.get('config_file_location')
         return None
+
+
+def _build_pystray_menu(spec):
+    """Build pystray Menu items from menu spec list."""
+    out = []
+    for s in spec:
+        if s["type"] == "separator":
+            out.append(pystray.Menu.SEPARATOR)
+        elif s["type"] == "item":
+            if s.get("submenu"):
+                out.append(pystray.MenuItem(s["label"], pystray.Menu(*_build_pystray_menu(s["submenu"])), enabled=s.get("enabled", True)))
+            else:
+                out.append(pystray.MenuItem(s["label"], s.get("callback"), enabled=s.get("enabled", True)))
+    return out
+
+
+def _build_gtk_menu(spec):
+    """Build Gtk.Menu from menu spec list (used by AppIndicator backend)."""
+    if not APPINDICATOR_AVAILABLE:
+        return None
+    menu = Gtk.Menu()
+    for s in spec:
+        if s["type"] == "separator":
+            menu.append(Gtk.SeparatorMenuItem())
+        elif s["type"] == "item":
+            item = Gtk.MenuItem.new_with_label(s["label"].replace("&", "_"))
+            item.set_sensitive(s.get("enabled", True))
+            if s.get("submenu"):
+                sub = _build_gtk_menu(s["submenu"])
+                item.set_submenu(sub)
+            elif s.get("callback"):
+                cb = s["callback"]
+                item.connect("activate", lambda w, c=cb: c() if c else None)
+            menu.append(item)
+    menu.show_all()
+    return menu
 
 
 def get_daemon_status():
@@ -450,7 +463,7 @@ def start_daemon():
 
 
 def reload_config():
-    global daemon_manager, icon
+    global daemon_manager, icon, _tray_backend
     try:
         response_data = request_reload()
         if response_data.get("status") == "success":
@@ -458,19 +471,20 @@ def reload_config():
         else:
             log_message(f"Error reloading configuration: {
                         response_data.get('message', 'Unknown error')}", level=logging.ERROR)
-
-        current_status = get_daemon_status()
-        new_menu = pystray.Menu(
-            *daemon_manager.get_menu_items(current_status))
-        new_icon = create_status_image(
-            daemon_manager.get_icon_color(current_status),
-            daemon_manager.get_icon_text(current_status),
-            style=args.icon_style,
-            thickness=args.icon_thickness
-        )
-        icon.menu = new_menu
-        icon.icon = new_icon
-        icon.update_menu()
+        if _tray_backend == "appindicator":
+            update_queue.put(True)
+        else:
+            current_status = get_daemon_status()
+            new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
+            new_icon = create_status_image(
+                daemon_manager.get_icon_color(current_status),
+                daemon_manager.get_icon_text(current_status),
+                style=args.icon_style,
+                thickness=args.icon_thickness,
+            )
+            icon.menu = new_menu
+            icon.icon = new_icon
+            icon.update_menu()
         return response_data.get("status") == "success"
     except Exception as e:
         log_message(f"Error communicating with daemon: {
@@ -752,12 +766,12 @@ def open_log_folder():
 
 def get_config_file_path():
     status = get_daemon_status()
-    return status.get('config_file_location')
+    return status.get("config_file_location") if status else None
 
 
 def get_log_file_path():
     status = get_daemon_status()
-    return status.get('log_file_location')
+    return status.get("log_file_location") if status else None
 
 
 def show_text_window(title, content):
@@ -824,8 +838,97 @@ def clear_crash_log():
             log_message(f"Error clearing crash log: {e}", level=logging.ERROR)
 
 
+def _write_tray_icon_to_path(path):
+    """Write current status image to path (for AppIndicator)."""
+    global daemon_manager, args
+    current_status = get_daemon_status()
+    color = daemon_manager.get_icon_color(current_status)
+    text = daemon_manager.get_icon_text(current_status)
+    img = create_status_image(color, text, style=args.icon_style, thickness=args.icon_thickness)
+    img.save(path, "PNG")
+
+
+def _update_appindicator_ui():
+    """Rebuild indicator menu and icon (run on main thread via GLib.idle_add)."""
+    global _indicator, _icon_path, daemon_manager, args
+    if _indicator is None or _icon_path is None:
+        return
+    _write_tray_icon_to_path(_icon_path)
+    _indicator.set_icon(_icon_path)
+    spec = daemon_manager.get_menu_spec(get_daemon_status())
+    menu = _build_gtk_menu(spec)
+    _indicator.set_menu(menu)
+    return False  # GLib.idle_add: return False to remove source
+
+
+def run_tray_appindicator():
+    """Run tray using AppIndicator3 (SNI); modern tray on GNOME."""
+    global icon, daemon_manager, args, debug, update_queue, _tray_backend, _indicator, _icon_path
+    _tray_backend = "appindicator"
+    daemon_manager = DaemonManager()
+    update_queue = Queue()
+    icon = None  # no pystray icon
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--icon-style", type=int, choices=[1, 2], default=1)
+    parser.add_argument("--icon-thickness", type=int, default=40)
+    parser.add_argument("--log-level", type=str, choices=["NONE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], default="NONE")
+    parser.add_argument("--enable-experimental", action="store_true")
+    parser.add_argument("--config", type=str)
+    args = parser.parse_args()
+
+    if args.log_level != "NONE":
+        logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s - %(levelname)s - %(message)s")
+        debug = args.log_level == "DEBUG"
+    else:
+        logging.disable(logging.CRITICAL)
+        debug = False
+
+    clear_crash_log()
+    initial_status = get_daemon_status()
+    initial_state = daemon_manager.get_current_state(initial_status)
+
+    _icon_path = os.path.join(tempfile.gettempdir(), "rclone-bisync-manager-tray-icon.png")
+    _write_tray_icon_to_path(_icon_path)
+    _indicator = AppIndicator3.Indicator.new(
+        "rclone-bisync-manager",
+        _icon_path,
+        AppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
+    )
+    _indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+    _indicator.set_menu(_build_gtk_menu(daemon_manager.get_menu_spec(initial_status)))
+
+    def on_update_queue():
+        GLib.idle_add(_update_appindicator_ui)
+
+    def handle_updates_appindicator():
+        while True:
+            try:
+                update_queue.get()
+                on_update_queue()
+            except Exception as e:
+                log_message(f"Error in handle_updates: {e}", level=logging.ERROR)
+            finally:
+                try:
+                    update_queue.task_done()
+                except ValueError:
+                    pass
+
+    Thread(target=check_status_and_update, daemon=True).start()
+    Thread(target=handle_updates_appindicator, daemon=True).start()
+
+    if initial_state == DaemonState.OFFLINE:
+        Thread(target=start_daemon, daemon=True).start()
+
+    try:
+        Gtk.main()
+    except KeyboardInterrupt:
+        exit_tray()
+
+
 def run_tray():
-    global icon, daemon_manager, args, debug, update_queue
+    global icon, daemon_manager, args, debug, update_queue, _tray_backend
+    _tray_backend = "pystray"
     daemon_manager = DaemonManager()
     update_queue = Queue()
 
@@ -880,45 +983,32 @@ def run_tray():
 
 
 def update_menu_and_icon():
-    global icon, daemon_manager, args
+    global icon, daemon_manager, args, _tray_backend
     current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
 
     log_message(f"Updating menu and icon. Current state: {
                 current_state.name}", level=logging.INFO)
 
-    # Log the current menu items
+    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+        GLib.idle_add(_update_appindicator_ui)
+        return
+    # pystray
     log_message("Current menu items:", level=logging.DEBUG)
     for item in icon.menu:
         log_message(f"  - {item.text}", level=logging.DEBUG)
-
-    # Get new menu items and log them
     new_menu_items = daemon_manager.get_menu_items(current_status)
-    log_message("New menu items:", level=logging.DEBUG)
-    for item in new_menu_items:
-        log_message(f"  - {item.text}", level=logging.DEBUG)
-
     new_menu = pystray.Menu(*new_menu_items)
     new_icon_color = daemon_manager.get_icon_color(current_status)
     new_icon_text = daemon_manager.get_icon_text(current_status)
-
-    log_message(f"New icon color: {new_icon_color}", level=logging.DEBUG)
-    log_message(f"New icon text: {new_icon_text}", level=logging.DEBUG)
-
     new_icon = create_status_image(
         new_icon_color,
         new_icon_text,
         style=args.icon_style,
-        thickness=args.icon_thickness
+        thickness=args.icon_thickness,
     )
-
-    # Check if there are actual changes
     menu_changed = str(new_menu) != str(icon.menu)
     icon_changed = new_icon != icon.icon
-
-    log_message(f"Menu changed: {menu_changed}", level=logging.DEBUG)
-    log_message(f"Icon changed: {icon_changed}", level=logging.DEBUG)
-
     if menu_changed or icon_changed:
         icon.menu = new_menu
         icon.icon = new_icon
@@ -1011,21 +1101,33 @@ def edit_config():
 
 
 def exit_tray():
+    global _tray_backend
     log_message("Exiting tray application", level=logging.INFO)
-    icon.stop()
+    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+        Gtk.main_quit()
+    else:
+        icon.stop()
     sys.exit(0)
 
 
 def show_notification(title, message):
-    global icon
-    if icon:
+    global icon, _tray_backend
+    if _tray_backend == "appindicator":
+        try:
+            subprocess.run(["notify-send", title, message], check=False, timeout=2)
+        except Exception:
+            log_message(f"Notification: {title} - {message}", level=logging.INFO)
+    elif icon:
         icon.notify(message, title)
     else:
         log_message(f"Notification: {title} - {message}", level=logging.INFO)
 
 
 def main():
-    run_tray()
+    if APPINDICATOR_AVAILABLE:
+        run_tray_appindicator()
+    else:
+        run_tray()
 
 
 if __name__ == "__main__":
