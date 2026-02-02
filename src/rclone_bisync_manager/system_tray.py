@@ -138,10 +138,12 @@ class DaemonManager:
         else:
             spec.extend(self._get_normal_spec(status))
 
+        edit_config_enabled = current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]
         spec.extend([
             {"type": "separator"},
             {"type": "item", "label": "Config & Logs", "callback": None, "enabled": True, "submenu": [
                 {"type": "item", "label": "Reload Config", "callback": reload_config, "enabled": current_state not in [DaemonState.INITIAL, DaemonState.SHUTTING_DOWN]},
+                {"type": "item", "label": "Edit Configuration (experimental)", "callback": edit_config, "enabled": edit_config_enabled},
                 {"type": "item", "label": "Open Config Folder", "callback": open_config_file, "enabled": True},
                 {"type": "item", "label": "Open Log Folder", "callback": open_log_folder, "enabled": True},
             ]},
@@ -156,10 +158,6 @@ class DaemonManager:
             spec.append({"type": "item", "label": "Daemon is down...", "callback": None, "enabled": False})
         else:
             spec.append({"type": "item", "label": "Stop Daemon", "callback": stop_daemon, "enabled": True})
-
-        if getattr(args, "enable_experimental", False) and current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]:
-            spec.append({"type": "separator"})
-            spec.append({"type": "item", "label": "Edit Configuration (experimental)", "callback": edit_config, "enabled": True})
 
         spec.append({"type": "item", "label": "Exit Tray", "callback": exit_tray, "enabled": True})
         return spec
@@ -530,8 +528,20 @@ def _show_status_window_gtk():
         status = {}
     current_state = daemon_manager.get_current_state(status)
 
-    win = Gtk.Window(title="RClone BiSync Manager Status")
-    win.set_default_size(400, 300)
+    state_title = {
+        DaemonState.RUNNING: "Running",
+        DaemonState.SYNCING: "Syncing",
+        DaemonState.LIMBO: "Limbo",
+        DaemonState.INITIAL: "Initializing",
+        DaemonState.CONFIG_CHANGED: "Config changed",
+        DaemonState.CONFIG_INVALID: "Config invalid",
+        DaemonState.SYNC_ISSUES: "Sync issues",
+        DaemonState.SHUTTING_DOWN: "Shutting down",
+        DaemonState.OFFLINE: "Offline",
+        DaemonState.FAILED: "Not running",
+    }.get(current_state, "Status")
+    win = Gtk.Window(title=f"RClone BiSync Manager – {state_title}")
+    win.set_default_size(500, 380)
     _status_window_gtk = win
 
     def _on_status_win_destroy(w):
@@ -584,6 +594,7 @@ def _show_status_window_gtk():
         btn_refresh = Gtk.Button(label="Refresh")
         btn_refresh.connect("clicked", lambda b: (win.destroy(), GLib.idle_add(_show_status_window_gtk)))
         outer.pack_start(btn_refresh, False, False, 0)
+        outer.pack_start(Gtk.Label(label="Click Refresh to load latest status.", xalign=0), False, False, 0)
         # General
         gen_sw = Gtk.ScrolledWindow()
         gen_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -594,9 +605,26 @@ def _show_status_window_gtk():
             status_text = "⚠ Daemon is in limbo state"
         elif current_state == DaemonState.INITIAL:
             status_text = "Daemon is initializing..."
+        elif current_state == DaemonState.SYNCING:
+            status_text = "Syncing"
+        elif current_state == DaemonState.CONFIG_CHANGED:
+            status_text = "⚠ Config changed on disk (reload from tray menu)"
+        elif current_state == DaemonState.CONFIG_INVALID:
+            status_text = "⚠ Config invalid"
+        elif current_state == DaemonState.SYNC_ISSUES:
+            status_text = "⚠ Sync issues detected"
         gen_box.pack_start(Gtk.Label(label=status_text, xalign=0), False, False, 0)
+        pid_val = status.get(sp.PID)
+        if pid_val is not None:
+            gen_box.pack_start(Gtk.Label(label=f"PID: {pid_val}", xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label=f"Config: {'Valid' if not status.get(sp.CONFIG_INVALID, False) else 'Invalid'}", xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label=f"Config changed on disk: {'Yes' if status.get(sp.CONFIG_CHANGED_ON_DISK, False) else 'No'}", xalign=0), False, False, 0)
+        cfg_path = status.get(sp.CONFIG_FILE_LOCATION)
+        if cfg_path:
+            gen_box.pack_start(Gtk.Label(label=f"Config file: {cfg_path}", xalign=0), False, False, 0)
+        log_path = status.get(sp.LOG_FILE_LOCATION)
+        if log_path:
+            gen_box.pack_start(Gtk.Label(label=f"Log file: {log_path}", xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label="Currently syncing:", xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label=str(status.get(sp.CURRENTLY_SYNCING, "None")), xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label="Queued jobs:", xalign=0), False, False, 0)
@@ -614,15 +642,18 @@ def _show_status_window_gtk():
         nb.append_page(jobs_sw, Gtk.Label(label="Sync Jobs"))
         _sync_jobs = status.get(sp.SYNC_JOBS)
         sync_jobs_dict = _sync_jobs if isinstance(_sync_jobs, dict) else {}
-        for job_key, job_status in sync_jobs_dict.items():
-            fr = Gtk.Frame(label=str(job_key))
-            fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            fr.add(fr_box)
-            fr_box.pack_start(Gtk.Label(label=f"Last sync: {job_status.get(sp.LAST_SYNC, 'N/A')}", xalign=0), False, False, 0)
-            fr_box.pack_start(Gtk.Label(label=f"Next run: {job_status.get(sp.NEXT_RUN, 'N/A')}", xalign=0), False, False, 0)
-            fr_box.pack_start(Gtk.Label(label=f"Sync status: {job_status.get(sp.SYNC_STATUS, 'N/A')}", xalign=0), False, False, 0)
-            fr_box.pack_start(Gtk.Label(label=f"Resync status: {job_status.get(sp.RESYNC_STATUS, 'N/A')}", xalign=0), False, False, 0)
-            jobs_box.pack_start(fr, False, False, 0)
+        if sync_jobs_dict:
+            for job_key, job_status in sync_jobs_dict.items():
+                fr = Gtk.Frame(label=str(job_key))
+                fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                fr.add(fr_box)
+                fr_box.pack_start(Gtk.Label(label=f"Last sync: {job_status.get(sp.LAST_SYNC, 'N/A')}", xalign=0), False, False, 0)
+                fr_box.pack_start(Gtk.Label(label=f"Next run: {job_status.get(sp.NEXT_RUN, 'N/A')}", xalign=0), False, False, 0)
+                fr_box.pack_start(Gtk.Label(label=f"Sync status: {job_status.get(sp.SYNC_STATUS, 'N/A')}", xalign=0), False, False, 0)
+                fr_box.pack_start(Gtk.Label(label=f"Resync status: {job_status.get(sp.RESYNC_STATUS, 'N/A')}", xalign=0), False, False, 0)
+                jobs_box.pack_start(fr, False, False, 0)
+        else:
+            jobs_box.pack_start(Gtk.Label(label="No sync jobs configured.", xalign=0), False, False, 0)
         # Sync Errors
         err_sw = Gtk.ScrolledWindow()
         err_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
