@@ -3,24 +3,17 @@ from tkinter import ttk, messagebox, simpledialog
 import yaml
 import re
 import json
-import socket
+
+from rclone_bisync_manager.daemon_client import request_config_schema
 
 
 def get_config_schema():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        client.connect(socket_path)
-        client.sendall(b"GET_CONFIG")
-        response = client.recv(4096).decode()
-        config_data = json.loads(response)
-        return config_data.get("config_schema", {})
+        return request_config_schema()
     except Exception as e:
         messagebox.showerror(
             "Error", f"Failed to fetch config schema: {str(e)}")
         return {}
-    finally:
-        client.close()
 
 
 def create_inputs(parent, config_dict, schema_dict, section, prefix=''):

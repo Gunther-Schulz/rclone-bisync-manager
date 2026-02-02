@@ -6,6 +6,7 @@ import hashlib
 import psutil
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import config
+from rclone_bisync_manager.runtime_paths import get_lock_file_path
 import fcntl
 import errno
 
@@ -99,7 +100,7 @@ def ensure_log_file_path():
 
 
 def check_and_create_lock_file():
-    lock_file_path = '/tmp/rclone_bisync_manager.lock'
+    lock_file_path = get_lock_file_path()
 
     if os.path.exists(lock_file_path):
         try:

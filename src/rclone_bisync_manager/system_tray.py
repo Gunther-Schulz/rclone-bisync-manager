@@ -4,7 +4,6 @@ from tkinter import messagebox, ttk
 import tkinter
 import pystray
 from PIL import Image
-import socket
 import json
 import time
 import subprocess
@@ -19,7 +18,14 @@ import traceback
 import queue
 from queue import Queue
 from threading import Thread, Lock
-from rclone_bisync_manager_tray.config_editor import edit_config
+from rclone_bisync_manager.config_editor import edit_config
+from rclone_bisync_manager.runtime_paths import get_crash_log_path
+from rclone_bisync_manager.daemon_client import (
+    request_status,
+    request_stop,
+    request_reload,
+    request_add_sync,
+)
 import sys
 from pystray import MenuItem as item
 # os.environ['PYSTRAY_BACKEND'] = 'gtk'  # or 'qt'
@@ -345,40 +351,17 @@ class DaemonManager:
 
 def get_daemon_status():
     global last_status, last_offline_log_time
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(5)  # Set a timeout of 5 seconds
-        client.connect(socket_path)
-        client.sendall(b"STATUS")
-
-        chunks = []
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        response = b''.join(chunks).decode()
-
-        status = json.loads(response)
-        client.close()
-
+        status = request_status(timeout=5)
+        if status is None:
+            return None
         if status != last_status:
             log_message("Daemon status changed", level=logging.INFO)
             log_message(f"New status: {json.dumps(status)[
                         :100]}...", level=logging.DEBUG)
-
         last_status = status
         last_offline_log_time = 0
         return status
-    except socket.timeout:
-        log_message("Timeout while getting daemon status",
-                    level=logging.WARNING)
-        return None
-    except json.JSONDecodeError as e:
-        log_message(f"Error decoding daemon status: {
-                    str(e)}", level=logging.ERROR)
-        return None
     except Exception as e:
         log_message(f"Error communicating with daemon: {
                     str(e)}", level=logging.ERROR)
@@ -395,17 +378,10 @@ def create_sync_now_handler(job_key, force_bisync=False, resync=False):
 
 
 def stop_daemon():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        client.sendall(b"STOP")
-        response = client.recv(1024).decode()
-        client.close()
+        request_stop()
         log_message(
             "Daemon is shutting down. Use 'daemon status' to check progress.")
-
-        # Immediately update the menu to show "Shutting Down"
         update_menu_and_icon()
     except Exception as e:
         log_message(f"Error stopping daemon: {e}", level=logging.ERROR)
@@ -475,41 +451,27 @@ def start_daemon():
 
 def reload_config():
     global daemon_manager, icon
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        client.sendall(b"RELOAD")
-        response = client.recv(1024).decode()
-        client.close()
+        response_data = request_reload()
+        if response_data.get("status") == "success":
+            log_message("Configuration reloaded successfully")
+        else:
+            log_message(f"Error reloading configuration: {
+                        response_data.get('message', 'Unknown error')}", level=logging.ERROR)
 
-        try:
-            response_data = json.loads(response)
-            if response_data["status"] == "success":
-                log_message("Configuration reloaded successfully")
-            else:
-                log_message(f"Error reloading configuration: {
-                            response_data['message']}", level=logging.ERROR)
-
-            current_status = get_daemon_status()
-            new_menu = pystray.Menu(
-                *daemon_manager.get_menu_items(current_status))
-            new_icon = create_status_image(
-                daemon_manager.get_icon_color(current_status),
-                daemon_manager.get_icon_text(current_status),
-                style=args.icon_style,
-                thickness=args.icon_thickness
-            )
-
-            icon.menu = new_menu
-            icon.icon = new_icon
-            icon.update_menu()
-
-            return response_data["status"] == "success"
-        except json.JSONDecodeError:
-            log_message(f"Error: Invalid JSON response from daemon: {
-                        response}", level=logging.ERROR)
-            return False
+        current_status = get_daemon_status()
+        new_menu = pystray.Menu(
+            *daemon_manager.get_menu_items(current_status))
+        new_icon = create_status_image(
+            daemon_manager.get_icon_color(current_status),
+            daemon_manager.get_icon_text(current_status),
+            style=args.icon_style,
+            thickness=args.icon_thickness
+        )
+        icon.menu = new_menu
+        icon.icon = new_icon
+        icon.update_menu()
+        return response_data.get("status") == "success"
     except Exception as e:
         log_message(f"Error communicating with daemon: {
                     str(e)}", level=logging.ERROR)
@@ -517,28 +479,11 @@ def reload_config():
 
 
 def add_to_sync_queue(job_key, force_bisync=False, resync=False):
-    socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        client.sendall(json.dumps(
-            {"job_key": job_key, "force_bisync": force_bisync, "resync": resync}).encode())
-
-        chunks = []
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        response = b''.join(chunks).decode()
-
-        client.close()
-        log_message(f"Add to sync queue response: {
-                    response}", level=logging.INFO)
-
-        # Trigger an immediate update of the menu and icon
+        response = request_add_sync(job_key, force_bisync=force_bisync, resync=resync)
+        log_message(f"Add to sync queue response: {response}", level=logging.INFO)
         update_queue.put(True)
-        return True
+        return response == "OK"
     except Exception as e:
         log_message(f"Error adding job to sync queue: {
                     str(e)}", level=logging.ERROR)
@@ -870,7 +815,7 @@ def ensure_daemon_running():
 
 
 def clear_crash_log():
-    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    crash_log_path = get_crash_log_path()
     if os.path.exists(crash_log_path):
         try:
             os.remove(crash_log_path)
@@ -1040,7 +985,7 @@ def handle_updates():
 
 
 def check_crash_log():
-    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    crash_log_path = get_crash_log_path()
     if os.path.exists(crash_log_path):
         with open(crash_log_path, 'r') as f:
             crash_message = f.read()
@@ -1054,7 +999,7 @@ def edit_config():
     try:
         config_file = daemon_manager.get_config_file_path()
         if config_file:
-            from rclone_bisync_manager_tray.config_editor import edit_config as config_editor
+            from rclone_bisync_manager.config_editor import edit_config as config_editor
             config_editor(config_file)
             reload_config()
         else:

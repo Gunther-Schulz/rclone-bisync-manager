@@ -1,8 +1,6 @@
 import yaml
 import os
 from datetime import datetime
-from threading import Lock
-from queue import Queue
 import hashlib
 from croniter import croniter
 import json
@@ -179,17 +177,8 @@ class Config:
         self.args = None
         self.config_invalid = False
         self.config_error_message = None
-        self.LOCK_FILE_PATH = '/tmp/rclone_bisync_manager.lock'
         self._init_file_paths()
         self._init_logging_paths()
-        self.sync_queue = Queue()
-        self.queued_paths = set()
-        self.sync_lock = Lock()
-        self.currently_syncing = None
-        self.current_sync_start_time = None
-        self.running = True
-        self.shutting_down = False
-        self.shutdown_complete = False
         self.console_log = False
         self.specific_sync_jobs = None
         self.force_operation = False
@@ -399,12 +388,19 @@ config = Config()
 
 
 def signal_handler(signum, frame):
-    if config._config is not None:
-        config.running = False
-        config.shutting_down = True
+    from rclone_bisync_manager.daemon_state import daemon_state
+    if daemon_state is not None:
+        daemon_state.running = False
+        daemon_state.shutting_down = True
         log_message('SIGINT or SIGTERM received. Initiating graceful shutdown.')
-        if hasattr(config, 'lock_fd'):
-            config.lock_fd.close()
+        if getattr(daemon_state, 'lock_fd', None) is not None:
+            try:
+                import fcntl
+                fcntl.lockf(daemon_state.lock_fd, fcntl.LOCK_UN)
+                os.close(daemon_state.lock_fd)
+            except (OSError, IOError):
+                pass
+            daemon_state.lock_fd = None
 
 
 def get_config_schema():

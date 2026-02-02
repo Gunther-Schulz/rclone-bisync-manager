@@ -7,6 +7,14 @@ from rclone_bisync_manager.utils import check_and_create_lock_file
 from rclone_bisync_manager.scheduler import scheduler
 from rclone_bisync_manager.sync import perform_sync_operations
 from rclone_bisync_manager.config import config, signal_handler
+from rclone_bisync_manager.daemon_state import DaemonRuntimeState
+import rclone_bisync_manager.daemon_state as state_module
+from rclone_bisync_manager.runtime_paths import (
+    get_add_sync_socket_path,
+    get_crash_log_path,
+    get_lock_file_path,
+)
+from rclone_bisync_manager.daemon_client import request_stop, request_status
 import os
 import signal
 import time
@@ -25,6 +33,11 @@ def daemon_main():
         print(f"Error starting daemon: {error_message}")
         return
 
+    state = DaemonRuntimeState()
+    state.args = config.args
+    state.lock_fd = lock_fd
+    state_module.daemon_state = state
+
     try:
         print("Daemon started in limbo state")
         log_message("Daemon started in limbo state")
@@ -35,7 +48,10 @@ def daemon_main():
 
         print("Starting status server thread")
         status_thread = threading.Thread(
-            target=start_status_server, daemon=True)
+            target=start_status_server,
+            kwargs={"handlers": {"RELOAD": reload_config}, "state": state, "config": config},
+            daemon=True,
+        )
         status_thread.start()
 
         print("Starting add-sync request handler thread")
@@ -66,7 +82,7 @@ def daemon_main():
         last_config_check = time.time()
         config_check_interval = 1
 
-        while config.running:
+        while state.running:
             current_time = time.time()
             if current_time - last_config_check >= config_check_interval:
                 config.check_config_changed()
@@ -77,7 +93,7 @@ def daemon_main():
                 check_scheduled_tasks()
 
             time.sleep(1)
-            if config.shutting_down:
+            if state.shutting_down:
                 print("Shutdown signal received, initiating graceful shutdown")
                 log_message(
                     "Shutdown signal received, initiating graceful shutdown")
@@ -90,21 +106,21 @@ def daemon_main():
 
         # Wait for current sync to finish with a timeout
         shutdown_start = time.time()
-        while config.currently_syncing and time.time() - shutdown_start < 60:  # 60 seconds timeout
+        while state.currently_syncing and time.time() - shutdown_start < 60:  # 60 seconds timeout
             log_message(f"Waiting for current sync to finish: {
-                        config.currently_syncing}")
+                        state.currently_syncing}")
             time.sleep(5)
 
-        if config.currently_syncing:
+        if state.currently_syncing:
             log_message(f"Sync operation {
-                        config.currently_syncing} did not finish within timeout. Forcing shutdown.")
+                        state.currently_syncing} did not finish within timeout. Forcing shutdown.")
 
         # Clear remaining queue
-        while not config.sync_queue.empty():
-            config.sync_queue.get_nowait()
-        config.queued_paths.clear()
+        while not state.sync_queue.empty():
+            state.sync_queue.get_nowait()
+        state.queued_paths.clear()
 
-        config.shutdown_complete = True
+        state.shutdown_complete = True
         log_message('Daemon shutdown complete.')
         status_thread.join(timeout=5)
 
@@ -114,6 +130,7 @@ def daemon_main():
         log_error(error_message)
         write_crash_log(error_message)
     finally:
+        state_module.daemon_state = None
         if lock_fd is not None:
             try:
                 fcntl.lockf(lock_fd, fcntl.LOCK_UN)
@@ -121,40 +138,46 @@ def daemon_main():
             except IOError:
                 pass  # Ignore errors during shutdown
             try:
-                os.unlink(config.LOCK_FILE_PATH)
+                os.unlink(get_lock_file_path())
             except OSError:
                 pass  # Ignore if the file is already gone
 
 
 def write_crash_log(error_message):
-    crash_log_path = '/tmp/rclone_bisync_manager_crash.log'
+    crash_log_path = get_crash_log_path()
     with open(crash_log_path, 'w') as f:
         f.write(error_message)
 
 
 def process_sync_queue():
-    while not config.sync_queue.empty() and not config.shutting_down:
-        with config.sync_lock:
-            if config.currently_syncing is None:
-                key, force_bisync, force_resync = config.sync_queue.get_nowait()
-                config.currently_syncing = key
-                config.queued_paths.remove(key)
-                config.current_sync_start_time = datetime.now()
+    state = state_module.daemon_state
+    if state is None:
+        return
+    while not state.sync_queue.empty() and not state.shutting_down:
+        with state.sync_lock:
+            if state.currently_syncing is None:
+                key, force_bisync, force_resync = state.sync_queue.get_nowait()
+                state.currently_syncing = key
+                state.queued_paths.remove(key)
+                state.current_sync_start_time = datetime.now()
             else:
                 break
 
-        if key in config._config.sync_jobs and not config.shutting_down:
+        if key in config._config.sync_jobs and not state.shutting_down:
             perform_sync_operations(key, force_bisync, force_resync)
 
-        with config.sync_lock:
-            config.currently_syncing = None
-            config.current_sync_start_time = None
+        with state.sync_lock:
+            state.currently_syncing = None
+            state.current_sync_start_time = None
 
 
 def check_scheduled_tasks():
+    state = state_module.daemon_state
+    if state is None:
+        return
     while True:
         next_task = scheduler.get_next_task()
-        if next_task and not config.shutting_down:
+        if next_task and not state.shutting_down:
             now = datetime.now()
             if now >= next_task.scheduled_time:
                 task = scheduler.pop_next_task()
@@ -171,71 +194,39 @@ def check_scheduled_tasks():
 
 
 def add_to_sync_queue(key, force_bisync=False, resync=False):
-    if not config.shutting_down and key not in config.queued_paths and key != config.currently_syncing:
+    state = state_module.daemon_state
+    if state is None:
+        return
+    if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
         config._config.sync_jobs[key].force_operation = force_bisync
         config._config.sync_jobs[key].force_resync = resync
-        config.sync_queue.put_nowait((key, force_bisync, resync))
-        config.queued_paths.add(key)
+        state.sync_queue.put_nowait((key, force_bisync, resync))
+        state.queued_paths.add(key)
 
 
 def stop_daemon():
-    if not os.path.exists(config.LOCK_FILE_PATH):
+    if not os.path.exists(get_lock_file_path()):
         print("Daemon is not running.")
         return
-
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect('/tmp/rclone_bisync_manager_status.sock')
-        client.sendall(b"STOP")
-        response = client.recv(1024).decode()
-        client.close()
+    result = request_stop()
+    if result and result.get("status") == "success":
         print("Daemon is shutting down. Use 'daemon status' to check progress.")
-    except Exception as e:
-        print(f"Error stopping daemon: {e}")
+    elif result:
+        print(f"Error stopping daemon: {result.get('message', result)}")
 
 
 def print_daemon_status():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
-    if not os.path.exists(socket_path):
+    status_dict = request_status(timeout=5)
+    if status_dict is None:
         print("Daemon is not running.")
         return
-
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(5)  # Set a 5-second timeout
-        client.connect(socket_path)
-        client.sendall(b"STATUS")
-
-        chunks = []
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        response = b''.join(chunks).decode()
-        client.close()
-
-        if not response:
-            print("Error: No response received from daemon.")
-            return
-
-        try:
-            status_dict = json.loads(response)
-            if status_dict.get("shutting_down", False):
-                print("Daemon is shutting down. Current status:")
-            print(json.dumps(status_dict, ensure_ascii=False, indent=2))
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON: {e}")
-            print("Raw status data:")
-            print(response)
-    except Exception as e:
-        print(f"Error communicating with daemon: {e}")
-        print("Traceback:")
-        print(traceback.format_exc())
+    if status_dict.get("shutting_down", False):
+        print("Daemon is shutting down. Current status:")
+    print(json.dumps(status_dict, ensure_ascii=False, indent=2))
 
 
 def handle_add_sync_request():
-    socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
+    socket_path = get_add_sync_socket_path()
     if os.path.exists(socket_path):
         os.unlink(socket_path)
 
@@ -244,7 +235,8 @@ def handle_add_sync_request():
     server.listen(1)
     server.settimeout(1)
 
-    while config.running and not config.shutting_down:
+    state = state_module.daemon_state
+    while state is not None and state.running and not state.shutting_down:
         try:
             conn, addr = server.accept()
             data = conn.recv(1024).decode()
@@ -275,9 +267,11 @@ def handle_add_sync_request():
 
 
 def reload_config():
+    state = state_module.daemon_state
+    args = state.args if state is not None else config.args
     config.reset_config_changed_flag()
     try:
-        config.load_and_validate_config(config.args)
+        config.load_and_validate_config(args)
         log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
         scheduler.schedule_tasks()

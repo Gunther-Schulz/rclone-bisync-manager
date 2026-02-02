@@ -22,3 +22,12 @@
 ## Improvements
 
 - [ ] Refactor code to eliminate 'global' keyword (if possible)
+
+## Refactor plan
+
+### Tray: use modern AppIndicator / SNI path (GNOME-native)
+
+- **Goal:** Tray icon works like Telegram/Steam on GNOME: use **Status Notifier Item (SNI) / AppIndicator** instead of the legacy X11 system tray (XEmbed), so the icon shows with the “AppIndicator and KStatusNotifierItem Support” extension that many distros ship by default.
+- **Current:** pystray, which on Linux typically uses the legacy tray → icon does not show on stock GNOME; user needs a different/extra extension.
+- **Target:** Use **libappindicator** (AppIndicator) via **PyGObject** (e.g. `python-appindicator` or equivalent bindings). Optional: keep pystray as fallback for non-GNOME desktops if desired.
+- **Notes:** Set/keep `PYSTRAY_BACKEND=gtk` if pystray remains; add dependency on libappindicator3 (and corresponding Python bindings); implement tray UI with AppIndicator API so it behaves like Telegram/Steam on GNOME.

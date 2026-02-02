@@ -4,8 +4,10 @@ import json
 import threading
 from pathlib import Path
 
+from rclone_bisync_manager.runtime_paths import get_status_socket_path
+
 from pydantic import BaseModel
-from rclone_bisync_manager.config import config, sync_state, get_config_schema
+from rclone_bisync_manager.config import sync_state, get_config_schema
 from typing import Any
 from datetime import datetime, date
 
@@ -13,8 +15,18 @@ from rclone_bisync_manager.logging_utils import log_error
 from rclone_bisync_manager.logging_utils import log_message
 
 
-def start_status_server():
-    socket_path = '/tmp/rclone_bisync_manager_status.sock'
+def start_status_server(handlers=None, state=None, config=None):
+    """Run the status socket server.
+    handlers: optional dict of command -> callable (e.g. {'RELOAD': reload_config}).
+    state: daemon runtime state (running, shutting_down, sync_queue, etc.).
+    config: config object (in_limbo, _config, sync_errors, etc.). Required when state is DaemonRuntimeState.
+    """
+    from rclone_bisync_manager.config import config as default_config
+    socket_path = get_status_socket_path()
+    if handlers is None:
+        handlers = {}
+    s = state if state is not None else default_config
+    c = config if config is not None else s
 
     if os.path.exists(socket_path):
         os.unlink(socket_path)
@@ -24,10 +36,10 @@ def start_status_server():
     server.listen(1)
     server.settimeout(1)  # Set a timeout so we can check the running flag
 
-    while config.running or not config.shutdown_complete:
+    while s.running or not s.shutdown_complete:
         try:
             conn, addr = server.accept()
-            threading.Thread(target=handle_client, args=(conn,)).start()
+            threading.Thread(target=handle_client, args=(conn, handlers, s, c)).start()
         except socket.timeout:
             continue
 
@@ -35,26 +47,33 @@ def start_status_server():
     os.unlink(socket_path)
 
 
-def handle_client(conn):
+def handle_client(conn, handlers=None, state=None, config=None):
+    from rclone_bisync_manager.config import config as default_config
+    if handlers is None:
+        handlers = {}
+    s = state if state is not None else default_config
+    c = config if config is not None else s
     try:
         data = conn.recv(4096).decode().strip()
 
         if data == "RELOAD":
-            from rclone_bisync_manager.daemon_functions import reload_config
-            success = reload_config()
+            if "RELOAD" in handlers:
+                success = handlers["RELOAD"]()
+            else:
+                success = False
             response = json.dumps({
                 "status": "success" if success else "error",
-                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {config.config_error_message}"
+                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {getattr(c, 'config_error_message', None) or 'unknown'}"
             })
         elif data == "STOP":
-            config.running = False
-            config.shutting_down = True
+            s.running = False
+            s.shutting_down = True
             response = json.dumps({
                 "status": "success",
                 "message": "Shutdown signal sent to daemon"
             })
         elif data == "STATUS":
-            response = generate_status_report()
+            response = generate_status_report(s, c)
         elif data == "GET_CONFIG":
             response = generate_config_report()
         else:
@@ -70,27 +89,31 @@ def handle_client(conn):
         conn.close()
 
 
-def generate_status_report():
+def generate_status_report(state=None, config=None):
+    """state: runtime (running, shutting_down, currently_syncing, queued_paths). config: in_limbo, _config, sync_errors, etc."""
+    from rclone_bisync_manager.config import config as default_config
+    s = state if state is not None else default_config
+    c = config if config is not None else default_config
     try:
         status = {
             "pid": os.getpid(),
-            "running": config.running,
-            "shutting_down": config.shutting_down,
-            "in_limbo": config.in_limbo,
-            "config_invalid": config.config_invalid,
-            "config_error_message": getattr(config, 'config_error_message', None),
-            "currently_syncing": config.currently_syncing,
-            "queued_paths": list(config.queued_paths),
-            "config_changed_on_disk": config.config_changed_on_disk,
-            "config_file_location": str(config.config_file),
-            "log_file_location": str(config._config.log_file_path) if config._config else None,
-            "sync_errors": config.sync_errors
+            "running": s.running,
+            "shutting_down": s.shutting_down,
+            "in_limbo": c.in_limbo,
+            "config_invalid": c.config_invalid,
+            "config_error_message": getattr(c, "config_error_message", None),
+            "currently_syncing": s.currently_syncing,
+            "queued_paths": list(s.queued_paths),
+            "config_changed_on_disk": c.config_changed_on_disk,
+            "config_file_location": str(c.config_file),
+            "log_file_location": str(c._config.log_file_path) if c._config else None,
+            "sync_errors": c.sync_errors
         }
 
-        if config._config and not config.in_limbo and not config.config_invalid:
-            status["current_config"] = model_to_dict(config._config)
+        if c._config and not c.in_limbo and not c.config_invalid:
+            status["current_config"] = model_to_dict(c._config)
             status["sync_jobs"] = {}
-            for key, value in config._config.sync_jobs.items():
+            for key, value in c._config.sync_jobs.items():
                 if value.active:
                     job_state = sync_state.get_job_state(key)
                     status["sync_jobs"][key] = model_to_dict(value)
@@ -99,7 +122,7 @@ def generate_status_report():
                         "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
                         "sync_status": standardize_status(job_state["sync_status"]),
                         "resync_status": standardize_status(job_state["resync_status"]),
-                        "hash_warnings": config.hash_warnings.get(key, False)
+                        "hash_warnings": c.hash_warnings.get(key, False)
                     })
 
         return json.dumps(status, default=json_serializer, ensure_ascii=False)

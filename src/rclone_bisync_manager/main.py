@@ -11,9 +11,10 @@ from rclone_bisync_manager.sync import perform_sync_operations
 from rclone_bisync_manager.utils import check_tools, ensure_rclone_dir, handle_filter_changes, check_and_create_lock_file
 from rclone_bisync_manager.logging_utils import log_message, log_error, ensure_log_file_path, setup_loggers, log_config_file_location, set_config
 from rclone_bisync_manager.config import config, signal_handler
+from rclone_bisync_manager.runtime_paths import get_lock_file_path
+from rclone_bisync_manager.daemon_client import request_reload, request_add_sync
 import fcntl
 import traceback
-import socket
 import json
 
 
@@ -89,34 +90,21 @@ def main():
         elif args.action == 'status':
             print_daemon_status()
         elif args.action == 'reload':
-            socket_path = '/tmp/rclone_bisync_manager_status.sock'
-            if not os.path.exists(socket_path):
+            result = request_reload()
+            if result is None:
                 print("Daemon is not running.")
                 return
-
-            try:
-                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                client.connect(socket_path)
-                client.sendall(b"RELOAD")
-                chunks = []
-                while True:
-                    chunk = client.recv(4096)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                response = b''.join(chunks).decode()
-                client.close()
-                print(response)
-            except Exception as e:
-                print(f"Error reloading daemon configuration: {e}")
+            print(json.dumps(result, indent=2))
+            if result.get("status") != "success":
+                sys.exit(1)
     elif args.command == 'sync':
-        if os.path.exists(config.LOCK_FILE_PATH):
+        if os.path.exists(get_lock_file_path()):
             print(
                 "Error: Daemon is running. Use 'daemon stop' to stop it before running sync manually.")
             sys.exit(1)
 
         # Create a lock file for non-daemon mode
-        lock_fd = open(config.LOCK_FILE_PATH, 'w')
+        lock_fd = open(get_lock_file_path(), 'w')
         try:
             fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except IOError:
@@ -145,30 +133,21 @@ def main():
             # Release the lock and remove the lock file
             fcntl.lockf(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()
-            os.unlink(config.LOCK_FILE_PATH)
+            os.unlink(get_lock_file_path())
     elif args.command == 'add-sync':
         add_sync_jobs(args.sync_jobs)
 
 
 def add_sync_jobs(sync_jobs):
-    socket_path = '/tmp/rclone_bisync_manager_add_sync.sock'
-    if not os.path.exists(socket_path):
-        print("Error: Daemon is not running.")
-        return
-
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        client.sendall(json.dumps(sync_jobs).encode())
-        response = client.recv(1024).decode()
-        client.close()
-
-        if response == "OK":
-            print(f"Successfully added sync job(s): {', '.join(sync_jobs)}")
-        else:
-            print(f"Error adding sync job(s): {response}")
-    except Exception as e:
-        print(f"Error communicating with daemon: {str(e)}")
+    errors = []
+    for job in sync_jobs:
+        response = request_add_sync(job)
+        if response != "OK":
+            errors.append(f"{job}: {response}")
+    if errors:
+        print(f"Error adding sync job(s): {'; '.join(errors)}")
+    else:
+        print(f"Successfully added sync job(s): {', '.join(sync_jobs)}")
 
 
 if __name__ == "__main__":
