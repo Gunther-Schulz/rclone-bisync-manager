@@ -1,18 +1,21 @@
 """GTK config editor for the tray. Uses only GTK (same stack as the tray); no tkinter."""
 
 import copy
+import logging
 import re
 import yaml
 
 from rclone_bisync_manager.daemon_client import request_config_schema
+from rclone_bisync_manager.logging_utils import log_message
 
 _GTK_AVAILABLE = False
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk
+    from gi.repository import Gdk, Gtk
     _GTK_AVAILABLE = True
 except (ImportError, ValueError):
+    Gdk = None
     Gtk = None
 
 # General (top-level) fields in display order with human labels
@@ -91,6 +94,13 @@ OPTION_TOOLTIPS = {
     "conflict_resolve": "Auto-resolve conflicts: none, path1, path2, newer, older, larger, smaller (rclone --conflict-resolve).",
     "conflict_loser": "Action on conflict loser: num (rename with suffix), pathname (path-based suffix), delete (rclone --conflict-loser).",
 }
+
+# Canonical form for option dropdown values (case-insensitive match -> display value) for dirty comparison.
+_OPTION_CANONICAL = {}
+for _section_opts in OPTION_DROPDOWNS.values():
+    for _choice in _section_opts.values():
+        for _c in _choice:
+            _OPTION_CANONICAL[_c.lower()] = _c
 
 # Tooltips for per-job YAML option areas (keyed by option key)
 SYNC_JOB_OPTION_TOOLTIPS = {
@@ -234,11 +244,14 @@ def edit_config_gtk(config_file_path):
                 w = Gtk.ComboBoxText.new()
                 for c in choices:
                     w.append_text(str(c))
-                val_str = str(value) if value is not None else ""
+                val_str = (str(value) if value is not None else "").strip()
                 if val_str in choices:
                     w.set_active(choices.index(val_str))
                 else:
-                    w.set_active(0)
+                    # Case-insensitive match so "Notice" in file matches "NOTICE" in dropdown
+                    val_low = val_str.lower()
+                    idx = next((i for i, c in enumerate(choices) if c.lower() == val_low), 0)
+                    w.set_active(idx)
                 w.set_hexpand(True)
                 grid.attach(w, 1, row, 1, 1)
                 _set_tooltip(w, tooltips, key)
@@ -402,20 +415,57 @@ def edit_config_gtk(config_file_path):
             _set_by_path(built, path, val)
         return built
 
+    def _normalize_for_compare(c):
+        """Normalize so empty string/missing/None are comparable; drop dict keys with None value.
+        Option-like strings (e.g. log_level) are normalized to canonical form (case-insensitive)."""
+        if c is None:
+            return None
+        if isinstance(c, str):
+            if c.strip() == "":
+                return None
+            low = c.strip().lower()
+            return _OPTION_CANONICAL.get(low, c)
+        if isinstance(c, dict):
+            return {k: v for k, v in ((k, _normalize_for_compare(v)) for k, v in c.items()) if v is not None}
+        if isinstance(c, list):
+            return [_normalize_for_compare(x) for x in c]
+        return c
+
     def update_dirty_indicator(*_args):
         """Update status label and window title: Saved vs Unsaved changes (current widgets vs last_saved_config)."""
         built = build_config_from_widgets()
         try:
-            dirty = yaml.dump(built, sort_keys=True) != yaml.dump(last_saved_config, sort_keys=True)
-        except Exception:
+            a = _normalize_for_compare(built)
+            b = _normalize_for_compare(last_saved_config)
+            dump_a = yaml.dump(a, sort_keys=True)
+            dump_b = yaml.dump(b, sort_keys=True)
+            dirty = dump_a != dump_b
+            if dirty:
+                log_message("config_editor: dirty check True (opening or after edit)", level=logging.DEBUG)
+                log_message(f"config_editor: built (from widgets) normalized dump (first 800 chars):\n{dump_a[:800]}", level=logging.DEBUG)
+                log_message(f"config_editor: last_saved_config normalized dump (first 800 chars):\n{dump_b[:800]}", level=logging.DEBUG)
+                # Log first differing line
+                for i, (line_a, line_b) in enumerate(zip(dump_a.splitlines(), dump_b.splitlines())):
+                    if line_a != line_b:
+                        log_message(f"config_editor: first diff at line {i + 1}: built={repr(line_a)} saved={repr(line_b)}", level=logging.DEBUG)
+                        break
+                else:
+                    if len(dump_a.splitlines()) != len(dump_b.splitlines()):
+                        log_message(f"config_editor: different line count built={len(dump_a.splitlines())} saved={len(dump_b.splitlines())}", level=logging.DEBUG)
+        except Exception as e:
             dirty = True
+            log_message(f"config_editor: dirty check exception: {e}", level=logging.DEBUG)
         if dirty:
             status_label.set_text("Unsaved changes")
             status_label.set_tooltip_text("Current form values differ from the last saved state (disk).")
+            if Gdk is not None:
+                status_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.75, 0.4, 0.0, 1.0))  # orange
             win.set_title("Edit Configuration • Unsaved changes")
         else:
             status_label.set_text("Saved")
             status_label.set_tooltip_text("Current form matches the last saved state (disk).")
+            if Gdk is not None:
+                status_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.0, 0.55, 0.0, 1.0))  # green
             win.set_title("Edit Configuration")
 
     def connect_widget_change(w, t):
