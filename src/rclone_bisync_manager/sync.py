@@ -27,10 +27,11 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
     log_message(f"Performing sync operation for {key}. Force bisync: {force_bisync}, Force resync: {force_resync}, Dry run: {context.dry_run}")
 
     status = read_status(key)
-    log_message(f"Current resync status for {key}: {status['resync_status']}")
+    resync_status = status.get("resync_status", "NONE")
+    log_message(f"Current resync status for {key}: {resync_status}")
 
-    if force_resync or status["resync_status"] in ["NONE", "IN_PROGRESS"]:
-        log_message(f"Initiating resync for {key}. Force resync: {force_resync}, Resync status: {status['resync_status']}")
+    if force_resync or resync_status in ["NONE", "IN_PROGRESS"]:
+        log_message(f"Initiating resync for {key}. Force resync: {force_resync}, Resync status: {resync_status}")
         write_status(key, resync_status="IN_PROGRESS", context=context)
         resync_result = resync(key, remote_path, local_path, context)
         write_status(key, resync_status=resync_result, context=context)
@@ -49,8 +50,8 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
 
     store = get_sync_state_store()
     store.sync_state.update_job_state(key,
-                                       sync_status=bisync_result if 'bisync_result' in locals() else status["sync_status"],
-                                       resync_status=resync_result if 'resync_result' in locals() else status["resync_status"],
+                                       sync_status=bisync_result if 'bisync_result' in locals() else status.get("sync_status", "NONE"),
+                                       resync_status=resync_result if 'resync_result' in locals() else status.get("resync_status", "NONE"),
                                        last_sync=datetime.now())
     store.save()
 
@@ -123,7 +124,7 @@ def get_rclone_args(options, operation_type, job_key, job, context):
     merged_options['force'] = job.force_operation
 
     for opt_key, opt_value in merged_options.items():
-        option_key = f"--{opt_key.replace('_', '-')}"
+        option_key = f"--{str(opt_key).replace('_', '-')}"
         if opt_value is None:
             args.append(option_key)
         elif isinstance(opt_value, bool):

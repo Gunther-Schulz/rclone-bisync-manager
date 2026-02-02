@@ -34,6 +34,7 @@ Options:
 - `--icon-style <1|2>`: Choose between two different icon styles (default: 1)
 - `--icon-thickness <value>`: Set the thickness of the icon lines (default: 40)
 - `--log-level <NONE|DEBUG|INFO|WARNING|ERROR|CRITICAL>`: Set the logging level (default: NONE)
+- `--config <PATH>`: Use a specific configuration file (default: `~/.config/rclone-bisync-manager/config.yaml`)
 - `--enable-experimental`: Enable experimental features
 
 The tray application will start the daemon if it is not already running.
@@ -201,7 +202,89 @@ Note: When an option is set to `null`, it means the flag will be passed to rclon
 
 You can find a complete list of available options in the [rclone documentation](https://rclone.org/flags/).
 
+## Setting up a new sync target
+
+Before a sync job can run, you must create the local folder, ensure the rclone remote exists, and place a **marker file** in both the local and remote paths. Without the marker file, the manager skips the sync.
+
+### 1. Rclone remote
+
+The value of `rclone_remote` in your job must match a remote defined in rclone’s config. If you don’t have that remote yet:
+
+```bash
+rclone config
+```
+
+Create a new remote (e.g. name it `myremote`) and finish the wizard. Confirm it exists:
+
+```bash
+rclone listremotes
+```
+
+### 2. Local folder
+
+The full local path is **`local_base_path`** + **`local`**. For example, with `local_base_path: /mnt/data/hidrive` and `local: MySync`, create:
+
+```bash
+mkdir -p /mnt/data/hidrive/MySync
+```
+
+### 3. Marker file (required)
+
+The manager only runs a sync if a file named **`RCLONE_TEST`** is present in both the local sync folder and the remote path. This avoids syncing to empty or wrong locations.
+
+**Local:** create the file in the sync folder:
+
+```bash
+touch /mnt/data/hidrive/MySync/RCLONE_TEST
+```
+
+**Remote:** create it via rclone. Use the same path as in your config: `remote_name:remote_path`. Example for `rclone_remote: myremote` and `remote: backup/MySync`:
+
+```bash
+rclone touch "myremote:backup/MySync/RCLONE_TEST"
+```
+
+If your backend does not support empty files, use:
+
+```bash
+echo -n "" | rclone rcat "myremote:backup/MySync/RCLONE_TEST"
+```
+
+### 4. Remote path must be writable
+
+Some backends (e.g. HiDrive) do not allow writing at the root path; you get errors like `403 Forbidden: / is not writable`. Use a path under a writable area instead. For HiDrive, that is typically a path like `users/yourusername/folder`. Example:
+
+```yaml
+sync_jobs:
+  myjob:
+    local: MySync
+    rclone_remote: hidrive
+    remote: users/yourusername/MySync   # under writable user path, not just "MySync"
+    schedule: "*/30 * * * *"
+```
+
+### 5. Optional: exclusion rules file
+
+If your config sets `exclusion_rules_file` to a path that does not exist yet, create an empty file (or add rules) so the path is valid:
+
+```bash
+touch /path/to/your/filter.txt
+```
+
+### 6. Run the sync
+
+Use a dry run first, then a real sync (add `--config /path/to/config.yaml` if not using the default config path):
+
+```bash
+rclone-bisync-manager sync myjob -d
+rclone-bisync-manager sync myjob
+```
+
+If the marker file is missing on either side, the manager will log that `RCLONE_TEST` was not found and skip the sync. Add the file as above and try again.
+
 ## Usage
+
+All CLI commands accept an optional `--config PATH` to use a config file other than `~/.config/rclone-bisync-manager/config.yaml`.
 
 ### Starting the Daemon
 

@@ -55,12 +55,17 @@ _offline_miss_count = 0
 global daemon_manager
 daemon_manager = None
 
+# Minimum time (seconds) to show syncing icon so quick syncs still give visible feedback
+MIN_SYNC_FEEDBACK_SECONDS = 2.0
+
 # At the top of the file, after imports
 debug = False
 args = None
 
 _indicator = None
-_icon_path = None
+# AppIndicator caches by path: same path = icon never reloads. Use two paths and alternate so each update uses a "new" path.
+_icon_paths = None  # [path0, path1]; set in run_tray_appindicator
+_icon_index = 0
 _status_window_gtk = None
 
 
@@ -87,6 +92,42 @@ class DaemonManager:
         self.current_state = DaemonState.INITIAL
         self.daemon_start_error = None
         self.state_lock = Lock()
+        # Show syncing icon until this monotonic time (so quick syncs always give visible feedback)
+        self.sync_feedback_until = 0.0
+        self._last_sync_timestamps = {}  # job_key -> last_sync string
+
+    def update_sync_feedback(self, status):
+        """If status shows SYNCING or a job's last_sync just changed, ensure syncing icon shows for MIN_SYNC_FEEDBACK_SECONDS."""
+        with self.state_lock:
+            now = time.monotonic()
+            if not isinstance(status, dict):
+                return
+            if status.get(sp.CURRENTLY_SYNCING):
+                self.sync_feedback_until = max(self.sync_feedback_until, now + MIN_SYNC_FEEDBACK_SECONDS)
+            sync_jobs = status.get(sp.SYNC_JOBS)
+            if isinstance(sync_jobs, dict):
+                for job_key, job_status in sync_jobs.items():
+                    if not isinstance(job_status, dict):
+                        continue
+                    last_sync = job_status.get(sp.LAST_SYNC)
+                    last_sync_str = str(last_sync).strip() if last_sync is not None else ""
+                    prev = self._last_sync_timestamps.get(job_key, "")
+                    # Only show feedback when last_sync *changed* from a previous known value (not on first sight / tray restart)
+                    if prev and last_sync_str != prev:
+                        self.sync_feedback_until = max(self.sync_feedback_until, now + MIN_SYNC_FEEDBACK_SECONDS)
+                    self._last_sync_timestamps[job_key] = last_sync_str
+
+    def get_effective_state_for_icon(self):
+        """State to use for the tray icon.
+        Show SYNCING (blue) for min duration after a *successful* sync; never override error states with blue.
+        """
+        with self.state_lock:
+            now = time.monotonic()
+            in_feedback = self.sync_feedback_until > 0 and now < self.sync_feedback_until
+            # Don't show blue override when we're in an error/attention state (user should see red/amber immediately)
+            if in_feedback and self.current_state == DaemonState.RUNNING:
+                return DaemonState.SYNCING
+            return self.current_state
 
     def update_state(self, new_state):
         with self.state_lock:
@@ -140,7 +181,7 @@ class DaemonManager:
         else:
             spec.append({"type": "item", "label": "Stop Daemon", "callback": stop_daemon, "enabled": True})
 
-        if args.enable_experimental and current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]:
+        if getattr(args, "enable_experimental", False) and current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]:
             spec.append({"type": "separator"})
             spec.append({"type": "item", "label": "Edit Configuration (experimental)", "callback": edit_config, "enabled": True})
 
@@ -149,112 +190,133 @@ class DaemonManager:
 
     def _get_failed_spec(self, status):
         items = [{"type": "item", "label": "⚠️ Daemon is not running", "callback": None, "enabled": False}]
-        error_message = status.get(sp.ERROR) if status else None
-        error_message = error_message or self.daemon_start_error or "Unknown error"
+        status_dict = status if isinstance(status, dict) else {}
+        error_message = status_dict.get(sp.ERROR) or self.daemon_start_error or "Unknown error"
         first_line = str(error_message).split(chr(10))[0][:80]
         items.append({"type": "item", "label": f"Error: {first_line}", "callback": None, "enabled": False})
-        if self.daemon_start_error or (status and status.get(sp.ERROR)):
-            items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or status.get(sp.ERROR)), "enabled": True})
+        err_msg = status_dict.get(sp.ERROR)
+        if self.daemon_start_error or err_msg:
+            items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or err_msg or "Unknown error"), "enabled": True})
         return items
 
     def _get_limbo_spec(self, status):
         items = [{"type": "item", "label": "⚠️ Daemon is in limbo state", "callback": None, "enabled": False}]
-        if status:
+        if isinstance(status, dict):
             if status.get(sp.CONFIG_INVALID, False):
                 items.append({"type": "item", "label": "⚠️ Config is invalid", "callback": None, "enabled": False})
-                items.append({"type": "item", "label": f"Error: {status.get(sp.CONFIG_ERROR_MESSAGE, 'Unknown error')[:30]}...", "callback": None, "enabled": False})
+                items.append({"type": "item", "label": f"Error: {(status.get(sp.CONFIG_ERROR_MESSAGE) or 'Unknown error')[:30]}...", "callback": None, "enabled": False})
             if status.get(sp.CONFIG_CHANGED_ON_DISK, False):
                 items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
         return items
 
     def _get_normal_spec(self, status):
         items = []
-        if status:
-            if _has_sync_issues(status):
-                items.append({"type": "item", "label": "⚠ Sync issues detected", "callback": None, "enabled": False})
-            if status.get(sp.CONFIG_CHANGED_ON_DISK):
-                items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
-            if _has_sync_issues(status) or status.get(sp.CONFIG_CHANGED_ON_DISK):
-                items.append({"type": "separator"})
-            currently_syncing = status.get(sp.CURRENTLY_SYNCING)
-            if currently_syncing:
-                items.append({"type": "item", "label": "Currently syncing:", "callback": None, "enabled": False})
-                if isinstance(currently_syncing, str):
-                    items.append({"type": "item", "label": f"  {currently_syncing.strip()}", "callback": None, "enabled": False})
-                elif isinstance(currently_syncing, list):
-                    for job in currently_syncing:
-                        items.append({"type": "item", "label": f"  {job.strip()}", "callback": None, "enabled": False})
-            queued_jobs = status.get(sp.QUEUED_PATHS, [])
-            if queued_jobs:
-                items.append({"type": "item", "label": "Queued jobs:", "callback": None, "enabled": False})
-                for job in queued_jobs:
-                    items.append({"type": "item", "label": f"  {job}", "callback": None, "enabled": False})
-            sync_jobs = (status.get(sp.SYNC_JOBS) or {}) if isinstance(status.get(sp.SYNC_JOBS), dict) else {}
-            if sync_jobs:
-                jobs_submenu = []
-                for job_key, job_status in sync_jobs.items():
-                    job_submenu = [
-                        {"type": "item", "label": "⚡ Sync Now", "callback": create_sync_now_handler(job_key), "enabled": True},
-                        {"type": "item", "label": "⚡ Force Sync Now", "callback": create_sync_now_handler(job_key, force_bisync=True), "enabled": True},
-                        {"type": "item", "label": "⚡ Resync + Sync Now", "callback": create_sync_now_handler(job_key, resync=True), "enabled": True},
-                        {"type": "item", "label": f"Last sync: {job_status.get(sp.LAST_SYNC) or 'Never'}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Next run: {job_status.get(sp.NEXT_RUN) or 'Not scheduled'}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Sync status: {job_status.get(sp.SYNC_STATUS, 'N/A')}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Resync status: {job_status.get(sp.RESYNC_STATUS, 'N/A')}", "callback": None, "enabled": False},
-                    ]
-                    jobs_submenu.append({"type": "item", "label": job_key, "callback": None, "enabled": True, "submenu": job_submenu})
-                items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": True, "submenu": jobs_submenu})
-            else:
-                items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": False})
+        if not isinstance(status, dict):
+            return items
+        if _has_sync_issues(status):
+            items.append({"type": "item", "label": "⚠ Sync issues detected", "callback": None, "enabled": False})
+        if status.get(sp.CONFIG_CHANGED_ON_DISK):
+            items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
+        if _has_sync_issues(status) or status.get(sp.CONFIG_CHANGED_ON_DISK):
+            items.append({"type": "separator"})
+        currently_syncing = status.get(sp.CURRENTLY_SYNCING)
+        if currently_syncing:
+            items.append({"type": "item", "label": "Currently syncing:", "callback": None, "enabled": False})
+            if isinstance(currently_syncing, str):
+                items.append({"type": "item", "label": f"  {str(currently_syncing).strip()}", "callback": None, "enabled": False})
+            elif isinstance(currently_syncing, list):
+                for job in currently_syncing:
+                    items.append({"type": "item", "label": f"  {str(job).strip()}", "callback": None, "enabled": False})
+        queued_jobs = status.get(sp.QUEUED_PATHS, [])
+        if not isinstance(queued_jobs, (list, tuple)):
+            queued_jobs = []
+        if queued_jobs:
+            items.append({"type": "item", "label": "Queued jobs:", "callback": None, "enabled": False})
+            for job in queued_jobs:
+                items.append({"type": "item", "label": f"  {job}", "callback": None, "enabled": False})
+        sync_jobs = (status.get(sp.SYNC_JOBS) or {}) if isinstance(status.get(sp.SYNC_JOBS), dict) else {}
+        if sync_jobs:
+            jobs_submenu = []
+            for job_key, job_status in sync_jobs.items():
+                job_submenu = [
+                    {"type": "item", "label": "⚡ Sync Now", "callback": create_sync_now_handler(job_key), "enabled": True},
+                    {"type": "item", "label": "⚡ Force Sync Now", "callback": create_sync_now_handler(job_key, force_bisync=True), "enabled": True},
+                    {"type": "item", "label": "⚡ Resync + Sync Now", "callback": create_sync_now_handler(job_key, resync=True), "enabled": True},
+                    {"type": "item", "label": f"Last sync: {job_status.get(sp.LAST_SYNC) or 'Never'}", "callback": None, "enabled": False},
+                    {"type": "item", "label": f"Next run: {job_status.get(sp.NEXT_RUN) or 'Not scheduled'}", "callback": None, "enabled": False},
+                    {"type": "item", "label": f"Sync status: {job_status.get(sp.SYNC_STATUS, 'N/A')}", "callback": None, "enabled": False},
+                    {"type": "item", "label": f"Resync status: {job_status.get(sp.RESYNC_STATUS, 'N/A')}", "callback": None, "enabled": False},
+                ]
+                jobs_submenu.append({"type": "item", "label": job_key, "callback": None, "enabled": True, "submenu": job_submenu})
+            items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": True, "submenu": jobs_submenu})
+        else:
+            items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": False})
         return items
 
 
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
-        if current_state == DaemonState.INITIAL:
+        return self._icon_color_for_state(current_state)
+
+    def _icon_color_for_state(self, state):
+        """Map DaemonState to tray icon color.
+        Intended behavior:
+          GREEN  = RUNNING (daemon ok, no sync, no issues)
+          BLUE   = SYNCING (sync in progress or just finished successfully for min duration)
+          RED    = SYNC_ISSUES (sync failed), CONFIG_INVALID, FAILED (daemon not running / error)
+          AMBER  = CONFIG_CHANGED (config changed on disk)
+          PURPLE = SHUTTING_DOWN, LIMBO
+          GRAY   = OFFLINE (cannot reach daemon)
+          YELLOW = INITIAL, STARTING
+        """
+        if state == DaemonState.INITIAL:
             return Colors.YELLOW
-        elif current_state == DaemonState.STARTING:
+        elif state == DaemonState.STARTING:
             return Colors.YELLOW
-        elif current_state == DaemonState.RUNNING:
+        elif state == DaemonState.RUNNING:
             return Colors.GREEN
-        elif current_state == DaemonState.SYNCING:
+        elif state == DaemonState.SYNCING:
             return Colors.BLUE
-        elif current_state == DaemonState.SHUTTING_DOWN:
+        elif state == DaemonState.SHUTTING_DOWN:
             return Colors.PURPLE
-        elif current_state == DaemonState.SYNC_ISSUES:
+        elif state == DaemonState.SYNC_ISSUES:
             return Colors.RED
-        elif current_state == DaemonState.CONFIG_INVALID:
+        elif state == DaemonState.CONFIG_INVALID:
             return Colors.RED
-        elif current_state == DaemonState.CONFIG_CHANGED:
+        elif state == DaemonState.CONFIG_CHANGED:
             return Colors.AMBER
-        elif current_state == DaemonState.LIMBO:
+        elif state == DaemonState.LIMBO:
             return Colors.PURPLE
-        elif current_state == DaemonState.OFFLINE:
+        elif state == DaemonState.OFFLINE:
             return Colors.GRAY
-        elif current_state == DaemonState.FAILED:
+        elif state == DaemonState.FAILED:
             return Colors.RED
         else:
             return Colors.GRAY
 
     def get_icon_text(self, status):
         current_state = self.get_current_state(status)
-        if current_state == DaemonState.INITIAL:
+        return self._icon_text_for_state(current_state)
+
+    def _icon_text_for_state(self, state):
+        """Map DaemonState to icon text. Used so icon can use cached state without re-fetching."""
+        if state == DaemonState.INITIAL:
             return "INIT"
-        elif current_state == DaemonState.STARTING:
+        elif state == DaemonState.STARTING:
             return "START"
-        elif current_state == DaemonState.SYNCING:
+        elif state == DaemonState.SYNCING:
             return "SYNC"
-        elif current_state == DaemonState.CONFIG_INVALID:
+        elif state == DaemonState.CONFIG_INVALID:
             return "CFG!"
-        elif current_state == DaemonState.CONFIG_CHANGED:
+        elif state == DaemonState.CONFIG_CHANGED:
             return "CFG?"
-        elif current_state == DaemonState.SYNC_ISSUES:
+        elif state == DaemonState.SYNC_ISSUES:
             return "WARN"
-        elif current_state == DaemonState.LIMBO:
+        elif state == DaemonState.LIMBO:
             return "LIMBO"
-        elif current_state == DaemonState.SHUTTING_DOWN:
+        elif state == DaemonState.SHUTTING_DOWN:
             return "STOP"
-        elif current_state == DaemonState.FAILED:
+        elif state == DaemonState.FAILED:
             return "FAIL"
         else:
             return "RUN"
@@ -270,19 +332,25 @@ def _build_gtk_menu(spec):
     """Build Gtk.Menu from menu spec list (used by AppIndicator backend)."""
     if not APPINDICATOR_AVAILABLE:
         return None
+    if spec is None or not isinstance(spec, (list, tuple)):
+        spec = []
     menu = Gtk.Menu()
     for s in spec:
-        if s["type"] == "separator":
+        if not isinstance(s, dict):
+            continue
+        item_type = s.get("type")
+        if item_type == "separator":
             menu.append(Gtk.SeparatorMenuItem())
-        elif s["type"] == "item":
-            item = Gtk.MenuItem.new_with_label(s["label"].replace("&", "_"))
+        elif item_type == "item":
+            label = s.get("label", "")
+            item = Gtk.MenuItem.new_with_label(str(label).replace("&", "_"))
             item.set_sensitive(s.get("enabled", True))
             if s.get("submenu"):
                 sub = _build_gtk_menu(s["submenu"])
                 item.set_submenu(sub)
             elif s.get("callback"):
                 cb = s["callback"]
-                item.connect("activate", lambda w, c=cb: c() if c else None)
+                item.connect("activate", lambda w, c=cb: c(w) if c else None)
             menu.append(item)
     menu.show_all()
     return menu
@@ -296,8 +364,10 @@ def get_daemon_status():
             return None
         if status != last_status:
             log_message("Daemon status changed", level=logging.INFO)
-            log_message(f"New status: {json.dumps(status)[
-                        :100]}...", level=logging.DEBUG)
+            try:
+                log_message(f"New status: {json.dumps(status, default=str)[:100]}...", level=logging.DEBUG)
+            except (TypeError, ValueError):
+                log_message("New status: (unable to serialize for debug)", level=logging.DEBUG)
         last_status = status
         last_offline_log_time = 0
         return status
@@ -308,7 +378,8 @@ def get_daemon_status():
 
 
 def create_sync_now_handler(job_key, force_bisync=False, resync=False):
-    def handler(item):
+    """Return a menu callback that accepts (widget) from GTK activate signal."""
+    def handler(widget=None):
         success = add_to_sync_queue(job_key, force_bisync, resync)
         if not success:
             show_notification("Sync Error", f"Failed to add sync job '{
@@ -316,7 +387,7 @@ def create_sync_now_handler(job_key, force_bisync=False, resync=False):
     return handler
 
 
-def stop_daemon():
+def stop_daemon(widget=None):
     def _wait_then_refresh():
         for _ in range(6):
             time.sleep(2)
@@ -326,12 +397,12 @@ def stop_daemon():
 
     try:
         result = request_stop(timeout=5, retries=2, retry_delay=0.3)
-        if result and result.get("status") == "success":
+        if isinstance(result, dict) and result.get("status") == "success":
             log_message(
                 "Daemon is shutting down. Use 'daemon status' to check progress.")
             Thread(target=_wait_then_refresh, daemon=True).start()
         else:
-            msg = result.get("message", "Daemon may still be running.") if result else "Unknown error"
+            msg = result.get("message", "Daemon may still be running.") if isinstance(result, dict) else (str(result) if result is not None else "Unknown error")
             log_message(f"Failed to stop daemon: {msg}", level=logging.ERROR)
             show_notification("Stop failed", msg)
             update_menu_and_icon()
@@ -342,8 +413,11 @@ def stop_daemon():
         update_menu_and_icon()
 
 
-def start_daemon():
+def start_daemon(widget=None):
     global daemon_manager
+    if daemon_manager is None:
+        log_message("Daemon manager not available", level=logging.ERROR)
+        return
     log_message("Starting daemon", level=logging.DEBUG)
     # First, check if the daemon is already running
     current_status = get_daemon_status()
@@ -363,7 +437,7 @@ def start_daemon():
     try:
         log_message("Attempting to start daemon", level=logging.DEBUG)
         command = ["rclone-bisync-manager", "daemon", "start"]
-        if args.config:
+        if getattr(args, "config", None):
             command.extend(["--config", args.config])
         process = subprocess.Popen(
             command,
@@ -406,20 +480,51 @@ def start_daemon():
         update_queue.put(True)
 
 
-def reload_config():
+def reload_config(widget=None):
+    """Reload daemon config. Accepts optional widget arg from GTK menu activate signal."""
     global daemon_manager
     try:
         response_data = request_reload()
+        if response_data is None:
+            log_message("Error reloading configuration: daemon not running", level=logging.ERROR)
+            if daemon_manager is not None:
+                new_state = daemon_manager.get_current_state(None)
+                daemon_manager.update_state(new_state)
+            update_queue.put(True)
+            return False
+        if not isinstance(response_data, dict):
+            log_message("Unexpected reload response from daemon", level=logging.ERROR)
+            if daemon_manager is not None:
+                fresh_status = get_daemon_status()
+                new_state = daemon_manager.get_current_state(fresh_status)
+                daemon_manager.update_state(new_state)
+            update_queue.put(True)
+            return False
         if response_data.get(sp.STATUS) == "success":
             log_message("Configuration reloaded successfully")
+            # Refresh state from daemon so next UI paint shows RUNNING (green), not stale CONFIG_CHANGED (amber)
+            if daemon_manager is not None:
+                fresh_status = get_daemon_status()
+                if fresh_status is not None:
+                    new_state = daemon_manager.get_current_state(fresh_status)
+                    daemon_manager.update_state(new_state)
         else:
             log_message(f"Error reloading configuration: {
                         response_data.get(sp.MESSAGE, 'Unknown error')}", level=logging.ERROR)
+            if daemon_manager is not None:
+                fresh_status = get_daemon_status()
+                new_state = daemon_manager.get_current_state(fresh_status)
+                daemon_manager.update_state(new_state)
         update_queue.put(True)
         return response_data.get(sp.STATUS) == "success"
     except Exception as e:
         log_message(f"Error communicating with daemon: {
                     str(e)}", level=logging.ERROR)
+        if daemon_manager is not None:
+            fresh_status = get_daemon_status()
+            new_state = daemon_manager.get_current_state(fresh_status)
+            daemon_manager.update_state(new_state)
+        update_queue.put(True)  # Refresh UI so user sees current state
         return False
 
 
@@ -427,11 +532,23 @@ def add_to_sync_queue(job_key, force_bisync=False, resync=False):
     try:
         response = request_add_sync(job_key, force_bisync=force_bisync, resync=resync)
         log_message(f"Add to sync queue response: {response}", level=logging.INFO)
+        # Always refresh state before UI update so icon/menu reflect current daemon state
+        if daemon_manager is not None:
+            fresh_status = get_daemon_status()
+            if fresh_status is not None:
+                daemon_manager.update_sync_feedback(fresh_status)
+            new_state = daemon_manager.get_current_state(fresh_status)
+            daemon_manager.update_state(new_state)
         update_queue.put(True)
         return response == "OK"
     except Exception as e:
         log_message(f"Error adding job to sync queue: {
                     str(e)}", level=logging.ERROR)
+        if daemon_manager is not None:
+            fresh_status = get_daemon_status()
+            new_state = daemon_manager.get_current_state(fresh_status)
+            daemon_manager.update_state(new_state)
+        update_queue.put(True)
         return False
 
 
@@ -453,8 +570,11 @@ def determine_arrow_color(color, icon_text):
 def create_status_image_style1(color, thickness):
     size = 64
 
-    if isinstance(color, tuple):
+    if isinstance(color, tuple) and len(color) >= 3:
         color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
+    else:
+        color = '#9e9e9e'  # fallback gray if color not a 3-tuple
+    thickness = int(thickness) if thickness is not None else 40
 
     svg_code = '''
     <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
@@ -474,8 +594,11 @@ def create_status_image_style1(color, thickness):
 def create_status_image_style2(color, thickness):
     size = 64
 
-    if isinstance(color, tuple):
+    if isinstance(color, tuple) and len(color) >= 3:
         color = '#{:02x}{:02x}{:02x}'.format(color[0], color[1], color[2])
+    else:
+        color = '#9e9e9e'  # fallback gray if color not a 3-tuple
+    thickness = int(thickness) if thickness is not None else 40
 
     svg_code = '''
     <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
@@ -501,7 +624,9 @@ def create_status_image(color, icon_text, style=1, thickness=40):
 
 def determine_text_color(background_color):
     # Simple logic to determine if text should be black or white based on background brightness
-    r, g, b = background_color[:3]
+    if not isinstance(background_color, (tuple, list)) or len(background_color) < 3:
+        return "#FFFFFF"
+    r, g, b = background_color[0], background_color[1], background_color[2]
     brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255
     return "#000000" if brightness > 0.5 else "#FFFFFF"
 
@@ -509,12 +634,14 @@ def determine_text_color(background_color):
 def _show_status_window_gtk():
     """GTK status window (AppIndicator path only)."""
     global daemon_manager, _status_window_gtk
-    if not APPINDICATOR_AVAILABLE:
+    if not APPINDICATOR_AVAILABLE or daemon_manager is None:
         return
     if _status_window_gtk is not None and _status_window_gtk.get_visible():
         _status_window_gtk.present()
         return
     status = get_daemon_status()
+    if status is not None and not isinstance(status, dict):
+        status = {}
     current_state = daemon_manager.get_current_state(status)
 
     win = Gtk.Window(title="RClone BiSync Manager Status")
@@ -543,13 +670,14 @@ def _show_status_window_gtk():
             sw.set_min_content_height(120)
             tv = Gtk.TextView()
             tv.set_editable(False)
-            tv.get_buffer().set_text(daemon_manager.daemon_start_error)
+            tv.get_buffer().set_text(str(daemon_manager.daemon_start_error or ""))
             sw.add(tv)
             box.pack_start(sw, True, True, 0)
         btn = Gtk.Button(label="Start Daemon")
         btn.connect("clicked", lambda b: (start_daemon(), win.destroy()))
         box.pack_start(btn, False, False, 0)
     else:
+        status = status if isinstance(status, dict) else {}
         nb = Gtk.Notebook()
         win.add(nb)
         # General
@@ -568,17 +696,22 @@ def _show_status_window_gtk():
         gen_box.pack_start(Gtk.Label(label="Currently syncing:", xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label=str(status.get(sp.CURRENTLY_SYNCING, "None")), xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label="Queued jobs:", xalign=0), False, False, 0)
-        for j in status.get(sp.QUEUED_PATHS, []) or []:
+        _queued = status.get(sp.QUEUED_PATHS, []) or []
+        if not isinstance(_queued, (list, tuple)):
+            _queued = []
+        for j in _queued:
             gen_box.pack_start(Gtk.Label(label=f"  {j}", xalign=0), False, False, 0)
-        if not status.get(sp.QUEUED_PATHS):
+        if not _queued:
             gen_box.pack_start(Gtk.Label(label="None", xalign=0), False, False, 0)
         # Sync Jobs
         jobs_sw = Gtk.ScrolledWindow()
         jobs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         jobs_sw.add(jobs_box)
         nb.append_page(jobs_sw, Gtk.Label(label="Sync Jobs"))
-        for job_key, job_status in (status.get(sp.SYNC_JOBS) or {}).items():
-            fr = Gtk.Frame(label=job_key)
+        _sync_jobs = status.get(sp.SYNC_JOBS)
+        sync_jobs_dict = _sync_jobs if isinstance(_sync_jobs, dict) else {}
+        for job_key, job_status in sync_jobs_dict.items():
+            fr = Gtk.Frame(label=str(job_key))
             fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             fr.add(fr_box)
             fr_box.pack_start(Gtk.Label(label=f"Last sync: {job_status.get(sp.LAST_SYNC, 'N/A')}", xalign=0), False, False, 0)
@@ -594,10 +727,11 @@ def _show_status_window_gtk():
         sync_errors = status.get(sp.SYNC_ERRORS) if isinstance(status.get(sp.SYNC_ERRORS), dict) else {}
         if sync_errors:
             for path, err in sync_errors.items():
-                fr = Gtk.Frame(label=path)
+                fr = Gtk.Frame(label=str(path))
                 fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
                 fr.add(fr_box)
-                for k, v in err.items():
+                err_dict = err if isinstance(err, dict) else {}
+                for k, v in err_dict.items():
                     fr_box.pack_start(Gtk.Label(label=f"{k}: {v}", xalign=0), False, False, 0)
                 err_box.pack_start(fr, False, False, 0)
         else:
@@ -610,18 +744,18 @@ def _show_status_window_gtk():
         nb.append_page(cfg_sw, Gtk.Label(label="Config"))
         cfg_path = status.get(sp.CONFIG_FILE_LOCATION)
         if cfg_path and os.path.exists(cfg_path):
-            with open(cfg_path, "r") as f:
+            with open(cfg_path, "r", encoding="utf-8", errors="replace") as f:
                 cfg_tv.get_buffer().set_text(f.read())
         else:
             cfg_tv.get_buffer().set_text("Config file not found or inaccessible.")
     win.show_all()
 
 
-def show_status_window():
+def show_status_window(widget=None):
     _show_status_window_gtk()
 
 
-def open_config_file():
+def open_config_file(widget=None):
     config_file_path = get_config_file_path()
     if config_file_path:
         config_dir = os.path.dirname(config_file_path)
@@ -633,7 +767,7 @@ def open_config_file():
         log_message("Config file path not found", level=logging.ERROR)
 
 
-def open_log_folder():
+def open_log_folder(widget=None):
     log_file_path = get_log_file_path()
     if log_file_path:
         log_dir = os.path.dirname(log_file_path)
@@ -647,25 +781,25 @@ def open_log_folder():
 
 def get_config_file_path():
     status = get_daemon_status()
-    return status.get(sp.CONFIG_FILE_LOCATION) if status else None
+    return status.get(sp.CONFIG_FILE_LOCATION) if isinstance(status, dict) else None
 
 
 def get_log_file_path():
     status = get_daemon_status()
-    return status.get(sp.LOG_FILE_LOCATION) if status else None
+    return status.get(sp.LOG_FILE_LOCATION) if isinstance(status, dict) else None
 
 
 def _show_text_window_gtk(title, content):
     """GTK text window (AppIndicator path only)."""
     if not APPINDICATOR_AVAILABLE:
         return
-    win = Gtk.Window(title=title)
+    win = Gtk.Window(title=str(title) if title is not None else "")
     win.set_default_size(600, 400)
     sw = Gtk.ScrolledWindow()
     tv = Gtk.TextView()
     tv.set_editable(False)
     tv.set_wrap_mode(Gtk.WrapMode.WORD)
-    tv.get_buffer().set_text(content)
+    tv.get_buffer().set_text(str(content) if content is not None else "")
     sw.add(tv)
     win.add(sw)
     win.show_all()
@@ -680,6 +814,8 @@ def ensure_daemon_running():
     timeout = 30  # Timeout in seconds
     interval = 1  # Check interval in seconds
 
+    if daemon_manager is None:
+        return False
     status = get_daemon_status()
     if status is not None:
         log_message("Daemon is already running", level=logging.INFO)
@@ -712,31 +848,47 @@ def ensure_daemon_running():
 
 
 def _write_tray_icon_to_path(path):
-    """Write current status image to path (for AppIndicator)."""
+    """Write current status image to path (for AppIndicator).
+    Uses get_effective_state_for_icon() so the icon shows SYNCING for at least
+    MIN_SYNC_FEEDBACK_SECONDS after a sync (even when the sync was very quick).
+    """
     global daemon_manager, args
-    current_status = get_daemon_status()
-    color = daemon_manager.get_icon_color(current_status)
-    text = daemon_manager.get_icon_text(current_status)
+    if daemon_manager is None or args is None:
+        return
+    state = daemon_manager.get_effective_state_for_icon()
+    color = daemon_manager._icon_color_for_state(state)
+    text = daemon_manager._icon_text_for_state(state)
     img = create_status_image(color, text, style=args.icon_style, thickness=args.icon_thickness)
     img.save(path, "PNG")
 
 
 def _update_appindicator_ui():
-    """Rebuild indicator menu and icon (run on main thread via GLib.idle_add)."""
-    global _indicator, _icon_path, daemon_manager, args
-    if _indicator is None or _icon_path is None:
-        return
-    _write_tray_icon_to_path(_icon_path)
-    _indicator.set_icon(_icon_path)
-    spec = daemon_manager.get_menu_spec(get_daemon_status())
-    menu = _build_gtk_menu(spec)
-    _indicator.set_menu(menu)
+    """Rebuild indicator menu and icon (run on main thread via GLib.idle_add).
+    Uses alternating icon paths so AppIndicator reloads the image (it caches by path).
+    """
+    global _indicator, _icon_paths, _icon_index, daemon_manager, args
+    try:
+        if _indicator is None or not _icon_paths:
+            return False
+        if daemon_manager is None:
+            return False
+        path = _icon_paths[_icon_index]
+        _write_tray_icon_to_path(path)
+        _indicator.set_icon(path)
+        _icon_index = 1 - _icon_index
+        spec = daemon_manager.get_menu_spec(get_daemon_status())
+        menu = _build_gtk_menu(spec)
+        if menu is not None:
+            _indicator.set_menu(menu)
+    except Exception as e:
+        log_message(f"Error updating tray UI: {e}", level=logging.ERROR)
+        log_message(traceback.format_exc(), level=logging.DEBUG)
     return False  # GLib.idle_add: return False to remove source
 
 
 def run_tray_appindicator():
     """Run tray using AppIndicator3 (SNI) + GTK (notifications, status window, config editor)."""
-    global daemon_manager, args, debug, update_queue, _indicator, _icon_path
+    global daemon_manager, args, debug, update_queue, _indicator, _icon_paths, _icon_index
     daemon_manager = DaemonManager()
     update_queue = Queue()
 
@@ -761,12 +913,20 @@ def run_tray_appindicator():
         log_message("Cleared existing crash log", level=logging.INFO)
     initial_status = get_daemon_status()
     initial_state = daemon_manager.get_current_state(initial_status)
+    if initial_status is not None:
+        daemon_manager.update_sync_feedback(initial_status)
+    daemon_manager.update_state(initial_state)
 
-    _icon_path = os.path.join(tempfile.gettempdir(), "rclone-bisync-manager-tray-icon.png")
-    _write_tray_icon_to_path(_icon_path)
+    tmp = tempfile.gettempdir()
+    _icon_paths = [
+        os.path.join(tmp, "rclone-bisync-manager-tray-icon-0.png"),
+        os.path.join(tmp, "rclone-bisync-manager-tray-icon-1.png"),
+    ]
+    _icon_index = 0
+    _write_tray_icon_to_path(_icon_paths[0])
     _indicator = AppIndicator3.Indicator.new(
         "rclone-bisync-manager",
-        _icon_path,
+        _icon_paths[0],
         AppIndicator3.IndicatorCategory.SYSTEM_SERVICES,
     )
     _indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
@@ -802,8 +962,13 @@ def run_tray_appindicator():
 
 def update_menu_and_icon():
     global daemon_manager
+    if daemon_manager is None:
+        return
     current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
+    if current_status is not None:
+        daemon_manager.update_sync_feedback(current_status)
+    daemon_manager.update_state(current_state)
     log_message(f"Updating menu and icon. Current state: {current_state.name}", level=logging.INFO)
     GLib.idle_add(_update_appindicator_ui)
 
@@ -813,8 +978,12 @@ def check_status_and_update():
     last_status = None
     while True:
         try:
+            if daemon_manager is None:
+                time.sleep(1)
+                continue
             crash_message = read_crash_log()
             if crash_message:
+                crash_message = str(crash_message).strip()
                 current_state = DaemonState.FAILED
                 if daemon_manager.update_state(current_state) or daemon_manager.daemon_start_error != crash_message:
                     daemon_manager.daemon_start_error = crash_message
@@ -832,6 +1001,15 @@ def check_status_and_update():
             else:
                 _offline_miss_count = 0
                 current_state = daemon_manager.get_current_state(current_status)
+
+            # Update sync feedback window (show syncing icon for min duration after a sync)
+            if current_status is not None:
+                daemon_manager.update_sync_feedback(current_status)
+            # Clear expired feedback and trigger one more icon update when it expires
+            with daemon_manager.state_lock:
+                if daemon_manager.sync_feedback_until > 0 and time.monotonic() >= daemon_manager.sync_feedback_until:
+                    daemon_manager.sync_feedback_until = 0
+                    update_queue.put(True)
 
             # Update the daemon manager state
             state_changed = daemon_manager.update_state(current_state)
@@ -856,8 +1034,11 @@ def check_status_and_update():
         time.sleep(1)
 
 
-def edit_config():
+def edit_config(widget=None):
     global daemon_manager
+    if daemon_manager is None:
+        log_message("Daemon manager not available", level=logging.ERROR)
+        return
     try:
         config_file = daemon_manager.get_config_file_path()
         if not config_file:
@@ -886,13 +1067,15 @@ def edit_config():
         dlg.destroy()
 
 
-def exit_tray():
+def exit_tray(widget=None):
     log_message("Exiting tray application", level=logging.INFO)
     Gtk.main_quit()
     sys.exit(0)
 
 
 def show_notification(title, message):
+    title = str(title) if title is not None else ""
+    message = str(message) if message is not None else ""
     if NOTIFY_AVAILABLE:
         try:
             if not Notify.is_initted():

@@ -121,10 +121,10 @@ class ConfigSchema(OptionsValidatorMixin):
                     validated_jobs[key] = SyncJobConfig(**job)
             except ValidationError as e:
                 for error in e.errors():
-                    field = '.'.join(str(loc) for loc in error['loc'])
-                    msg = error['msg']
-                    errors.append(f"Validation error for sync job '{
-                                  key}': {field} - {msg}")
+                    loc = error.get('loc', []) if isinstance(error, dict) else []
+                    msg = error.get('msg', str(error)) if isinstance(error, dict) else str(error)
+                    field = '.'.join(str(x) for x in loc) if loc else '?'
+                    errors.append(f"Validation error for sync job '{key}': {field} - {msg}")
 
         if errors:
             raise ValueError("\n".join(errors))
@@ -234,22 +234,24 @@ class Config:
         # Override global options
         config_data['dry_run'] = getattr(args, 'dry_run', False)
 
+        config_data.setdefault('sync_jobs', {})
+        sync_jobs = config_data['sync_jobs']
         # Override sync job options
         if hasattr(args, 'specific_sync_jobs') and args.specific_sync_jobs:
             for job_key in args.specific_sync_jobs:
-                if job_key in config_data['sync_jobs']:
-                    config_data['sync_jobs'][job_key]['active'] = True
+                if job_key in sync_jobs:
+                    sync_jobs[job_key]['active'] = True
 
         resync_list = getattr(args, 'resync', None) or []
         if resync_list:
             for job_key in resync_list:
-                if job_key in config_data['sync_jobs']:
-                    config_data['sync_jobs'][job_key]['force_resync'] = True
+                if job_key in sync_jobs:
+                    sync_jobs[job_key]['force_resync'] = True
 
         force_bisync_or_op = getattr(args, 'force_operation', False) or getattr(args, 'force_bisync', False)
         if force_bisync_or_op:
-            for job_key in config_data['sync_jobs']:
-                config_data['sync_jobs'][job_key]['force_operation'] = True
+            for job_key in sync_jobs:
+                sync_jobs[job_key]['force_operation'] = True
 
     def _update_internal_fields(self, args):
         self.console_log = getattr(args, 'console_log', False)

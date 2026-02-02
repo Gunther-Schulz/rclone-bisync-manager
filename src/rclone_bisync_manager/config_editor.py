@@ -56,7 +56,7 @@ def create_input(parent, section, key, value, schema, row):
         ttk.Entry(parent, textvariable=var).grid(
             row=row, column=1, sticky="we", padx=5, pady=2)
         var.trace("w", lambda *args: update_config(section, key,
-                  int(var.get()) if var.get().isdigit() else 0))
+                  int(v) if (v := (var.get() or "")) and v.isdigit() else 0))
     elif isinstance(value, list):
         text = tk.Text(parent, height=3, width=40)
         text.grid(row=row, column=1, sticky="we", padx=5, pady=2)
@@ -71,6 +71,8 @@ def create_input(parent, section, key, value, schema, row):
 
 
 def update_config(section, key, value):
+    if not key or not isinstance(key, str):
+        return
     keys = key.split('.')
     d = section
     for k in keys[:-1]:
@@ -134,9 +136,9 @@ def create_sync_jobs_tab(parent, sync_jobs, schema):
 
 
 def edit_config(config_file_path):
-    with open(config_file_path, 'r') as file:
+    with open(config_file_path, 'r', encoding='utf-8', errors='replace') as file:
         config_str = file.read()
-        config = yaml.safe_load(config_str)
+        config = yaml.safe_load(config_str) or {}
 
     config_schema = get_config_schema()
 
@@ -195,7 +197,7 @@ def edit_config(config_file_path):
             "properties", {}).get("rclone_options", {})
     )
     create_inputs(rclone_options_frame, rclone_options_config,
-                  rclone_options_schema, config['rclone_options'])
+                  rclone_options_schema, config.get('rclone_options', {}))
 
     bisync_options_frame, bisync_options_config, bisync_options_schema = create_tab(
         "Bisync Options",
@@ -204,7 +206,7 @@ def edit_config(config_file_path):
             "properties", {}).get("bisync_options", {})
     )
     create_inputs(bisync_options_frame, bisync_options_config,
-                  bisync_options_schema, config['bisync_options'])
+                  bisync_options_schema, config.get('bisync_options', {}))
 
     resync_options_frame, resync_options_config, resync_options_schema = create_tab(
         "Resync Options",
@@ -213,18 +215,23 @@ def edit_config(config_file_path):
             "properties", {}).get("resync_options", {})
     )
     create_inputs(resync_options_frame, resync_options_config,
-                  resync_options_schema, config['resync_options'])
+                  resync_options_schema, config.get('resync_options', {}))
 
     def save_config():
         # Preserve comments and structure
-        with open(config_file_path, 'r') as file:
+        with open(config_file_path, 'r', encoding='utf-8', errors='replace') as file:
             lines = file.readlines()
 
         def update_value(lines, path, value):
+            if not path:
+                return False
             pattern = re.compile(r'^(\s*{}: ).*$'.format(re.escape(path)))
             for i, line in enumerate(lines):
                 if pattern.match(line):
-                    lines[i] = pattern.sub(r'\1{}\n'.format(value), line)
+                    # Use callable so value is literal; never interpret \1 etc. as backreference
+                    def repl(m):
+                        return m.group(1) + str(value) + "\n"
+                    lines[i] = pattern.sub(repl, line)
                     return True
             return False
 
@@ -239,7 +246,7 @@ def edit_config(config_file_path):
 
         update_config_lines(config)
 
-        with open(config_file_path, 'w') as file:
+        with open(config_file_path, 'w', encoding='utf-8') as file:
             file.writelines(lines)
 
         messagebox.showinfo("Success", "Configuration saved successfully")
@@ -251,6 +258,8 @@ def edit_config(config_file_path):
 
 
 def _set_by_path(d, path, value):
+    if not path or not isinstance(path, str):
+        return
     keys = path.split(".")
     for k in keys[:-1]:
         d = d.setdefault(k, {})
@@ -261,8 +270,8 @@ def edit_config_gtk(config_file_path):
     """GTK config editor (AppIndicator path only). No tkinter fallback."""
     if not _GTK_AVAILABLE or Gtk is None:
         return
-    with open(config_file_path, "r") as f:
-        config = yaml.safe_load(f.read())
+    with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
+        config = yaml.safe_load(f.read()) or {}
     try:
         config_schema = request_config_schema()
     except Exception as e:
@@ -359,18 +368,26 @@ def edit_config_gtk(config_file_path):
             if t == "bool":
                 val = w.get_active()
             elif t == "int":
-                val = int(w.get_value())
+                try:
+                    val = int(w.get_value())
+                except (TypeError, ValueError):
+                    val = 0
             else:
                 val = w.get_text()
             _set_by_path(config, path, val)
-        with open(config_file_path, "r") as f:
+        with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
 
         def update_value(lines, path, value):
+            if not path:
+                return False
             pat = re.compile(r"^(\s*{}: ).*$".format(re.escape(path)))
             for i, line in enumerate(lines):
                 if pat.match(line):
-                    lines[i] = pat.sub(r"\1{}\n".format(value), line)
+                    # Use callable so value is literal; never interpret \1 etc. as backreference
+                    def repl(m):
+                        return m.group(1) + str(value) + "\n"
+                    lines[i] = pat.sub(repl, line)
                     return True
             return False
 
@@ -384,7 +401,7 @@ def edit_config_gtk(config_file_path):
                         lines.append(f"{full_key}: {value}\n")
 
         update_config_lines(config)
-        with open(config_file_path, "w") as f:
+        with open(config_file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
         dlg = Gtk.MessageDialog(
             transient_for=win, flags=0,

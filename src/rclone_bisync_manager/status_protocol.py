@@ -49,12 +49,15 @@ class DaemonState(enum.Enum):
 def _has_sync_issues(status: dict | None) -> bool:
     if not isinstance(status, dict):
         return False
+    sync_jobs = status.get(SYNC_JOBS)
+    if not isinstance(sync_jobs, dict):
+        sync_jobs = {}
     return (
         any(
             job.get(SYNC_STATUS, "NONE") not in ["COMPLETED", "NONE", "IN_PROGRESS"]
             or job.get(RESYNC_STATUS, "NONE") not in ["COMPLETED", "NONE", "IN_PROGRESS"]
             or job.get(HASH_WARNINGS, False)
-            for job in status.get(SYNC_JOBS, {}).values()
+            for job in sync_jobs.values()
         )
         or bool(status.get(SYNC_ERRORS))
     )
@@ -74,6 +77,9 @@ def status_to_display_state(status: dict | None, daemon_start_error: str | None 
         return DaemonState.FAILED
     if status.get(SHUTTING_DOWN):
         return DaemonState.SHUTTING_DOWN
+    # "Sync in progress" overrides attention states so user sees blue during retries/scheduled syncs
+    if status.get(CURRENTLY_SYNCING):
+        return DaemonState.SYNCING
     if status.get(IN_LIMBO):
         return DaemonState.LIMBO
     if status.get(CONFIG_INVALID):
@@ -82,8 +88,6 @@ def status_to_display_state(status: dict | None, daemon_start_error: str | None 
         return DaemonState.SYNC_ISSUES
     if status.get(CONFIG_CHANGED_ON_DISK):
         return DaemonState.CONFIG_CHANGED
-    if status.get(CURRENTLY_SYNCING):
-        return DaemonState.SYNCING
     if status.get(RUNNING, False):
         return DaemonState.RUNNING
     return DaemonState.OFFLINE

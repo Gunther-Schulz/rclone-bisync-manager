@@ -177,7 +177,7 @@ def process_sync_queue():
             if state.currently_syncing is None:
                 key, force_bisync, force_resync = state.sync_queue.get_nowait()
                 state.currently_syncing = key
-                state.queued_paths.remove(key)
+                state.queued_paths.discard(key)
                 state.current_sync_start_time = datetime.now()
             else:
                 break
@@ -295,8 +295,8 @@ def handle_add_sync_request():
             if not getattr(config, "_config", None):
                 conn.sendall(b"ERROR: config not loaded")
                 continue
-            force_bisync = sync_request.get('force_bisync', False)
-            resync = sync_request.get('resync', False)
+            force_bisync = bool(sync_request.get('force_bisync', False))
+            resync = bool(sync_request.get('resync', False))
 
             if job in config._config.sync_jobs:
                 config._config.sync_jobs[job].force_operation = force_bisync
@@ -337,9 +337,9 @@ def reload_config():
     if state is None:
         return False
     args = state.args if state.args is not None else config.args
-    config.reset_config_changed_flag()
     try:
         config.load_and_validate_config(args)
+        config.reset_config_changed_flag()  # Only clear after successful load so status never briefly reports False before apply
         log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
         scheduler.schedule_tasks(config._config.sync_jobs, config._config.run_missed_jobs)

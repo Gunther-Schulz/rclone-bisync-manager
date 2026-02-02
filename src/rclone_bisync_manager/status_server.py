@@ -178,8 +178,11 @@ def generate_config_report():
 
 
 def standardize_status(status):
+    """Normalize per-job sync/resync status for JSON. Expects str or dict; returns str."""
+    if status is None:
+        return "NONE"
+    if isinstance(status, str):
+        return status
     if isinstance(status, dict):
-        # If it's a dict, return the most relevant status
-        # Adjust this logic based on your specific requirements
         return next((v for v in status.values() if v != "NONE"), "NONE")
-    return status if status is not None else "NONE"
+    return "NONE"

@@ -21,7 +21,7 @@ def check_local_rclone_test(local_path):
     if result.returncode != 0:
         log_error(f"Local rclone test failed for {local_path}")
         return False
-    if config.rclone_test_file_name not in result.stdout:
+    if config.rclone_test_file_name not in (result.stdout or ""):
         log_message(f"{config.rclone_test_file_name} file not found in {
                     local_path}. To add it run 'rclone touch \"{local_path}/{config.rclone_test_file_name}\"'")
         return False
@@ -34,7 +34,7 @@ def check_remote_rclone_test(remote_path):
     if result.returncode != 0:
         log_error(f"Remote rclone test failed for {remote_path}")
         return False
-    if config.rclone_test_file_name not in result.stdout:
+    if config.rclone_test_file_name not in (result.stdout or ""):
         log_message(f"{config.rclone_test_file_name} file not found in {
                     remote_path}. To add it run 'rclone touch \"{remote_path}/{config.rclone_test_file_name}\"'")
         return False
@@ -103,7 +103,7 @@ def check_and_create_lock_file():
 
     if os.path.exists(lock_file_path):
         try:
-            with open(lock_file_path, 'r') as lock_file:
+            with open(lock_file_path, 'r', encoding='utf-8', errors='replace') as lock_file:
                 pid = int(lock_file.read().strip())
             if psutil.pid_exists(pid):
                 process = psutil.Process(pid)

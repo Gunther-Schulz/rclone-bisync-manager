@@ -63,8 +63,9 @@ class SyncScheduler:
     def remove_task(self, path_key: str):
         if path_key in self.task_map:
             task = self.task_map.pop(path_key)
-            self.tasks.remove(task)
-            heapq.heapify(self.tasks)
+            if task in self.tasks:
+                self.tasks.remove(task)
+                heapq.heapify(self.tasks)
 
     def get_next_task(self) -> Optional[SyncTask]:
         return self.tasks[0] if self.tasks else None
