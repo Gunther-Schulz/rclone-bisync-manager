@@ -1,5 +1,7 @@
 """Single source of truth for status JSON keys (server builds with these; tray/CLI consume with these)."""
 
+import enum
+
 # Top-level keys (success response)
 PID = "pid"
 RUNNING = "running"
@@ -27,3 +29,61 @@ HASH_WARNINGS = "hash_warnings"
 STATUS = "status"
 MESSAGE = "message"
 ERROR = "error"
+
+
+class DaemonState(enum.Enum):
+    """Display state derived from status dict; shared by tray and any CLI/UI consumer."""
+    INITIAL = "initial"
+    STARTING = "starting"
+    RUNNING = "running"
+    SYNCING = "syncing"
+    SHUTTING_DOWN = "shutting_down"
+    SYNC_ISSUES = "sync_issues"
+    CONFIG_INVALID = "config_invalid"
+    CONFIG_CHANGED = "config_changed"
+    LIMBO = "limbo"
+    OFFLINE = "offline"
+    FAILED = "failed"
+
+
+def _has_sync_issues(status: dict | None) -> bool:
+    if not isinstance(status, dict):
+        return False
+    return (
+        any(
+            job.get(SYNC_STATUS, "NONE") not in ["COMPLETED", "NONE", "IN_PROGRESS"]
+            or job.get(RESYNC_STATUS, "NONE") not in ["COMPLETED", "NONE", "IN_PROGRESS"]
+            or job.get(HASH_WARNINGS, False)
+            for job in status.get(SYNC_JOBS, {}).values()
+        )
+        or bool(status.get(SYNC_ERRORS))
+    )
+
+
+def status_to_display_state(status: dict | None, daemon_start_error: str | None = None) -> DaemonState:
+    """Map status dict (or None) to DaemonState. Pure function; caller sets daemon_start_error when FAILED."""
+    if daemon_start_error:
+        return DaemonState.FAILED
+    if status is None:
+        return DaemonState.OFFLINE
+    if not isinstance(status, dict):
+        return DaemonState.FAILED
+    if status.get(STATUS) == "error":
+        return DaemonState.FAILED
+    if status.get(ERROR):
+        return DaemonState.FAILED
+    if status.get(SHUTTING_DOWN):
+        return DaemonState.SHUTTING_DOWN
+    if status.get(IN_LIMBO):
+        return DaemonState.LIMBO
+    if status.get(CONFIG_INVALID):
+        return DaemonState.CONFIG_INVALID
+    if _has_sync_issues(status):
+        return DaemonState.SYNC_ISSUES
+    if status.get(CONFIG_CHANGED_ON_DISK):
+        return DaemonState.CONFIG_CHANGED
+    if status.get(CURRENTLY_SYNCING):
+        return DaemonState.SYNCING
+    if status.get(RUNNING, False):
+        return DaemonState.RUNNING
+    return DaemonState.OFFLINE

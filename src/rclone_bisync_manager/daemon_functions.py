@@ -1,5 +1,9 @@
 import json
+import os
+import signal
 import socket
+import sys
+import time
 import traceback
 from rclone_bisync_manager.status_server import start_status_server
 from rclone_bisync_manager.logging_utils import log_message, log_error
@@ -12,14 +16,12 @@ from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.daemon_state import DaemonRuntimeState
 import rclone_bisync_manager.daemon_state as state_module
 from rclone_bisync_manager.runtime_paths import (
+    clear_crash_log,
     get_add_sync_socket_path,
-    get_crash_log_path,
     get_lock_file_path,
+    write_crash_log,
 )
 from rclone_bisync_manager.daemon_client import request_stop, request_status
-import os
-import signal
-import time
 import threading
 from datetime import datetime, timedelta
 import fcntl
@@ -27,14 +29,64 @@ from croniter import croniter
 from queue import Queue
 
 
+def _run_main_loop(state, status_thread):
+    """Run the main daemon loop and graceful shutdown. Uses state_module.daemon_state, config, scheduler."""
+    last_config_check = time.time()
+    config_check_interval = 1
+
+    while state.running:
+        current_time = time.time()
+        if current_time - last_config_check >= config_check_interval:
+            config.check_config_changed()
+            last_config_check = current_time
+
+        if not state.in_limbo and not state.config_invalid:
+            process_sync_queue()
+            check_scheduled_tasks()
+
+        time.sleep(1)
+        if state.shutting_down:
+            print("Shutdown signal received, initiating graceful shutdown")
+            log_message(
+                "Shutdown signal received, initiating graceful shutdown")
+            break
+
+    print("Exiting main daemon loop")
+
+    # Graceful shutdown
+    log_message('Daemon shutting down...')
+
+    shutdown_start = time.time()
+    while state.currently_syncing and time.time() - shutdown_start < 60:
+        log_message(f"Waiting for current sync to finish: {state.currently_syncing}")
+        time.sleep(5)
+
+    if state.currently_syncing:
+        log_message(
+            f"Sync operation {state.currently_syncing} did not finish within timeout. Forcing shutdown."
+        )
+
+    while not state.sync_queue.empty():
+        state.sync_queue.get_nowait()
+    state.queued_paths.clear()
+
+    state.shutdown_complete = True
+    log_message('Daemon shutdown complete.')
+    status_thread.join(timeout=5)
+
+
 def daemon_main():
+    """Run loop entry (child after fork): acquire lifecycle lock, state, signals, threads, config load, main loop, shutdown."""
     print("Entering daemon_main()")
+
+    # --- Acquire lifecycle lock (child; parent lock was for start serialization only) ---
     lock_fd, error_message = check_and_create_lock_file()
     if error_message:
         log_error(f"Error starting daemon: {error_message}")
         print(f"Error starting daemon: {error_message}")
-        return
+        sys.exit(1)
 
+    # --- State setup ---
     state = DaemonRuntimeState()
     state.args = config.args
     state.lock_fd = lock_fd
@@ -44,10 +96,12 @@ def daemon_main():
         print("Daemon started in limbo state")
         log_message("Daemon started in limbo state")
 
+        # --- Signal handlers ---
         print("Setting up signal handlers")
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
 
+        # --- Threads: status server, add-sync handler ---
         print("Starting status server thread")
         status_thread = threading.Thread(
             target=start_status_server,
@@ -61,6 +115,7 @@ def daemon_main():
             target=handle_add_sync_request, daemon=True)
         add_sync_thread.start()
 
+        # --- Config load (exit limbo on success) ---
         print("Attempting to load and validate config")
         try:
             config.load_and_validate_config(config.args)
@@ -70,69 +125,30 @@ def daemon_main():
             state.in_limbo = False
             state.config_invalid = False
             state.config_error_message = None
+            clear_crash_log()
             print("Scheduling tasks")
             scheduler.schedule_tasks(config._config.sync_jobs, config._config.run_missed_jobs)
         except Exception as e:
             error_trace = traceback.format_exc()
+            error_message = f"Configuration error: {str(e)}\n{error_trace}"
             print(f"Configuration error: {str(e)}")
             print(f"Full traceback:\n{error_trace}")
             log_error(f"Configuration error: {str(e)}\n{error_trace}")
             state.in_limbo = True
             state.config_invalid = True
             state.config_error_message = str(e)
-            return  # Exit the daemon_main function if there's a config error
+            write_crash_log(error_message)  # So tray can show "Show Full Error" when daemon exits
+            sys.exit(1)  # Child exit with failure code so "daemon start" fails
 
-        print("Entering main daemon loop")
-        last_config_check = time.time()
-        config_check_interval = 1
-
-        while state.running:
-            current_time = time.time()
-            if current_time - last_config_check >= config_check_interval:
-                config.check_config_changed()
-                last_config_check = current_time
-
-            if not state.in_limbo and not state.config_invalid:
-                process_sync_queue()
-                check_scheduled_tasks()
-
-            time.sleep(1)
-            if state.shutting_down:
-                print("Shutdown signal received, initiating graceful shutdown")
-                log_message(
-                    "Shutdown signal received, initiating graceful shutdown")
-                break
-
-        print("Exiting main daemon loop")
-
-        # Graceful shutdown
-        log_message('Daemon shutting down...')
-
-        # Wait for current sync to finish with a timeout
-        shutdown_start = time.time()
-        while state.currently_syncing and time.time() - shutdown_start < 60:  # 60 seconds timeout
-            log_message(f"Waiting for current sync to finish: {
-                        state.currently_syncing}")
-            time.sleep(5)
-
-        if state.currently_syncing:
-            log_message(f"Sync operation {
-                        state.currently_syncing} did not finish within timeout. Forcing shutdown.")
-
-        # Clear remaining queue
-        while not state.sync_queue.empty():
-            state.sync_queue.get_nowait()
-        state.queued_paths.clear()
-
-        state.shutdown_complete = True
-        log_message('Daemon shutdown complete.')
-        status_thread.join(timeout=5)
+        # --- Main loop + graceful shutdown ---
+        _run_main_loop(state, status_thread)
 
     except Exception as e:
         error_message = f"Daemon crashed unexpectedly: {
             str(e)}\n{traceback.format_exc()}"
         log_error(error_message)
         write_crash_log(error_message)
+        sys.exit(1)  # Child exit with failure code so "daemon start" / crash is reported as failure
     finally:
         state_module.daemon_state = None
         if lock_fd is not None:
@@ -145,15 +161,6 @@ def daemon_main():
                 os.unlink(get_lock_file_path())
             except OSError:
                 pass  # Ignore if the file is already gone
-
-
-def write_crash_log(error_message):
-    crash_log_path = get_crash_log_path()
-    crash_dir = os.path.dirname(crash_log_path)
-    if crash_dir:
-        os.makedirs(crash_dir, exist_ok=True)
-    with open(crash_log_path, 'w') as f:
-        f.write(error_message)
 
 
 def process_sync_queue():

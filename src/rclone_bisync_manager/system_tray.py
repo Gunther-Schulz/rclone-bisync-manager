@@ -5,7 +5,6 @@ import json
 import time
 import subprocess
 import os
-import enum
 import tempfile
 from dataclasses import dataclass
 from io import BytesIO
@@ -16,7 +15,8 @@ import traceback
 import queue
 from queue import Queue
 from threading import Thread, Lock
-from rclone_bisync_manager.runtime_paths import get_crash_log_path
+from rclone_bisync_manager.runtime_paths import clear_crash_log, read_crash_log
+from rclone_bisync_manager.logging_utils import log_message, log_error, set_config, setup_loggers
 from rclone_bisync_manager.daemon_client import (
     request_status,
     request_stop,
@@ -24,6 +24,7 @@ from rclone_bisync_manager.daemon_client import (
     request_add_sync,
 )
 from rclone_bisync_manager import status_protocol as sp
+from rclone_bisync_manager.status_protocol import DaemonState, status_to_display_state, _has_sync_issues
 import sys
 
 # AppIndicator3 (SNI) + GTK only; required for tray
@@ -49,10 +50,7 @@ except (ImportError, ValueError):
 update_queue = queue.Queue()
 last_status = None
 last_offline_log_time = 0
-
-# Set up logging
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+_offline_miss_count = 0
 
 global daemon_manager
 daemon_manager = None
@@ -64,28 +62,6 @@ args = None
 _indicator = None
 _icon_path = None
 _status_window_gtk = None
-
-
-def log_message(message, level=logging.INFO):
-    global args, debug
-    if args and args.log_level != 'NONE':
-        logging.log(level, message)
-    elif debug:
-        print(message)
-
-
-class DaemonState(enum.Enum):
-    INITIAL = "initial"
-    STARTING = "starting"
-    RUNNING = "running"
-    SYNCING = "syncing"
-    SHUTTING_DOWN = "shutting_down"
-    SYNC_ISSUES = "sync_issues"
-    CONFIG_INVALID = "config_invalid"
-    CONFIG_CHANGED = "config_changed"
-    LIMBO = "limbo"
-    OFFLINE = "offline"
-    FAILED = "failed"
 
 
 @dataclass
@@ -122,47 +98,13 @@ class DaemonManager:
         return False
 
     def get_current_state(self, status):
-        if self.daemon_start_error:
-            return DaemonState.FAILED
-        if status is None:
-            return DaemonState.OFFLINE
-        elif isinstance(status, dict):
-            if status.get(sp.STATUS) == 'error':
-                self.daemon_start_error = status.get(
-                    sp.MESSAGE, 'Unknown error occurred')
-                return DaemonState.FAILED
-            elif status.get(sp.ERROR):
-                return DaemonState.FAILED
-            elif status.get(sp.SHUTTING_DOWN):
-                return DaemonState.SHUTTING_DOWN
-            elif status.get(sp.IN_LIMBO):
-                return DaemonState.LIMBO
-            elif status.get(sp.CONFIG_INVALID):
-                return DaemonState.CONFIG_INVALID
-            elif self._has_sync_issues(status):
-                return DaemonState.SYNC_ISSUES
-            elif status.get(sp.CONFIG_CHANGED_ON_DISK):
-                return DaemonState.CONFIG_CHANGED
-            elif status.get(sp.CURRENTLY_SYNCING):
-                return DaemonState.SYNCING
-            elif status.get(sp.RUNNING, False):
-                return DaemonState.RUNNING
-            else:
-                return DaemonState.OFFLINE
-        else:
-            self.daemon_start_error = f"Unexpected status type: {type(status)}"
-            return DaemonState.FAILED
-
-    def _has_sync_issues(self, status):
-        return (
-            any(
-                job[sp.SYNC_STATUS] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
-                job[sp.RESYNC_STATUS] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
-                job.get(sp.HASH_WARNINGS, False)
-                for job in status.get(sp.SYNC_JOBS, {}).values()
-            ) or
-            bool(status.get(sp.SYNC_ERRORS))
-        )
+        state = status_to_display_state(status, self.daemon_start_error)
+        if state == DaemonState.FAILED:
+            if status is not None and not isinstance(status, dict):
+                self.daemon_start_error = f"Unexpected status type: {type(status)}"
+            elif isinstance(status, dict) and status.get(sp.STATUS) == "error":
+                self.daemon_start_error = status.get(sp.MESSAGE, "Unknown error occurred")
+        return state
 
     def get_menu_spec(self, status):
         """Return a list of menu spec dicts (type, label, callback, enabled, submenu) for any backend."""
@@ -209,7 +151,8 @@ class DaemonManager:
         items = [{"type": "item", "label": "⚠️ Daemon is not running", "callback": None, "enabled": False}]
         error_message = status.get(sp.ERROR) if status else None
         error_message = error_message or self.daemon_start_error or "Unknown error"
-        items.append({"type": "item", "label": f"Error: {error_message.split(chr(10))[0]}", "callback": None, "enabled": False})
+        first_line = str(error_message).split(chr(10))[0][:80]
+        items.append({"type": "item", "label": f"Error: {first_line}", "callback": None, "enabled": False})
         if self.daemon_start_error or (status and status.get(sp.ERROR)):
             items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or status.get(sp.ERROR)), "enabled": True})
         return items
@@ -227,11 +170,11 @@ class DaemonManager:
     def _get_normal_spec(self, status):
         items = []
         if status:
-            if self._has_sync_issues(status):
+            if _has_sync_issues(status):
                 items.append({"type": "item", "label": "⚠ Sync issues detected", "callback": None, "enabled": False})
             if status.get(sp.CONFIG_CHANGED_ON_DISK):
                 items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
-            if self._has_sync_issues(status) or status.get(sp.CONFIG_CHANGED_ON_DISK):
+            if _has_sync_issues(status) or status.get(sp.CONFIG_CHANGED_ON_DISK):
                 items.append({"type": "separator"})
             currently_syncing = status.get(sp.CURRENTLY_SYNCING)
             if currently_syncing:
@@ -246,17 +189,18 @@ class DaemonManager:
                 items.append({"type": "item", "label": "Queued jobs:", "callback": None, "enabled": False})
                 for job in queued_jobs:
                     items.append({"type": "item", "label": f"  {job}", "callback": None, "enabled": False})
-            if sp.SYNC_JOBS in status:
+            sync_jobs = (status.get(sp.SYNC_JOBS) or {}) if isinstance(status.get(sp.SYNC_JOBS), dict) else {}
+            if sync_jobs:
                 jobs_submenu = []
-                for job_key, job_status in status[sp.SYNC_JOBS].items():
+                for job_key, job_status in sync_jobs.items():
                     job_submenu = [
                         {"type": "item", "label": "⚡ Sync Now", "callback": create_sync_now_handler(job_key), "enabled": True},
                         {"type": "item", "label": "⚡ Force Sync Now", "callback": create_sync_now_handler(job_key, force_bisync=True), "enabled": True},
                         {"type": "item", "label": "⚡ Resync + Sync Now", "callback": create_sync_now_handler(job_key, resync=True), "enabled": True},
-                        {"type": "item", "label": f"Last sync: {job_status[sp.LAST_SYNC] or 'Never'}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Next run: {job_status[sp.NEXT_RUN] or 'Not scheduled'}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Sync status: {job_status[sp.SYNC_STATUS]}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Resync status: {job_status[sp.RESYNC_STATUS]}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Last sync: {job_status.get(sp.LAST_SYNC) or 'Never'}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Next run: {job_status.get(sp.NEXT_RUN) or 'Not scheduled'}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Sync status: {job_status.get(sp.SYNC_STATUS, 'N/A')}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Resync status: {job_status.get(sp.RESYNC_STATUS, 'N/A')}", "callback": None, "enabled": False},
                     ]
                     jobs_submenu.append({"type": "item", "label": job_key, "callback": None, "enabled": True, "submenu": job_submenu})
                 items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": True, "submenu": jobs_submenu})
@@ -347,7 +291,7 @@ def _build_gtk_menu(spec):
 def get_daemon_status():
     global last_status, last_offline_log_time
     try:
-        status = request_status(timeout=5)
+        status = request_status(timeout=8, retries=2, retry_delay=0.3)
         if status is None:
             return None
         if status != last_status:
@@ -373,13 +317,29 @@ def create_sync_now_handler(job_key, force_bisync=False, resync=False):
 
 
 def stop_daemon():
+    def _wait_then_refresh():
+        for _ in range(6):
+            time.sleep(2)
+            if request_status(timeout=2) is None:
+                break
+        GLib.idle_add(update_menu_and_icon)
+
     try:
-        request_stop()
-        log_message(
-            "Daemon is shutting down. Use 'daemon status' to check progress.")
-        update_menu_and_icon()
+        result = request_stop(timeout=5, retries=2, retry_delay=0.3)
+        if result and result.get("status") == "success":
+            log_message(
+                "Daemon is shutting down. Use 'daemon status' to check progress.")
+            Thread(target=_wait_then_refresh, daemon=True).start()
+        else:
+            msg = result.get("message", "Daemon may still be running.") if result else "Unknown error"
+            log_message(f"Failed to stop daemon: {msg}", level=logging.ERROR)
+            show_notification("Stop failed", msg)
+            update_menu_and_icon()
     except Exception as e:
-        log_message(f"Error stopping daemon: {e}", level=logging.ERROR)
+        msg = str(e)
+        log_message(f"Failed to stop daemon: {msg}", level=logging.ERROR)
+        show_notification("Stop failed", msg)
+        update_menu_and_icon()
 
 
 def start_daemon():
@@ -395,7 +355,9 @@ def start_daemon():
 
     daemon_manager.update_state(DaemonState.STARTING)
 
-    clear_crash_log()  # Clear the crash log before starting the daemon
+    cleared = clear_crash_log()
+    if cleared:
+        log_message("Cleared existing crash log", level=logging.INFO)
     daemon_manager.daemon_start_error = None
 
     try:
@@ -629,8 +591,9 @@ def _show_status_window_gtk():
         err_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         err_sw.add(err_box)
         nb.append_page(err_sw, Gtk.Label(label="Sync Errors"))
-        if status.get(sp.SYNC_ERRORS):
-            for path, err in status[sp.SYNC_ERRORS].items():
+        sync_errors = status.get(sp.SYNC_ERRORS) if isinstance(status.get(sp.SYNC_ERRORS), dict) else {}
+        if sync_errors:
+            for path, err in sync_errors.items():
                 fr = Gtk.Frame(label=path)
                 fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
                 fr.add(fr_box)
@@ -748,16 +711,6 @@ def ensure_daemon_running():
     return False
 
 
-def clear_crash_log():
-    crash_log_path = get_crash_log_path()
-    if os.path.exists(crash_log_path):
-        try:
-            os.remove(crash_log_path)
-            log_message("Cleared existing crash log", level=logging.INFO)
-        except Exception as e:
-            log_message(f"Error clearing crash log: {e}", level=logging.ERROR)
-
-
 def _write_tray_icon_to_path(path):
     """Write current status image to path (for AppIndicator)."""
     global daemon_manager, args
@@ -795,14 +748,17 @@ def run_tray_appindicator():
     parser.add_argument("--config", type=str)
     args = parser.parse_args()
 
-    if args.log_level != "NONE":
-        logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s - %(levelname)s - %(message)s")
-        debug = args.log_level == "DEBUG"
-    else:
-        logging.disable(logging.CRITICAL)
-        debug = False
+    debug = args.log_level == "DEBUG"
+    minimal = type("TrayLogConfig", (), {})()
+    minimal.console_log = args.log_level != "NONE"
+    minimal.log_file_path = None
+    minimal.min_console_level = getattr(logging, args.log_level) if args.log_level != "NONE" else (logging.CRITICAL + 1)
+    set_config(minimal)
+    setup_loggers(console_log=minimal.console_log)
 
-    clear_crash_log()
+    cleared = clear_crash_log()
+    if cleared:
+        log_message("Cleared existing crash log", level=logging.INFO)
     initial_status = get_daemon_status()
     initial_state = daemon_manager.get_current_state(initial_status)
 
@@ -853,11 +809,11 @@ def update_menu_and_icon():
 
 
 def check_status_and_update():
-    global daemon_manager
+    global daemon_manager, _offline_miss_count
     last_status = None
     while True:
         try:
-            crash_message = check_crash_log()
+            crash_message = read_crash_log()
             if crash_message:
                 current_state = DaemonState.FAILED
                 if daemon_manager.update_state(current_state) or daemon_manager.daemon_start_error != crash_message:
@@ -870,13 +826,19 @@ def check_status_and_update():
                 continue
 
             current_status = get_daemon_status()
-            current_state = daemon_manager.get_current_state(current_status)
+            if current_status is None:
+                _offline_miss_count += 1
+                current_state = DaemonState.OFFLINE if _offline_miss_count >= 2 else daemon_manager.current_state
+            else:
+                _offline_miss_count = 0
+                current_state = daemon_manager.get_current_state(current_status)
 
             # Update the daemon manager state
             state_changed = daemon_manager.update_state(current_state)
 
-            # Check if the status or state has changed
-            if current_status != last_status or state_changed:
+            # Check if the status or state has changed; skip UI refresh when holding sticky (first None tick)
+            holding_sticky = current_status is None and _offline_miss_count < 2
+            if not holding_sticky and (current_status != last_status or state_changed):
                 log_message(
                     "Status or state changed. Updating menu and icon.", level=logging.INFO)
                 log_message(f"New status: {
@@ -892,16 +854,6 @@ def check_status_and_update():
                         traceback.format_exc()}", level=logging.DEBUG)
 
         time.sleep(1)
-
-
-def check_crash_log():
-    crash_log_path = get_crash_log_path()
-    if os.path.exists(crash_log_path):
-        with open(crash_log_path, 'r') as f:
-            crash_message = f.read()
-        # os.remove(crash_log_path)  # Remove the file after reading
-        return crash_message
-    return None
 
 
 def edit_config():

@@ -326,11 +326,13 @@ If you prefer to run RClone BiSync Manager as a system-wide service, you can cre
 RClone BiSync Manager provides comprehensive error handling and logging:
 
 - Sync errors are logged and can be viewed in the status report.
-- A crash log is maintained at `/tmp/rclone_bisync_manager_crash.log`.
+- A crash log is maintained at `/tmp/rclone_bisync_manager_crash.log` (default; see below for override).
 - The daemon enters a "limbo" state if the configuration becomes invalid, allowing for recovery without stopping the service.
 - Hash warnings for special file types (e.g., Live Photos) are detected and reported.
 
 You can view the full log file location in the status report or system tray application.
+
+Runtime paths (status socket, add-sync socket, lock file, crash log) default to `/tmp`. You can override the base directory with `RCLONE_BISYNC_MANAGER_RUNTIME_DIR` or `XDG_RUNTIME_DIR` (e.g. for per-user or container runs).
 
 ## Status Server
 
@@ -345,7 +347,7 @@ The status report includes:
 - Sync job details (last sync time, next scheduled run, sync status)
 - Error information
 
-You can access this information programmatically by connecting to the Unix socket at `/tmp/rclone_bisync_manager_status.sock`.
+You can access this information programmatically by connecting to the Unix socket at `/tmp/rclone_bisync_manager_status.sock` (default; base path is overridable via env as above).
 
 ## License
 

@@ -141,6 +141,15 @@ class ConfigSchema(OptionsValidatorMixin):
         return validated_jobs
 
 
+class LogStatePersistence:
+    """Holds mutable log state (last_log_position, hash_warnings). Config owns one and exposes via properties."""
+    __slots__ = ('last_log_position', 'hash_warnings')
+
+    def __init__(self):
+        self.last_log_position = 0
+        self.hash_warnings = {}
+
+
 class Config:
     def __init__(self):
         self.default_config_file = os.path.join(os.environ.get(
@@ -155,11 +164,22 @@ class Config:
         self.force_operation = False
         self.daemon_mode = False
         self.status_file_path = {}
-        self.hash_warnings = {}
-        self._last_log_position = 0
+        self._log_state = LogStatePersistence()
         self.last_config_status = None
         self.config_changed_on_disk = False
         self.last_config_mtime = None
+
+    @property
+    def _last_log_position(self):
+        return self._log_state.last_log_position
+
+    @_last_log_position.setter
+    def _last_log_position(self, value):
+        self._log_state.last_log_position = value
+
+    @property
+    def hash_warnings(self):
+        return self._log_state.hash_warnings
 
     def _init_file_paths(self):
         self.cache_dir = os.path.join(os.environ.get(

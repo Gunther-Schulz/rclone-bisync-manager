@@ -78,15 +78,26 @@ class SyncStateStore:
         return out
 
     def save(self):
+        """Save sync state atomically (write to temp file then rename)."""
         os.makedirs(self.cache_dir, exist_ok=True)
         state_file = os.path.join(self.cache_dir, 'sync_state.json')
-        with open(state_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                "sync_status": self.sync_state.sync_status,
-                "resync_status": self.sync_state.resync_status,
-                "last_sync_times": self._serialize_datetime_dict(self.sync_state.last_sync_times),
-                "next_run_times": self._serialize_datetime_dict(self.sync_state.next_run_times)
-            }, f)
+        tmp_file = state_file + '.tmp'
+        try:
+            with open(tmp_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "sync_status": self.sync_state.sync_status,
+                    "resync_status": self.sync_state.resync_status,
+                    "last_sync_times": self._serialize_datetime_dict(self.sync_state.last_sync_times),
+                    "next_run_times": self._serialize_datetime_dict(self.sync_state.next_run_times)
+                }, f)
+            os.replace(tmp_file, state_file)
+        except OSError:
+            if os.path.exists(tmp_file):
+                try:
+                    os.unlink(tmp_file)
+                except OSError:
+                    pass
+            raise
         self._save_sync_errors()
 
     def _initialize_empty_sync_state(self):
@@ -96,8 +107,19 @@ class SyncStateStore:
         self.sync_state.next_run_times = {}
 
     def _save_sync_errors(self):
-        with open(self._sync_errors_file, 'w', encoding='utf-8') as f:
-            json.dump(self.sync_errors, f, default=str)
+        """Save sync_errors atomically (write to temp file then rename)."""
+        tmp_file = self._sync_errors_file + '.tmp'
+        try:
+            with open(tmp_file, 'w', encoding='utf-8') as f:
+                json.dump(self.sync_errors, f, default=str)
+            os.replace(tmp_file, self._sync_errors_file)
+        except OSError:
+            if os.path.exists(tmp_file):
+                try:
+                    os.unlink(tmp_file)
+                except OSError:
+                    pass
+            raise
 
     def _load_sync_errors(self):
         if os.path.exists(self._sync_errors_file):

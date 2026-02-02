@@ -48,12 +48,13 @@ def ensure_local_directory(local_path):
 
 
 def check_tools():
+    """Verify required CLI tools are installed and on PATH. Raises ValueError if any are missing."""
     required_tools = ['rclone']
     for tool in required_tools:
         if shutil.which(tool) is None:
-            log_error(
-                f"{tool} is not installed or not in PATH. Please install it and try again.")
-            exit(1)
+            msg = f"{tool} is not installed or not in PATH. Please install it and try again."
+            log_error(msg)
+            raise ValueError(msg)
 
 
 def ensure_rclone_dir():

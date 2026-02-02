@@ -2,10 +2,10 @@
 
 ## Known Issues
 
-- [ ] More than 3 sync_jobs will cause `JSON decode error: Expecting ',' delimiter: line 1 column 4089 (char 4088)` returned by the status command. - fixed by removing config objects from the status
-- [ ] The tray displays "Daemon Offline" even when the daemon is running in the state described in the last point above.
-- [ ] Stopping the dameon does not reliably work during tray status RUNNING
-- [ ] The tray does not reliably display the RUNNING status. It's status window does however.
+- [x] **Status JSON decode with many sync_jobs:** Previously ">3 sync_jobs" caused JSON decode (truncated response). **Verified fixed:** STATUS client uses `_recv_all()` so full response is read; no truncation. Very large payload could still cause timeout or memory use (see Issues and hardening).
+- [ ] **Tray shows "Daemon Offline" when daemon runs:** **Mitigated.** Flow unchanged; causes: startup race, daemon busy, or transient failure. **Implemented:** Status timeout 8s, retries (2 × 0.3s), and sticky OFFLINE (only after 2 consecutive None polls) so transient failures don't flicker to Offline.
+- [ ] **Stopping daemon not reliable during RUNNING:** **Mitigated.** **Implemented:** Tray uses retries for `request_stop`; only logs "Daemon is shutting down" and runs wait-for-gone when STOP returns success; on failure shows "Stop failed" notification and logs error; always calls `update_menu_and_icon()` so UI reflects actual state.
+- [ ] **Tray does not reliably show RUNNING (status window does):** **Mitigated.** Same root cause; **implemented:** longer status timeout (8s), retries, and sticky OFFLINE (2 consecutive None) reduce spurious Offline.
 
 ## Testing
 
@@ -23,6 +23,14 @@
 
 - [ ] Refactor code to eliminate 'global' keyword (if possible)
 
+## Issues and hardening
+
+- [x] **Socket leak in daemon_client:** Client sockets were not closed on exception (connect/send/recv/json). Fixed: `try`/`finally` so socket is always closed.
+- [x] **Known UX/robustness (tray):** "Daemon Offline" when daemon runs; stop not reliable during RUNNING; tray does not reliably show RUNNING. **Implemented:** Status timeout 8s + retries; sticky OFFLINE (2 consecutive None); stop_daemon only shows "shutting down" on success, wait-for-daemon-gone (poll every 2s up to 12s), "Stop failed" notification + log on failure; always refresh UI after stop attempt.
+- [ ] **Status payload size:** **Verified:** STATUS and GET_CONFIG use `_recv_all()` in daemon_client — no truncation, so the old ">3 sync_jobs" JSON decode from single recv is fixed. Remaining risk: very large payload (many/large jobs) can cause long receive time (timeout) or high memory. Options: slim STATUS (omit/truncate `current_config` or per-job details), or document practical limit.
+- [x] **Atomic write for sync_state.json / sync_errors.json:** Write to `.tmp` then `os.replace()` in `sync_state_store.py` to avoid corruption on crash. **Done.**
+- [x] **Optional retry for STOP/status when daemon busy:** `request_status(timeout=5, retries=0, retry_delay=0.5)` and `request_stop(...)` support optional retries. Tray uses `retries=2`, `retry_delay=0.3`. **Done.**
+
 ## Refactor plan — status (done vs left)
 
 ### Tray: use modern AppIndicator / SNI path (GNOME-native) — DONE
@@ -30,6 +38,8 @@
 - **Done:** Tray tries **AppIndicator3** (SNI) via **PyGObject** first; icon shows with “AppIndicator and KStatusNotifierItem Support” on stock GNOME. No fallback; requires **AppIndicator**. If unavailable, `gi.repository.AppIndicator3` is unavailable (e.g. missing libappindicator3).
 - **System deps (for AppIndicator):** `libappindicator3-1`, `gir1.2-appindicator3-0.1` (or equivalent). Python deps: PyGObject (already in tray extras).
 - **Notes:** AppIndicator path uses libnotify for notifications; status window, config editor, and “Show Full Error” use GTK. Single path: GTK for status window, config editor, Show Full Error; libnotify for notifications.
+
+The bullets below describe the original issues; the table "Refactor status: what's done vs left" is the source of truth for what has been done and what remains.
 
 1. Global state and “God” objects
 config in config.py is a global singleton. Almost every module imports and uses it (300+ references). It holds:
@@ -55,7 +65,7 @@ Config handles: default paths, config file path, loading/validating YAML, mergin
 Pydantic is used for schema and validation, but the mutable runtime and file I/O live in the same object. So “configuration” and “process state” are fused.
 Splitting “immutable config (from file + CLI)” from “daemon runtime state” and “persistence (sync state, errors)” would clarify boundaries and make testing easier.
 5. Tight coupling and circular risk
-status_server imports reload_config from daemon_functions inside handle_client to avoid a top-level cycle. So “status server” knows about “daemon reload” implementation.
+status_server does not import daemon_functions; it accepts an optional handlers dict (e.g. RELOAD → reload_config). The daemon passes handlers when starting the server, so there is no circular import.
 scheduler imports config and get_sync_state_store(); uses store.sync_state and store.save() (no longer config.save_sync_state()).
 sync reads/writes config._config, config.hash_warnings, config._last_log_position; sync_state and sync_errors via get_sync_state_store().
 daemon_functions drives the loop and calls scheduler, sync, config, and status server.
@@ -92,6 +102,8 @@ Tray: Use the shared daemon client and paths; consider reusing core logging and,
 Sync + scheduler: Introduce a narrow interface for “run this job” and “persist sync state” so sync and scheduler don’t depend on the giant config/sync_state globals; then add types and annotations with 3.14 in mind.
 That’s the picture: one big global “config,” duplicated paths and protocol, mixed concerns in main and config, and tray reimplementing core behavior. Fixing paths and splitting config/state will give the biggest leverage; the rest can follow step by step.
 
+**Source of truth for done vs left:** The table below. The bullets above describe the original issues; the table reflects what has been implemented and what remains.
+
 ---
 
 ### Refactor status: what's done vs left
@@ -99,13 +111,21 @@ That’s the picture: one big global “config,” duplicated paths and protocol
 | # | Topic | Done | Left |
 |---|--------|------|------|
 | 1 | Global state / God objects | Daemon runtime → `DaemonRuntimeState` (daemon_state.py). Sync persistence → `SyncStateStore` (sync_state_store.py). | `config` still a global singleton (80+ refs). Holds paths, schema, CLI merge, status paths, hash_warnings, _last_log_position. scheduler/logger still global. |
-| 2 | main.py / orchestration | Thin main: parse args → load config → `run_command(args, config)`. Commands layer in commands.py; socket/lock in daemon_client + runtime_paths. | Daemon startup still one block (bootstrap + DaemonContext + daemon_main); could split "bootstrap" vs "daemonize" vs "loop." |
-| 3 | Hardcoded paths | `runtime_paths.py`: single place for status socket, add_sync socket, lock file, crash log. Used by daemon_client, status_server, daemon_functions, utils, commands, tray. | Paths still fixed under `/tmp`; no env override or XDG-style runtime base yet. |
-| 4 | Config class | Sync state/errors → SyncStateStore. Daemon flags (running, queue, in_limbo, etc.) → DaemonRuntimeState; status_server gets state from that. | Config still has: config file path, load/validate, status_file_path, hash_warnings, _last_log_position, "config changed" / mtime. Fused with process state. |
-| 5 | Tight coupling | status_server accepts handlers + state + config; daemon passes DaemonRuntimeState. Scheduler/sync use get_sync_state_store(). | status_server still imports reload_config inside handle_client. sync still imports config (write-back _last_log_position, read _config for status). No clear "core domain" without config. |
-| 6 | Tray vs core | Shared `daemon_client` (request_status, request_reload, request_stop, request_add_sync, request_config_schema). Shared `status_protocol` (sp.*) for JSON keys. Tray uses runtime_paths (crash log). | Tray still has its own DaemonState enum and log_message/args; no shared status DTO. |
-| 7 | Logging | Core: logging_utils (log_message, log_error, set_config). | Tray uses stdlib logging + its own log_message; two logging models. |
-| 8 | Error handling / exit | main uses sys.exit(result); commands return 0/1. | Mixed use of sys.exit(1), exit(1), return 1; crash log ownership spread (daemon_functions write, tray read). |
-| 9 | Sync and scheduler | `SyncContext` + `build_sync_context()`; perform_sync_operations(key, ..., context=ctx). Scheduler takes sync_jobs/run_missed_jobs as args. | sync still uses get_sync_state_store() and config (hash_warnings, _last_log_position write-back). No "state writer" interface; scheduler still uses config._config. |
-| 10 | Python 3.14 | pyproject 3.12+; no deprecated AST. | No shared types/protocols module; pathlib only in status_server; globals remain for free-threading. |
-| 11 | "Refactor first" checklist | **Paths:** runtime_paths in place, used everywhere. **Daemon client / protocol:** daemon_client + status_protocol used by CLI and tray. **main:** thin; commands.py dispatches. **Split config:** DaemonRuntimeState + SyncStateStore done; Config still heavy. | **Split config (cont'd):** Immutable "loaded config" vs Config not done. **Tray:** still re-derives state (DaemonState enum); could use shared status DTO. **Sync + scheduler:** narrow "run this job" + state writer interface not done; types/protocols not added. |
+| 2 | main.py / orchestration | Thin main: parse args → load config → `run_command(args, config)`. Commands layer in commands.py; socket/lock in daemon_client + runtime_paths. Daemon startup: phase comments (Bootstrap / Acquire start lock / Daemonize / Run loop) in run_daemon_start; daemon_main phases + `_run_main_loop(state, status_thread)`; child exits with sys.exit(1) on lock/config failure. | — |
+| 3 | Hardcoded paths | `runtime_paths.py`: single place for status socket, add_sync socket, lock file, crash log. Env override: `RCLONE_BISYNC_MANAGER_RUNTIME_DIR` or `XDG_RUNTIME_DIR`, fallback `/tmp`. Used by daemon_client, status_server, daemon_functions, utils, commands, tray. | — |
+| 4 | Config class | Sync state/errors → SyncStateStore. Daemon flags → DaemonRuntimeState. Log state (_last_log_position, hash_warnings) → LogStatePersistence (Config owns one; properties delegate). | Config still has: config file path, load/validate, status_file_path, "config changed" / mtime. Fused with process state. |
+| 5 | Tight coupling | status_server accepts handlers + state + config; daemon passes DaemonRuntimeState and handlers (e.g. RELOAD); no reload_config import in status_server. Scheduler/sync use get_sync_state_store(). | sync still imports config (write-back _last_log_position, read _config for status). No clear "core domain" without config. |
+| 6 | Tray vs core | Shared `daemon_client`, `status_protocol` (sp.*), runtime_paths (crash log). Shared `DaemonState` enum and `status_to_display_state()` in status_protocol; tray uses them. Tray uses logging_utils (unified logging). | — |
+| 7 | Logging | Core and tray: logging_utils (log_message, log_error, set_config, setup_loggers). Single configuration point for daemon and tray. | — |
+| 8 | Error handling / exit | main uses sys.exit(result); commands return 0/1. Crash log: single owner in runtime_paths (clear_crash_log, write_crash_log, read_crash_log); daemon_functions writes/clears, tray reads. | Mixed use of sys.exit(1), exit(1), return 1 elsewhere. |
+| 9 | Sync and scheduler | `SyncContext` + `build_sync_context()`; perform_sync_operations(key, ..., context=ctx). Scheduler takes sync_jobs/run_missed_jobs as args. Log state write-back via Config properties (LogStatePersistence). | sync still uses get_sync_state_store() and config._config. No injected state writer; scheduler still uses config._config. |
+| 10 | Python 3.14 | pyproject 3.12+; no deprecated AST. status_protocol: type annotations (_has_sync_issues, status_to_display_state). runtime_paths: pathlib.Path for path construction, str return. DEV.md: free-threading note. | No shared TypedDict for status payload; globals remain for free-threading. |
+| 11 | "Refactor first" checklist | **Paths:** runtime_paths in place, env override, used everywhere. **Daemon client / protocol:** daemon_client + status_protocol used by CLI and tray. **main:** thin; commands.py dispatches. **Daemon startup:** phase comments + _run_main_loop; child sys.exit(1) on lock/config failure. **Split config:** DaemonRuntimeState + SyncStateStore done; LogStatePersistence for _last_log_position + hash_warnings (Config properties). **Tray:** shared DaemonState + status_to_display_state; unified logging_utils. **Crash log:** owned by runtime_paths. | **Split config (cont'd):** Immutable "loaded config" vs Config not done. **Sync + scheduler:** inject state writer / SyncStateStore not done; types/protocols not added. |
+
+
+
+1	#3, #8 (crash log)	Runtime paths + crash log ownership — **DONE**
+2	#2	Daemon startup structure — **DONE**
+3	#6, #7	Tray shared DTO + unified logging — **DONE**
+4	#4, #5, #9	Config slim-down + injection + sync state writer — **DONE** (minimal: LogStatePersistence)
+5	#10	Types/protocols, pathlib, free-threading notes — **DONE**

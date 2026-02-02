@@ -75,12 +75,17 @@ def _bootstrap_for_daemon(args, config_obj):
 def run_daemon_start(args, config_obj):
     """Bootstrap, lock, then run under DaemonContext. Never returns on success; sys.exit(1) on failure."""
     try:
+        # --- Bootstrap: logging, tools, dirs, filters (no lock yet) ---
         print("Initializing daemon...")
         _bootstrap_for_daemon(args, config_obj)
+
+        # --- Acquire start lock (parent; serializes "daemon start") ---
         print("Creating lock file...")
         lock_fd, error_message = check_and_create_lock_file()
         if error_message:
             raise ValueError(f"Error: {error_message}")
+
+        # --- Daemonize: child runs run loop; parent exits ---
         print("Starting daemon process...")
         log_message("Starting daemon in limbo state...")
         with daemon.DaemonContext(
@@ -94,6 +99,7 @@ def run_daemon_start(args, config_obj):
             stderr=sys.stderr,
         ):
             config_obj.args = args
+            # --- Run loop: acquire lifecycle lock, state, threads, config load, main loop, shutdown ---
             print("Daemon process started. Calling daemon_main()...")
             daemon_main()
     except Exception as e:
