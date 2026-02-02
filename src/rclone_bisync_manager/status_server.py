@@ -151,12 +151,7 @@ def model_to_dict(obj: Any) -> dict:
 
 def json_serializer(obj: Any) -> Any:
     if isinstance(obj, BaseModel):
-        if hasattr(obj, 'model_dump'):
-            # For newer Pydantic versions
-            return obj.model_dump()
-        else:
-            # For older Pydantic versions
-            return obj.dict()
+        return obj.model_dump()
     elif isinstance(obj, (datetime, date)):
         return obj.isoformat()
     elif isinstance(obj, Path):

@@ -15,13 +15,15 @@ class OptionsValidatorMixin(BaseModel):
 
     @field_validator('rclone_options', 'bisync_options', 'resync_options')
     @classmethod
-    def validate_options(cls, v, field):
+    def validate_options(cls, v, info):
         disallowed_keys = {'resync', 'bisync', 'log-file'}
 
         invalid_keys = set(v.keys()) & disallowed_keys
         if invalid_keys:
-            raise ValueError(f"The following keys are not allowed in {
-                             field.name}: {', '.join(invalid_keys)}")
+            field_name = getattr(info, 'field_name', 'options')
+            raise ValueError(
+                f"The following keys are not allowed in {field_name}: {', '.join(invalid_keys)}"
+            )
         return v
 
 
@@ -79,13 +81,6 @@ class ConfigSchema(OptionsValidatorMixin):
     ))
 
     model_config = ConfigDict(extra='forbid')
-
-    @field_validator('max_cpu_usage_percent')
-    @classmethod
-    def check_cpu_usage(cls, v):
-        if v < 0 or v > 100:
-            raise ValueError('max_cpu_usage_percent must be between 0 and 100')
-        return v
 
     @field_validator('sync_jobs', mode='before')
     @classmethod
@@ -330,19 +325,9 @@ def signal_handler(signum, frame):
 
 
 def get_config_schema():
-    def model_schema(model):
-        if hasattr(model, 'model_json_schema'):
-            # For newer Pydantic versions
-            return model.model_json_schema()
-        elif hasattr(model, 'schema'):
-            # For older Pydantic versions
-            return model.schema()
-        else:
-            raise AttributeError(
-                f"Model {model.__name__} has no schema method")
-
+    """Return JSON schema for config models (Pydantic v2)."""
     return {
-        "ConfigSchema": model_schema(ConfigSchema),
-        "SyncJobConfig": model_schema(SyncJobConfig),
-        "OptionsValidatorMixin": model_schema(OptionsValidatorMixin)
+        "ConfigSchema": ConfigSchema.model_json_schema(),
+        "SyncJobConfig": SyncJobConfig.model_json_schema(),
+        "OptionsValidatorMixin": OptionsValidatorMixin.model_json_schema(),
     }
