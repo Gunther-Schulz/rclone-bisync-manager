@@ -3,7 +3,6 @@ import os
 from datetime import datetime
 import hashlib
 from croniter import croniter
-import json
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, DirectoryPath
 from rclone_bisync_manager.logging_utils import log_message, log_error
@@ -44,35 +43,6 @@ class SyncJobConfig(OptionsValidatorMixin):
         except ValueError as e:
             raise ValueError(f"Invalid cron string: {str(e)}")
         return v
-
-
-class SyncState:
-    def __init__(self):
-        self.sync_status = {}
-        self.resync_status = {}
-        self.last_sync_times = {}
-        self.next_run_times = {}
-
-    def update_job_state(self, job_key, sync_status=None, resync_status=None, last_sync=None, next_run=None):
-        if sync_status is not None:
-            self.sync_status[job_key] = sync_status
-        if resync_status is not None:
-            self.resync_status[job_key] = resync_status
-        if last_sync is not None:
-            self.last_sync_times[job_key] = last_sync
-        if next_run is not None:
-            self.next_run_times[job_key] = next_run
-
-    def get_job_state(self, job_key):
-        return {
-            "sync_status": self.sync_status.get(job_key, "NONE"),
-            "resync_status": self.resync_status.get(job_key, "NONE"),
-            "last_sync": self.last_sync_times.get(job_key),
-            "next_run": self.next_run_times.get(job_key)
-        }
-
-
-sync_state = SyncState()
 
 
 class ConfigSchema(OptionsValidatorMixin):
@@ -175,8 +145,6 @@ class Config:
         self.config_file = self.default_config_file
         self._config = None
         self.args = None
-        self.config_invalid = False
-        self.config_error_message = None
         self._init_file_paths()
         self._init_logging_paths()
         self.console_log = False
@@ -185,14 +153,10 @@ class Config:
         self.daemon_mode = False
         self.status_file_path = {}
         self.hash_warnings = {}
-        self.sync_errors = {}
-        self.sync_errors_file = os.path.join(
-            self.cache_dir, 'sync_errors.json')
+        self._last_log_position = 0
         self.last_config_status = None
         self.config_changed_on_disk = False
         self.last_config_mtime = None
-        self.in_limbo = True
-        self.load_sync_state()  # Call load_sync_state only once during initialization
 
     def _init_file_paths(self):
         self.cache_dir = os.path.join(os.environ.get(
@@ -229,8 +193,6 @@ class Config:
             error_message = f"Error parsing YAML in configuration file: {
                 str(e)}"
             log_error(error_message)
-            self.config_invalid = True
-            self.config_error_message = error_message
             raise ValueError(error_message)
 
         # Merge CLI arguments into config_data
@@ -242,13 +204,9 @@ class Config:
             if self._config != new_config:
                 self._config = new_config
                 log_message("Configuration loaded and validated successfully.")
-            self.config_invalid = False
-            self.config_error_message = None
         except ValidationError as e:
             error_message = self._format_validation_errors(e)
             log_error(f"Configuration on disk is invalid: {error_message}")
-            self.config_invalid = True
-            self.config_error_message = error_message
             raise ValueError(error_message)
 
         self._populate_status_file_paths()
@@ -307,45 +265,6 @@ class Config:
                                     remote_path}".encode()).hexdigest()
             return os.path.join(self.cache_dir, f'{unique_id}.status')
 
-    def save_sync_state(self):
-        state_file = os.path.join(self.cache_dir, 'sync_state.json')
-        with open(state_file, 'w') as f:
-            json.dump({
-                "sync_status": sync_state.sync_status,
-                "resync_status": sync_state.resync_status,
-                "last_sync_times": {k: v.isoformat() for k, v in sync_state.last_sync_times.items()},
-                "next_run_times": {k: v.isoformat() for k, v in sync_state.next_run_times.items()}
-            }, f)
-        self.save_sync_errors()
-
-    def load_sync_state(self):
-        state_file = os.path.join(self.cache_dir, 'sync_state.json')
-        if os.path.exists(state_file) and os.path.getsize(state_file) > 0:
-            try:
-                with open(state_file, 'r') as f:
-                    state = json.load(f)
-                    sync_state.sync_status = state.get("sync_status", {})
-                    sync_state.resync_status = state.get("resync_status", {})
-                    sync_state.last_sync_times = {k: datetime.fromisoformat(
-                        v) for k, v in state.get("last_sync_times", {}).items()}
-                    sync_state.next_run_times = {k: datetime.fromisoformat(
-                        v) for k, v in state.get("next_run_times", {}).items()}
-            except json.JSONDecodeError:
-                log_error(
-                    "Error decoding sync_state.json. Initializing with empty state.")
-                self._initialize_empty_sync_state()
-        else:
-            log_message(
-                "sync_state.json is empty or doesn't exist. Initializing with empty state.")
-            self._initialize_empty_sync_state()
-        self.load_sync_errors()
-
-    def _initialize_empty_sync_state(self):
-        sync_state.sync_status = {}
-        sync_state.resync_status = {}
-        sync_state.last_sync_times = {}
-        sync_state.next_run_times = {}
-
     def check_config_changed(self):
         current_mtime = os.path.getmtime(self.config_file)
         if self.last_config_mtime is None:
@@ -357,31 +276,6 @@ class Config:
     def reset_config_changed_flag(self):
         self.config_changed_on_disk = False
         self.last_config_mtime = os.path.getmtime(self.config_file)
-
-    def save_sync_errors(self):
-        with open(self.sync_errors_file, 'w') as f:
-            json.dump(self.sync_errors, f, default=str)
-
-    def load_sync_errors(self):
-        if os.path.exists(self.sync_errors_file):
-            with open(self.sync_errors_file, 'r') as f:
-                self.sync_errors = json.load(f)
-        else:
-            self.sync_errors = {}
-
-    def update_sync_error(self, local_path, sync_type, error_code, message):
-        self.sync_errors[local_path] = {
-            "sync_type": sync_type,
-            "error_code": error_code,
-            "message": message,
-            "timestamp": datetime.now().isoformat()
-        }
-        self.save_sync_errors()
-
-    def remove_sync_error(self, local_path):
-        if local_path in self.sync_errors:
-            del self.sync_errors[local_path]
-            self.save_sync_errors()
 
 
 config = Config()

@@ -3,7 +3,8 @@ import subprocess
 from datetime import datetime
 from rclone_bisync_manager.utils import is_cpulimit_installed, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
 from rclone_bisync_manager.logging_utils import log_message, log_error
-from rclone_bisync_manager.config import config, sync_state
+from rclone_bisync_manager.config import config
+from rclone_bisync_manager.sync_state_store import get_sync_state_store
 
 
 def perform_sync_operations(key, force_bisync=False, force_resync=False):
@@ -39,11 +40,12 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False):
         bisync_result = bisync(key, remote_path, local_path, force_bisync)
         write_status(key, sync_status=bisync_result)
 
-    sync_state.update_job_state(key, 
-                                sync_status=bisync_result if 'bisync_result' in locals() else status["sync_status"],
-                                resync_status=resync_result if 'resync_result' in locals() else status["resync_status"],
-                                last_sync=datetime.now())
-    config.save_sync_state()
+    store = get_sync_state_store()
+    store.sync_state.update_job_state(key,
+                                       sync_status=bisync_result if 'bisync_result' in locals() else status["sync_status"],
+                                       resync_status=resync_result if 'resync_result' in locals() else status["resync_status"],
+                                       last_sync=datetime.now())
+    store.save()
 
 
 def bisync(key, remote_path, local_path, force_bisync):
@@ -168,10 +170,11 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
     message = messages.get(result_code, f"failed with an unknown error code {
                            result_code}, please check the logs for more information.")
 
+    store = get_sync_state_store()
     if result_code != 0 and result_code != 9:
-        config.update_sync_error(local_path, sync_type, result_code, message)
+        store.update_sync_error(local_path, sync_type, result_code, message)
     else:
-        config.remove_sync_error(local_path)
+        store.remove_sync_error(local_path)
 
     if result_code == 0 or result_code == 9:
         log_message(f"{sync_type} {message} for {local_path}.")
@@ -184,18 +187,20 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
 def write_status(job_key, sync_status=None, resync_status=None):
     if config._config.dry_run:
         return  # Don't update status if it's a dry run
+    store = get_sync_state_store()
     if sync_status is not None:
-        sync_state.sync_status[job_key] = sync_status
+        store.sync_state.sync_status[job_key] = sync_status
     if resync_status is not None:
-        sync_state.resync_status[job_key] = resync_status
-    sync_state.last_sync_times[job_key] = datetime.now()
-    config.save_sync_state()
+        store.sync_state.resync_status[job_key] = resync_status
+    store.sync_state.last_sync_times[job_key] = datetime.now()
+    store.save()
 
 
 def read_status(job_key):
-    sync_status = sync_state.sync_status.get(job_key, "NONE")
-    resync_status = sync_state.resync_status.get(job_key, "NONE")
-    last_sync_time = sync_state.last_sync_times.get(job_key)
+    store = get_sync_state_store()
+    sync_status = store.sync_state.sync_status.get(job_key, "NONE")
+    resync_status = store.sync_state.resync_status.get(job_key, "NONE")
+    last_sync_time = store.sync_state.last_sync_times.get(job_key)
     return {
         "sync_status": sync_status,
         "resync_status": resync_status,

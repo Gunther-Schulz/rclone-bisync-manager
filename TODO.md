@@ -27,9 +27,9 @@
 
 ### Tray: use modern AppIndicator / SNI path (GNOME-native) — DONE
 
-- **Done:** Tray tries **AppIndicator3** (SNI) via **PyGObject** first; icon shows with “AppIndicator and KStatusNotifierItem Support” on stock GNOME. Falls back to **pystray** when `gi.repository.AppIndicator3` is unavailable (e.g. missing libappindicator3).
+- **Done:** Tray tries **AppIndicator3** (SNI) via **PyGObject** first; icon shows with “AppIndicator and KStatusNotifierItem Support” on stock GNOME. No fallback; requires **AppIndicator**. If unavailable, `gi.repository.AppIndicator3` is unavailable (e.g. missing libappindicator3).
 - **System deps (for AppIndicator):** `libappindicator3-1`, `gir1.2-appindicator3-0.1` (or equivalent). Python deps: PyGObject (already in tray extras).
-- **Notes:** AppIndicator path uses libnotify for notifications; status window, config editor, and “Show Full Error” use GTK. Pystray path uses tkinter for those. No cross-fallbacks.
+- **Notes:** AppIndicator path uses libnotify for notifications; status window, config editor, and “Show Full Error” use GTK. Single path: GTK for status window, config editor, Show Full Error; libnotify for notifications.
 
 1. Global state and “God” objects
 config in config.py is a global singleton. Almost every module imports and uses it (300+ references). It holds:
@@ -51,13 +51,13 @@ Refactor direction: extract a small “application” or “commands” layer th
 XDG dirs are used for config/cache/state, but /tmp is hardcoded. No abstraction for “where does this process put sockets/locks/crash logs?” (e.g. one RuntimePaths or env object).
 That makes testing and alternate installs (e.g. per-user or container) harder and will keep causing small inconsistencies.
 4. Config class doing too much
-Config handles: default paths, config file path, loading/validating YAML, merging CLI args, validation errors, status file paths per job, sync_state and sync_errors load/save, “config changed on disk” and mtime, and daemon flags (running, shutting_down, in_limbo, etc.).
+Config handles: default paths, config file path, loading/validating YAML, merging CLI args, validation errors, status file paths per job, (Done: sync_state/sync_errors → SyncStateStore; daemon flags → DaemonRuntimeState.) Remaining on Config: “config changed on disk” and mtime; hash_warnings, _last_log_position, status_file_path.
 Pydantic is used for schema and validation, but the mutable runtime and file I/O live in the same object. So “configuration” and “process state” are fused.
 Splitting “immutable config (from file + CLI)” from “daemon runtime state” and “persistence (sync state, errors)” would clarify boundaries and make testing easier.
 5. Tight coupling and circular risk
 status_server imports reload_config from daemon_functions inside handle_client to avoid a top-level cycle. So “status server” knows about “daemon reload” implementation.
-scheduler imports config and sync_state and calls config.save_sync_state().
-sync reads/writes config._config, sync_state, config.hash_warnings, config.sync_errors, config._last_log_position, etc.
+scheduler imports config and get_sync_state_store(); uses store.sync_state and store.save() (no longer config.save_sync_state()).
+sync reads/writes config._config, config.hash_warnings, config._last_log_position; sync_state and sync_errors via get_sync_state_store().
 daemon_functions drives the loop and calls scheduler, sync, config, and status server.
 So: config/sync_state/scheduler/sync/daemon_functions/status_server form one tightly coupled cluster. There’s no clear “core domain” that doesn’t depend on a giant config object.
 6. Tray vs core duplication and protocol
@@ -73,8 +73,8 @@ Some code uses sys.exit(1) or exit(1) (e.g. in main, utils); other code returns 
 Daemon crash is written to /tmp/...crash.log and tray reads it; that’s fine, but the “who is responsible for creating/cleaning this file?” is spread across daemon_functions and system_tray.
 Centralizing “fatal error” handling and “where to write crash info” would make behavior clearer.
 9. Sync and scheduler
-sync.py: perform_sync_operations does resync/bisync, status file read/write, sync_state updates, and config.save_sync_state(). It also reaches into config._config and config._last_log_position and hash_warnings. So “run one sync” is mixed with “global config and state.”
-scheduler depends on config._config and sync_state and calls config.save_sync_state() on schedule. So scheduling is tied to the same global state.
+sync.py: perform_sync_operations does resync/bisync, status file read/write, sync_state via get_sync_state_store() and store.save(); It also reaches into config._config and config._last_log_position and hash_warnings. So “run one sync” is mixed with “global config and state.”
+scheduler uses config._config and get_sync_state_store() (store.sync_state, store.save()). So scheduling is tied to the same global state.
 Extracting a “sync runner” that takes “job config + options” and “state writer” (interface or callback) would make sync testable without the full config/sync_state globals.
 10. Python 3.14–relevant points
 Requires 3.12+: You’re already on 3.12; 3.14 is mostly additive.

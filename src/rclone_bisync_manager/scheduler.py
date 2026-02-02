@@ -3,7 +3,8 @@ import heapq
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from croniter import croniter
-from rclone_bisync_manager.config import config, sync_state
+from rclone_bisync_manager.config import config
+from rclone_bisync_manager.sync_state_store import get_sync_state_store
 
 
 @dataclass(order=True)
@@ -33,7 +34,8 @@ class SyncScheduler:
         now = datetime.now()
         for key, job in config._config.sync_jobs.items():
             if job.active:
-                last_sync = sync_state.last_sync_times.get(key)
+                store = get_sync_state_store()
+                last_sync = store.sync_state.last_sync_times.get(key)
                 if last_sync is None:
                     self.schedule_task(key, now)
                 else:
@@ -49,8 +51,9 @@ class SyncScheduler:
         task = SyncTask(scheduled_time, path_key)
         heapq.heappush(self.tasks, task)
         self.task_map[path_key] = task
-        sync_state.update_job_state(path_key, next_run=scheduled_time)
-        config.save_sync_state()
+        store = get_sync_state_store()
+        store.sync_state.update_job_state(path_key, next_run=scheduled_time)
+        store.save()
 
     def remove_task(self, path_key: str):
         if path_key in self.task_map:

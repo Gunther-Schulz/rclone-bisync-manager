@@ -8,7 +8,7 @@ daemon_state = None
 
 
 class DaemonRuntimeState:
-    """Holds daemon-only runtime: loop flags, sync queue, lock fd. Not config or persistence."""
+    """Holds daemon-only runtime: loop flags, sync queue, lock fd, config-load state. Not config or persistence."""
 
     def __init__(self):
         self.running = True
@@ -21,3 +21,7 @@ class DaemonRuntimeState:
         self.current_sync_start_time = None
         self.args = None
         self.lock_fd = None
+        # Config-load state (moved from Config): set by daemon on load success/failure
+        self.in_limbo = True
+        self.config_invalid = False
+        self.config_error_message = None

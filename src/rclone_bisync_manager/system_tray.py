@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-from tkinter import messagebox, ttk
-import tkinter
-import pystray
 from PIL import Image
 import json
 import time
@@ -19,7 +16,6 @@ import traceback
 import queue
 from queue import Queue
 from threading import Thread, Lock
-from rclone_bisync_manager.config_editor import edit_config
 from rclone_bisync_manager.runtime_paths import get_crash_log_path
 from rclone_bisync_manager.daemon_client import (
     request_status,
@@ -28,9 +24,8 @@ from rclone_bisync_manager.daemon_client import (
     request_add_sync,
 )
 import sys
-from pystray import MenuItem as item
 
-# AppIndicator3 (SNI / modern tray on GNOME); fall back to pystray if unavailable
+# AppIndicator3 (SNI) + GTK only; required for tray
 APPINDICATOR_AVAILABLE = False
 NOTIFY_AVAILABLE = False
 try:
@@ -51,7 +46,6 @@ except (ImportError, ValueError):
 
 # Global variables
 update_queue = queue.Queue()
-icon = None
 last_status = None
 last_offline_log_time = 0
 
@@ -66,11 +60,6 @@ daemon_manager = None
 debug = False
 args = None
 
-# Add this global variable at the top of the file
-status_window = None
-
-# AppIndicator backend state (when APPINDICATOR_AVAILABLE)
-_tray_backend = "pystray"
 _indicator = None
 _icon_path = None
 _status_window_gtk = None
@@ -274,8 +263,6 @@ class DaemonManager:
                 items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": False})
         return items
 
-    def get_menu_items(self, status):
-        return _build_pystray_menu(self.get_menu_spec(status))
 
     def get_icon_color(self, status):
         current_state = self.get_current_state(status)
@@ -332,20 +319,6 @@ class DaemonManager:
         if status and isinstance(status, dict):
             return status.get('config_file_location')
         return None
-
-
-def _build_pystray_menu(spec):
-    """Build pystray Menu items from menu spec list."""
-    out = []
-    for s in spec:
-        if s["type"] == "separator":
-            out.append(pystray.Menu.SEPARATOR)
-        elif s["type"] == "item":
-            if s.get("submenu"):
-                out.append(pystray.MenuItem(s["label"], pystray.Menu(*_build_pystray_menu(s["submenu"])), enabled=s.get("enabled", True)))
-            else:
-                out.append(pystray.MenuItem(s["label"], s.get("callback"), enabled=s.get("enabled", True)))
-    return out
 
 
 def _build_gtk_menu(spec):
@@ -471,7 +444,7 @@ def start_daemon():
 
 
 def reload_config():
-    global daemon_manager, icon, _tray_backend
+    global daemon_manager
     try:
         response_data = request_reload()
         if response_data.get("status") == "success":
@@ -479,20 +452,7 @@ def reload_config():
         else:
             log_message(f"Error reloading configuration: {
                         response_data.get('message', 'Unknown error')}", level=logging.ERROR)
-        if _tray_backend == "appindicator":
-            update_queue.put(True)
-        else:
-            current_status = get_daemon_status()
-            new_menu = pystray.Menu(*daemon_manager.get_menu_items(current_status))
-            new_icon = create_status_image(
-                daemon_manager.get_icon_color(current_status),
-                daemon_manager.get_icon_text(current_status),
-                style=args.icon_style,
-                thickness=args.icon_thickness,
-            )
-            icon.menu = new_menu
-            icon.icon = new_icon
-            icon.update_menu()
+        update_queue.put(True)
         return response_data.get("status") == "success"
     except Exception as e:
         log_message(f"Error communicating with daemon: {
@@ -694,171 +654,7 @@ def _show_status_window_gtk():
 
 
 def show_status_window():
-    global daemon_manager, status_window, _tray_backend
-
-    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
-        _show_status_window_gtk()
-        return
-
-    # Check if the window is already open (tkinter path)
-    if status_window is not None and status_window.winfo_exists():
-        status_window.lift()
-        status_window.focus_force()
-        return
-
-    status = get_daemon_status()
-    current_state = daemon_manager.get_current_state(status)
-
-    status_window = tkinter.Tk()
-    status_window.title("RClone BiSync Manager Status")
-    status_window.geometry("400x300")
-
-    style = ttk.Style()
-    style.theme_use('clam')
-
-    if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
-        ttk.Label(status_window, text="⚠️ Daemon is not running",
-                  foreground="red", font=("", 14, "bold")).pack(pady=(20, 10))
-
-        if daemon_manager.daemon_start_error:
-            error_frame = ttk.LabelFrame(status_window, text="Error Details")
-            error_frame.pack(pady=10, padx=10, fill='x')
-            error_text = tkinter.Text(
-                error_frame, wrap=tkinter.WORD, height=25)
-            error_text.pack(pady=5, padx=5, fill='both', expand=True)
-            error_text.insert(tkinter.END, daemon_manager.daemon_start_error)
-            error_text.config(state=tkinter.DISABLED)
-
-        ttk.Button(status_window, text="Start Daemon", command=lambda: [
-                   start_daemon(), status_window.destroy()]).pack(pady=20)
-    else:
-        notebook = ttk.Notebook(status_window)
-        notebook.pack(expand=True, fill='both')
-
-        general_frame = ttk.Frame(notebook)
-        notebook.add(general_frame, text='General')
-
-        if current_state == DaemonState.LIMBO:
-            status_text = "⚠️ Daemon is in limbo state"
-        elif current_state == DaemonState.INITIAL:
-            status_text = "Daemon is initializing..."
-        elif current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
-            status_text = "⚠️ Daemon is not running"
-        else:
-            status_text = "Daemon is running"
-
-        status_label = ttk.Label(general_frame, text=status_text,
-                                 foreground="red" if current_state in [DaemonState.OFFLINE, DaemonState.FAILED, DaemonState.LIMBO] else "black")
-        status_label.pack(pady=(10, 0))
-
-        ttk.Label(general_frame, text=f"Config: {'Valid' if not status.get(
-            'config_invalid', False) else 'Invalid'}").pack(pady=5)
-        ttk.Label(general_frame, text=f"Config changed on disk: {
-                  'Yes' if status.get('config_changed_on_disk', False) else 'No'}").pack(pady=5)
-
-        currently_syncing = status.get('currently_syncing', 'None')
-        ttk.Label(general_frame, text="Currently syncing:").pack(
-            anchor='w', padx=5, pady=(5, 0))
-        ttk.Label(general_frame, text=currently_syncing).pack(
-            anchor='w', padx=20, pady=(0, 5))
-
-        queued_jobs = status.get('queued_paths', [])
-        ttk.Label(general_frame, text="Queued jobs:").pack(
-            anchor='w', padx=5, pady=(5, 0))
-        if queued_jobs:
-            for job in queued_jobs:
-                ttk.Label(general_frame, text=job).pack(
-                    anchor='w', padx=20, pady=(0, 2))
-        else:
-            ttk.Label(general_frame, text="None").pack(
-                anchor='w', padx=20, pady=(0, 5))
-
-        jobs_frame = ttk.Frame(notebook)
-        notebook.add(jobs_frame, text='Sync Jobs')
-
-        if "sync_jobs" in status:
-            for job_key, job_status in status["sync_jobs"].items():
-                job_frame = ttk.LabelFrame(jobs_frame, text=job_key)
-                job_frame.pack(pady=5, padx=5, fill='x')
-
-                ttk.Label(job_frame, text=f"Last sync: {
-                          job_status['last_sync']}").pack(anchor='w')
-                ttk.Label(job_frame, text=f"Next run: {
-                          job_status['next_run']}").pack(anchor='w')
-                ttk.Label(job_frame, text=f"Sync status: {
-                          job_status['sync_status']}").pack(anchor='w')
-                ttk.Label(job_frame, text=f"Resync status: {
-                          job_status['resync_status']}").pack(anchor='w')
-
-        errors_frame = ttk.Frame(notebook)
-        notebook.add(errors_frame, text='Sync Errors')
-
-        if status.get("sync_errors"):
-            for path, error_info in status["sync_errors"].items():
-                error_frame = ttk.LabelFrame(errors_frame, text=path)
-                error_frame.pack(pady=5, padx=5, fill='x')
-
-                ttk.Label(error_frame, text=f"Sync Type: {
-                          error_info['sync_type']}").pack(anchor='w')
-                ttk.Label(error_frame, text=f"Error Code: {
-                          error_info['error_code']}").pack(anchor='w')
-                ttk.Label(error_frame, text=f"Message: {
-                          error_info['message']}").pack(anchor='w')
-                ttk.Label(error_frame, text=f"Timestamp: {
-                          error_info['timestamp']}").pack(anchor='w')
-        else:
-            ttk.Label(errors_frame, text="No sync errors at this time.").pack(
-                pady=20)
-
-        config_frame = ttk.Frame(notebook)
-        notebook.add(config_frame, text='Config')
-
-        config_text = tkinter.Text(config_frame, wrap=tkinter.WORD)
-        config_text.pack(pady=10, padx=10, fill='both', expand=True)
-
-        config_file_path = status.get('config_file_location')
-        if config_file_path and os.path.exists(config_file_path):
-            with open(config_file_path, 'r') as config_file:
-                config_message = config_file.read()
-        else:
-            config_message = "Config file not found or inaccessible."
-
-        config_text.insert(tkinter.END, config_message)
-        config_text.config(state=tkinter.DISABLED)
-
-        config_scrollbar = ttk.Scrollbar(
-            config_frame, orient="vertical", command=config_text.yview)
-        config_scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
-        config_text.configure(yscrollcommand=config_scrollbar.set)
-
-        if current_state == DaemonState.LIMBO:
-            error_frame = ttk.Frame(notebook)
-            notebook.add(error_frame, text='Config Error Details')
-
-            error_text = tkinter.Text(error_frame, wrap=tkinter.WORD)
-            error_text.pack(pady=10, padx=10, fill='both', expand=True)
-
-            error_message = "Daemon is in limbo state. Config error details:\n\n"
-            if status.get("config_invalid", False):
-                error_message += f"Config is invalid.\nError: {
-                    status.get('config_error_message', 'Unknown error')}\n\n"
-            if status.get("config_changed_on_disk", False):
-                error_message += "Config has changed on disk.\n\n"
-            error_message += "Full config details:\n"
-            error_message += json.dumps(
-                status.get("config_details", {}), indent=2)
-
-            error_text.insert(tkinter.END, error_message)
-            error_text.config(state=tkinter.DISABLED)
-
-    # Add this at the end of the function
-    def on_close():
-        global status_window
-        status_window.destroy()
-        status_window = None
-
-    status_window.protocol("WM_DELETE_WINDOW", on_close)
-    status_window.mainloop()
+    _show_status_window_gtk()
 
 
 def open_config_file():
@@ -912,21 +708,7 @@ def _show_text_window_gtk(title, content):
 
 
 def show_text_window(title, content):
-    global _tray_backend
-    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
-        _show_text_window_gtk(title, content)
-        return
-    root = tkinter.Tk()
-    root.title(title)
-    root.geometry("600x400")
-    text_widget = tkinter.Text(root, wrap=tkinter.WORD)
-    text_widget.pack(expand=True, fill="both")
-    text_widget.insert(tkinter.END, content)
-    text_widget.config(state=tkinter.DISABLED)
-    scrollbar = ttk.Scrollbar(root, orient="vertical", command=text_widget.yview)
-    scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
-    text_widget.configure(yscrollcommand=scrollbar.set)
-    root.mainloop()
+    _show_text_window_gtk(title, content)
 
 
 def ensure_daemon_running():
@@ -999,12 +781,10 @@ def _update_appindicator_ui():
 
 
 def run_tray_appindicator():
-    """Run tray using AppIndicator3 (SNI); modern tray on GNOME."""
-    global icon, daemon_manager, args, debug, update_queue, _tray_backend, _indicator, _icon_path
-    _tray_backend = "appindicator"
+    """Run tray using AppIndicator3 (SNI) + GTK (notifications, status window, config editor)."""
+    global daemon_manager, args, debug, update_queue, _indicator, _icon_path
     daemon_manager = DaemonManager()
     update_queue = Queue()
-    icon = None  # no pystray icon
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--icon-style", type=int, choices=[1, 2], default=1)
@@ -1063,97 +843,12 @@ def run_tray_appindicator():
         exit_tray()
 
 
-def run_tray():
-    global icon, daemon_manager, args, debug, update_queue, _tray_backend
-    _tray_backend = "pystray"
-    daemon_manager = DaemonManager()
-    update_queue = Queue()
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--icon-style', type=int,
-                        choices=[1, 2], default=1, help='Choose icon style: 1 or 2')
-    parser.add_argument('--icon-thickness', type=int,
-                        default=40, help='Set the thickness of the icon lines')
-    parser.add_argument('--log-level', type=str, choices=['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                        default='NONE', help='Set the logging level')
-    parser.add_argument('--enable-experimental', action='store_true',
-                        help='Enable experimental features')
-    parser.add_argument('--config', type=str,
-                        help='Specify a custom config file location')
-    args = parser.parse_args()
-
-    # Set up logging based on the argument
-    if args.log_level != 'NONE':
-        logging.basicConfig(level=getattr(logging, args.log_level),
-                            format='%(asctime)s - %(levelname)s - %(message)s')
-        debug = (args.log_level == 'DEBUG')
-    else:
-        logging.disable(logging.CRITICAL)  # Disable all logging
-        debug = False
-
-    clear_crash_log()  # Clear the crash log before starting
-
-    initial_status = get_daemon_status()
-    initial_state = daemon_manager.get_current_state(initial_status)
-
-    icon = pystray.Icon("rclone-bisync-manager",
-                        create_status_image(daemon_manager.get_icon_color(initial_status),
-                                            daemon_manager.get_icon_text(
-                                                initial_status),
-                                            style=args.icon_style,
-                                            thickness=args.icon_thickness),
-                        "RClone BiSync Manager")
-
-    icon.menu = pystray.Menu(*daemon_manager.get_menu_items(initial_status))
-
-    Thread(target=check_status_and_update, daemon=True).start()
-    Thread(target=handle_updates, daemon=True).start()
-
-    # Start the daemon only if the initial state is OFFLINE
-    if initial_state == DaemonState.OFFLINE:
-        Thread(target=start_daemon, daemon=True).start()
-
-    try:
-        icon.run()
-    except KeyboardInterrupt:
-        exit_tray()
-
-
 def update_menu_and_icon():
-    global icon, daemon_manager, args, _tray_backend
+    global daemon_manager
     current_status = get_daemon_status()
     current_state = daemon_manager.get_current_state(current_status)
-
-    log_message(f"Updating menu and icon. Current state: {
-                current_state.name}", level=logging.INFO)
-
-    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
-        GLib.idle_add(_update_appindicator_ui)
-        return
-    # pystray
-    log_message("Current menu items:", level=logging.DEBUG)
-    for item in icon.menu:
-        log_message(f"  - {item.text}", level=logging.DEBUG)
-    new_menu_items = daemon_manager.get_menu_items(current_status)
-    new_menu = pystray.Menu(*new_menu_items)
-    new_icon_color = daemon_manager.get_icon_color(current_status)
-    new_icon_text = daemon_manager.get_icon_text(current_status)
-    new_icon = create_status_image(
-        new_icon_color,
-        new_icon_text,
-        style=args.icon_style,
-        thickness=args.icon_thickness,
-    )
-    menu_changed = str(new_menu) != str(icon.menu)
-    icon_changed = new_icon != icon.icon
-    if menu_changed or icon_changed:
-        icon.menu = new_menu
-        icon.icon = new_icon
-        icon.update_menu()
-        log_message(f"Menu and icon updated for state: {
-                    current_state.name}", level=logging.INFO)
-    else:
-        log_message("No changes detected, skipping update", level=logging.INFO)
+    log_message(f"Updating menu and icon. Current state: {current_state.name}", level=logging.INFO)
+    GLib.idle_add(_update_appindicator_ui)
 
 
 def check_status_and_update():
@@ -1198,19 +893,6 @@ def check_status_and_update():
         time.sleep(1)
 
 
-def handle_updates():
-    while True:
-        try:
-            update_queue.get()
-            update_menu_and_icon()
-        except Exception as e:
-            log_message(f"Error in handle_updates: {e}", level=logging.ERROR)
-            log_message(f"Error details: {
-                        traceback.format_exc()}", level=logging.DEBUG)
-        finally:
-            update_queue.task_done()
-
-
 def check_crash_log():
     crash_log_path = get_crash_log_path()
     if os.path.exists(crash_log_path):
@@ -1222,59 +904,43 @@ def check_crash_log():
 
 
 def edit_config():
-    global daemon_manager, _tray_backend
+    global daemon_manager
     try:
         config_file = daemon_manager.get_config_file_path()
         if not config_file:
             log_message("Config file path not available", level=logging.ERROR)
-            if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
-                dlg = Gtk.MessageDialog(
-                    transient_for=None, flags=0,
-                    message_type=Gtk.MessageType.ERROR,
-                    buttons=Gtk.ButtonsType.OK,
-                    text="Config file path not available",
-                )
-                dlg.run()
-                dlg.destroy()
-            else:
-                messagebox.showerror("Error", "Config file path not available")
-            return
-        if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
-            from rclone_bisync_manager.config_editor import edit_config_gtk
-            edit_config_gtk(config_file)
-            reload_config()
-        else:
-            from rclone_bisync_manager.config_editor import edit_config as config_editor_tk
-            config_editor_tk(config_file)
-            reload_config()
-    except Exception as e:
-        log_message(f"Error editing config: {str(e)}", level=logging.ERROR)
-        if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
             dlg = Gtk.MessageDialog(
                 transient_for=None, flags=0,
                 message_type=Gtk.MessageType.ERROR,
                 buttons=Gtk.ButtonsType.OK,
-                text=f"Failed to edit config: {e}",
+                text="Config file path not available",
             )
             dlg.run()
             dlg.destroy()
-        else:
-            messagebox.showerror("Error", f"Failed to edit config: {str(e)}")
+            return
+        from rclone_bisync_manager.config_editor import edit_config_gtk
+        edit_config_gtk(config_file)
+        reload_config()
+    except Exception as e:
+        log_message(f"Error editing config: {str(e)}", level=logging.ERROR)
+        dlg = Gtk.MessageDialog(
+            transient_for=None, flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=f"Failed to edit config: {e}",
+        )
+        dlg.run()
+        dlg.destroy()
 
 
 def exit_tray():
-    global _tray_backend
     log_message("Exiting tray application", level=logging.INFO)
-    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
-        Gtk.main_quit()
-    else:
-        icon.stop()
+    Gtk.main_quit()
     sys.exit(0)
 
 
 def show_notification(title, message):
-    global icon, _tray_backend
-    if _tray_backend == "appindicator" and NOTIFY_AVAILABLE:
+    if NOTIFY_AVAILABLE:
         try:
             if not Notify.is_initted():
                 Notify.init("rclone-bisync-manager")
@@ -1282,19 +948,15 @@ def show_notification(title, message):
             n.show()
         except Exception as e:
             log_message(f"Notification failed: {e}; {title} - {message}", level=logging.INFO)
-    elif _tray_backend == "appindicator":
-        log_message(f"Notification: {title} - {message}", level=logging.INFO)
-    elif icon:
-        icon.notify(message, title)
     else:
         log_message(f"Notification: {title} - {message}", level=logging.INFO)
 
 
 def main():
-    if APPINDICATOR_AVAILABLE:
-        run_tray_appindicator()
-    else:
-        run_tray()
+    if not APPINDICATOR_AVAILABLE:
+        print("Tray requires AppIndicator3 + GTK3 + PyGObject. On Arch: libappindicator, gtk3, libnotify, python-gobject.", file=sys.stderr)
+        sys.exit(1)
+    run_tray_appindicator()
 
 
 if __name__ == "__main__":

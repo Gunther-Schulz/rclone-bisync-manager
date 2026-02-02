@@ -7,7 +7,8 @@ from pathlib import Path
 from rclone_bisync_manager.runtime_paths import get_status_socket_path
 
 from pydantic import BaseModel
-from rclone_bisync_manager.config import sync_state, get_config_schema
+from rclone_bisync_manager.config import get_config_schema
+from rclone_bisync_manager.sync_state_store import get_sync_state_store
 from typing import Any
 from datetime import datetime, date
 
@@ -18,8 +19,8 @@ from rclone_bisync_manager.logging_utils import log_message
 def start_status_server(handlers=None, state=None, config=None):
     """Run the status socket server.
     handlers: optional dict of command -> callable (e.g. {'RELOAD': reload_config}).
-    state: daemon runtime state (running, shutting_down, sync_queue, etc.).
-    config: config object (in_limbo, _config, sync_errors, etc.). Required when state is DaemonRuntimeState.
+    state: daemon runtime state (running, shutting_down, in_limbo, config_invalid, etc.).
+    config: config object (_config, paths, etc.). Sync state/errors come from get_sync_state_store().
     """
     from rclone_bisync_manager.config import config as default_config
     socket_path = get_status_socket_path()
@@ -36,7 +37,7 @@ def start_status_server(handlers=None, state=None, config=None):
     server.listen(1)
     server.settimeout(1)  # Set a timeout so we can check the running flag
 
-    while s.running or not s.shutdown_complete:
+    while getattr(s, "running", True) or not getattr(s, "shutdown_complete", False):
         try:
             conn, addr = server.accept()
             threading.Thread(target=handle_client, args=(conn, handlers, s, c)).start()
@@ -63,7 +64,7 @@ def handle_client(conn, handlers=None, state=None, config=None):
                 success = False
             response = json.dumps({
                 "status": "success" if success else "error",
-                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {getattr(c, 'config_error_message', None) or 'unknown'}"
+                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {getattr(s, 'config_error_message', None) or 'unknown'}"
             })
         elif data == "STOP":
             s.running = False
@@ -90,32 +91,33 @@ def handle_client(conn, handlers=None, state=None, config=None):
 
 
 def generate_status_report(state=None, config=None):
-    """state: runtime (running, shutting_down, currently_syncing, queued_paths). config: in_limbo, _config, sync_errors, etc."""
+    """state: runtime (running, shutting_down, currently_syncing, queued_paths, in_limbo, config_invalid). config: _config, paths, hash_warnings. sync_errors from get_sync_state_store()."""
     from rclone_bisync_manager.config import config as default_config
     s = state if state is not None else default_config
     c = config if config is not None else default_config
     try:
+        store = get_sync_state_store()
         status = {
             "pid": os.getpid(),
             "running": s.running,
             "shutting_down": s.shutting_down,
-            "in_limbo": c.in_limbo,
-            "config_invalid": c.config_invalid,
-            "config_error_message": getattr(c, "config_error_message", None),
+            "in_limbo": getattr(s, "in_limbo", True),
+            "config_invalid": getattr(s, "config_invalid", False),
+            "config_error_message": getattr(s, "config_error_message", None),
             "currently_syncing": s.currently_syncing,
             "queued_paths": list(s.queued_paths),
             "config_changed_on_disk": c.config_changed_on_disk,
             "config_file_location": str(c.config_file),
             "log_file_location": str(c._config.log_file_path) if c._config else None,
-            "sync_errors": c.sync_errors
+            "sync_errors": store.sync_errors
         }
 
-        if c._config and not c.in_limbo and not c.config_invalid:
+        if c._config and not getattr(s, "in_limbo", True) and not getattr(s, "config_invalid", False):
             status["current_config"] = model_to_dict(c._config)
             status["sync_jobs"] = {}
             for key, value in c._config.sync_jobs.items():
                 if value.active:
-                    job_state = sync_state.get_job_state(key)
+                    job_state = store.sync_state.get_job_state(key)
                     status["sync_jobs"][key] = model_to_dict(value)
                     status["sync_jobs"][key].update({
                         "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,

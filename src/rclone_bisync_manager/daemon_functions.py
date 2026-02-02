@@ -65,7 +65,9 @@ def daemon_main():
             print("Configuration loaded and validated successfully")
             log_message(
                 "Configuration loaded and validated successfully. Exiting limbo state.")
-            config.in_limbo = False
+            state.in_limbo = False
+            state.config_invalid = False
+            state.config_error_message = None
             print("Scheduling tasks")
             scheduler.schedule_tasks()
         except Exception as e:
@@ -73,9 +75,9 @@ def daemon_main():
             print(f"Configuration error: {str(e)}")
             print(f"Full traceback:\n{error_trace}")
             log_error(f"Configuration error: {str(e)}\n{error_trace}")
-            config.in_limbo = True
-            config.config_invalid = True
-            config.config_error_message = str(e)
+            state.in_limbo = True
+            state.config_invalid = True
+            state.config_error_message = str(e)
             return  # Exit the daemon_main function if there's a config error
 
         print("Entering main daemon loop")
@@ -88,7 +90,7 @@ def daemon_main():
                 config.check_config_changed()
                 last_config_check = current_time
 
-            if not config.in_limbo and not config.config_invalid:
+            if not state.in_limbo and not state.config_invalid:
                 process_sync_queue()
                 check_scheduled_tasks()
 
@@ -268,21 +270,24 @@ def handle_add_sync_request():
 
 def reload_config():
     state = state_module.daemon_state
-    args = state.args if state is not None else config.args
+    if state is None:
+        return False
+    args = state.args if state.args is not None else config.args
     config.reset_config_changed_flag()
     try:
         config.load_and_validate_config(args)
         log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
         scheduler.schedule_tasks()
-        config.config_invalid = False
-        config.in_limbo = False
+        state.config_invalid = False
+        state.in_limbo = False
+        state.config_error_message = None
         return True
     except (ValueError, FileNotFoundError) as e:
         error_message = f"Error reloading config: {str(e)}"
         log_error(error_message)
-        config.config_invalid = True
-        config.in_limbo = True
-        config.config_error_message = error_message
+        state.config_invalid = True
+        state.in_limbo = True
+        state.config_error_message = error_message
         log_message("Daemon entering limbo state due to invalid configuration.")
         return False
