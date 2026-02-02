@@ -124,3 +124,29 @@ def check_and_create_lock_file():
         if e.errno == errno.EEXIST:
             return None, "Unable to create lock file. Another instance might be starting."
         return None, f"Unexpected error creating lock file: {str(e)}"
+
+
+def acquire_sync_lock():
+    """Acquire exclusive lock for one-off sync (non-daemon). Returns (fd, None) or (None, error_str)."""
+    lock_file_path = get_lock_file_path()
+    try:
+        fd = open(lock_file_path, 'w')
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd, None
+    except IOError as e:
+        return None, "Another sync instance is already running."
+
+
+def release_sync_lock(lock_fd):
+    """Release lock and remove lock file after one-off sync."""
+    if lock_fd is None:
+        return
+    try:
+        fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+    except (IOError, OSError):
+        pass
+    try:
+        os.unlink(get_lock_file_path())
+    except OSError:
+        pass

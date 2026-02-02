@@ -10,12 +10,25 @@ authors = [{ name = "Your Name", email = "your.email@example.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.12"
+# For AUR: PKGBUILD uses Arch packages (see ARCH_AND_AUR_DEPENDENCIES.md). For pip/GitHub on other distros, these are installed from PyPI.
 dependencies = [
-    "croniter==3.0.3",
-    "pydantic==2.8.2",
-    "python_daemon==3.0.1",
-    "PyYAML==6.0.2",
-    "psutil==5.9.5",
+    "croniter>=3.0.3",
+    "pydantic>=2.8,<3",
+    "python_daemon>=3.0.1",
+    "PyYAML>=6.0.2",
+    "psutil>=5.9.5",
+    "Pillow>=10.4.0",
+    "pystray>=0.19.5",
+    "PyGObject>=3.46.0",
+    "CairoSVG>=2.7.1",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Archiving :: Sync",
 ]
 
 [project.scripts]
@@ -26,15 +39,6 @@ rclone-bisync-manager-tray = "rclone_bisync_manager.system_tray:main"
 where = ["src"]
 include = ["rclone_bisync_manager"]
 
-[project.optional-dependencies]
-tray = [
-    "Pillow==10.4.0",
-    "pystray==0.19.5",
-    "PyGObject==3.46.0",
-    "CairoSVG==2.7.1",
-    "PyYAML==6.0.2",
-]
-
 [project.urls]
-"Homepage" = "https://github.com/yourusername/rclone-bisync-manager"
-"Bug Tracker" = "https://github.com/yourusername/rclone-bisync-manager/issues"
+"Homepage" = "https://github.com/Gunther-Schulz/rclone-bisync-manager"
+"Bug Tracker" = "https://github.com/Gunther-Schulz/rclone-bisync-manager/issues"

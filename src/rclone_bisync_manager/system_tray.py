@@ -32,14 +32,21 @@ from pystray import MenuItem as item
 
 # AppIndicator3 (SNI / modern tray on GNOME); fall back to pystray if unavailable
 APPINDICATOR_AVAILABLE = False
+NOTIFY_AVAILABLE = False
 try:
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import Gtk, GLib, AppIndicator3
     APPINDICATOR_AVAILABLE = True
+    try:
+        gi.require_version("Notify", "0.7")
+        from gi.repository import Notify
+        NOTIFY_AVAILABLE = True
+    except (ImportError, ValueError):
+        Notify = None
 except (ImportError, ValueError):
-    Gtk = GLib = AppIndicator3 = None
+    Gtk = GLib = AppIndicator3 = Notify = None
 
 
 # Global variables
@@ -66,6 +73,7 @@ status_window = None
 _tray_backend = "pystray"
 _indicator = None
 _icon_path = None
+_status_window_gtk = None
 
 
 def log_message(message, level=logging.INFO):
@@ -575,12 +583,125 @@ def determine_text_color(background_color):
     return "#000000" if brightness > 0.5 else "#FFFFFF"
 
 
-def show_status_window():
-    global daemon_manager, status_window
+def _show_status_window_gtk():
+    """GTK status window (AppIndicator path only)."""
+    global daemon_manager, _status_window_gtk
+    if not APPINDICATOR_AVAILABLE:
+        return
+    if _status_window_gtk is not None and _status_window_gtk.get_visible():
+        _status_window_gtk.present()
+        return
+    status = get_daemon_status()
+    current_state = daemon_manager.get_current_state(status)
 
-    # Check if the window is already open
+    win = Gtk.Window(title="RClone BiSync Manager Status")
+    win.set_default_size(400, 300)
+    _status_window_gtk = win
+
+    def _on_status_win_destroy(w):
+        global _status_window_gtk
+        _status_window_gtk = None
+
+    win.connect("destroy", _on_status_win_destroy)
+
+    if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
+        box.set_margin_top(20)
+        box.set_margin_bottom(20)
+        win.add(box)
+        lbl = Gtk.Label(label="⚠ Daemon is not running")
+        lbl.get_style_context().add_class("error")
+        lbl.set_xalign(0)
+        box.pack_start(lbl, False, False, 0)
+        if daemon_manager.daemon_start_error:
+            sw = Gtk.ScrolledWindow()
+            sw.set_min_content_height(120)
+            tv = Gtk.TextView()
+            tv.set_editable(False)
+            tv.get_buffer().set_text(daemon_manager.daemon_start_error)
+            sw.add(tv)
+            box.pack_start(sw, True, True, 0)
+        btn = Gtk.Button(label="Start Daemon")
+        btn.connect("clicked", lambda b: (start_daemon(), win.destroy()))
+        box.pack_start(btn, False, False, 0)
+    else:
+        nb = Gtk.Notebook()
+        win.add(nb)
+        # General
+        gen_sw = Gtk.ScrolledWindow()
+        gen_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        gen_sw.add(gen_box)
+        nb.append_page(gen_sw, Gtk.Label(label="General"))
+        status_text = "Daemon is running"
+        if current_state == DaemonState.LIMBO:
+            status_text = "⚠ Daemon is in limbo state"
+        elif current_state == DaemonState.INITIAL:
+            status_text = "Daemon is initializing..."
+        gen_box.pack_start(Gtk.Label(label=status_text, xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label=f"Config: {'Valid' if not status.get('config_invalid', False) else 'Invalid'}", xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label=f"Config changed on disk: {'Yes' if status.get('config_changed_on_disk', False) else 'No'}", xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label="Currently syncing:", xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label=str(status.get("currently_syncing", "None")), xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label="Queued jobs:", xalign=0), False, False, 0)
+        for j in status.get("queued_paths", []) or []:
+            gen_box.pack_start(Gtk.Label(label=f"  {j}", xalign=0), False, False, 0)
+        if not status.get("queued_paths"):
+            gen_box.pack_start(Gtk.Label(label="None", xalign=0), False, False, 0)
+        # Sync Jobs
+        jobs_sw = Gtk.ScrolledWindow()
+        jobs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        jobs_sw.add(jobs_box)
+        nb.append_page(jobs_sw, Gtk.Label(label="Sync Jobs"))
+        for job_key, job_status in (status.get("sync_jobs") or {}).items():
+            fr = Gtk.Frame(label=job_key)
+            fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            fr.add(fr_box)
+            fr_box.pack_start(Gtk.Label(label=f"Last sync: {job_status.get('last_sync', 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Next run: {job_status.get('next_run', 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Sync status: {job_status.get('sync_status', 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Resync status: {job_status.get('resync_status', 'N/A')}", xalign=0), False, False, 0)
+            jobs_box.pack_start(fr, False, False, 0)
+        # Sync Errors
+        err_sw = Gtk.ScrolledWindow()
+        err_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        err_sw.add(err_box)
+        nb.append_page(err_sw, Gtk.Label(label="Sync Errors"))
+        if status.get("sync_errors"):
+            for path, err in status["sync_errors"].items():
+                fr = Gtk.Frame(label=path)
+                fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                fr.add(fr_box)
+                for k, v in err.items():
+                    fr_box.pack_start(Gtk.Label(label=f"{k}: {v}", xalign=0), False, False, 0)
+                err_box.pack_start(fr, False, False, 0)
+        else:
+            err_box.pack_start(Gtk.Label(label="No sync errors at this time.", xalign=0), False, False, 0)
+        # Config
+        cfg_sw = Gtk.ScrolledWindow()
+        cfg_tv = Gtk.TextView()
+        cfg_tv.set_editable(False)
+        cfg_sw.add(cfg_tv)
+        nb.append_page(cfg_sw, Gtk.Label(label="Config"))
+        cfg_path = status.get("config_file_location")
+        if cfg_path and os.path.exists(cfg_path):
+            with open(cfg_path, "r") as f:
+                cfg_tv.get_buffer().set_text(f.read())
+        else:
+            cfg_tv.get_buffer().set_text("Config file not found or inaccessible.")
+    win.show_all()
+
+
+def show_status_window():
+    global daemon_manager, status_window, _tray_backend
+
+    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+        _show_status_window_gtk()
+        return
+
+    # Check if the window is already open (tkinter path)
     if status_window is not None and status_window.winfo_exists():
-        # If it exists, just focus on it
         status_window.lift()
         status_window.focus_force()
         return
@@ -774,21 +895,37 @@ def get_log_file_path():
     return status.get("log_file_location") if status else None
 
 
+def _show_text_window_gtk(title, content):
+    """GTK text window (AppIndicator path only)."""
+    if not APPINDICATOR_AVAILABLE:
+        return
+    win = Gtk.Window(title=title)
+    win.set_default_size(600, 400)
+    sw = Gtk.ScrolledWindow()
+    tv = Gtk.TextView()
+    tv.set_editable(False)
+    tv.set_wrap_mode(Gtk.WrapMode.WORD)
+    tv.get_buffer().set_text(content)
+    sw.add(tv)
+    win.add(sw)
+    win.show_all()
+
+
 def show_text_window(title, content):
+    global _tray_backend
+    if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+        _show_text_window_gtk(title, content)
+        return
     root = tkinter.Tk()
     root.title(title)
     root.geometry("600x400")
-
     text_widget = tkinter.Text(root, wrap=tkinter.WORD)
-    text_widget.pack(expand=True, fill='both')
+    text_widget.pack(expand=True, fill="both")
     text_widget.insert(tkinter.END, content)
     text_widget.config(state=tkinter.DISABLED)
-
-    scrollbar = ttk.Scrollbar(root, orient="vertical",
-                              command=text_widget.yview)
+    scrollbar = ttk.Scrollbar(root, orient="vertical", command=text_widget.yview)
     scrollbar.pack(side=tkinter.RIGHT, fill=tkinter.Y)
     text_widget.configure(yscrollcommand=scrollbar.set)
-
     root.mainloop()
 
 
@@ -1085,19 +1222,44 @@ def check_crash_log():
 
 
 def edit_config():
-    global daemon_manager
+    global daemon_manager, _tray_backend
     try:
         config_file = daemon_manager.get_config_file_path()
-        if config_file:
-            from rclone_bisync_manager.config_editor import edit_config as config_editor
-            config_editor(config_file)
+        if not config_file:
+            log_message("Config file path not available", level=logging.ERROR)
+            if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+                dlg = Gtk.MessageDialog(
+                    transient_for=None, flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Config file path not available",
+                )
+                dlg.run()
+                dlg.destroy()
+            else:
+                messagebox.showerror("Error", "Config file path not available")
+            return
+        if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+            from rclone_bisync_manager.config_editor import edit_config_gtk
+            edit_config_gtk(config_file)
             reload_config()
         else:
-            log_message("Config file path not available", level=logging.ERROR)
-            messagebox.showerror("Error", "Config file path not available")
+            from rclone_bisync_manager.config_editor import edit_config as config_editor_tk
+            config_editor_tk(config_file)
+            reload_config()
     except Exception as e:
         log_message(f"Error editing config: {str(e)}", level=logging.ERROR)
-        messagebox.showerror("Error", f"Failed to edit config: {str(e)}")
+        if _tray_backend == "appindicator" and APPINDICATOR_AVAILABLE:
+            dlg = Gtk.MessageDialog(
+                transient_for=None, flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text=f"Failed to edit config: {e}",
+            )
+            dlg.run()
+            dlg.destroy()
+        else:
+            messagebox.showerror("Error", f"Failed to edit config: {str(e)}")
 
 
 def exit_tray():
@@ -1112,11 +1274,16 @@ def exit_tray():
 
 def show_notification(title, message):
     global icon, _tray_backend
-    if _tray_backend == "appindicator":
+    if _tray_backend == "appindicator" and NOTIFY_AVAILABLE:
         try:
-            subprocess.run(["notify-send", title, message], check=False, timeout=2)
-        except Exception:
-            log_message(f"Notification: {title} - {message}", level=logging.INFO)
+            if not Notify.is_initted():
+                Notify.init("rclone-bisync-manager")
+            n = Notify.Notification.new(title, message)
+            n.show()
+        except Exception as e:
+            log_message(f"Notification failed: {e}; {title} - {message}", level=logging.INFO)
+    elif _tray_backend == "appindicator":
+        log_message(f"Notification: {title} - {message}", level=logging.INFO)
     elif icon:
         icon.notify(message, title)
     else:

@@ -6,6 +6,16 @@ import json
 
 from rclone_bisync_manager.daemon_client import request_config_schema
 
+# GTK config editor (used when tray uses AppIndicator)
+_GTK_AVAILABLE = False
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+    _GTK_AVAILABLE = True
+except (ImportError, ValueError):
+    Gtk = None
+
 
 def get_config_schema():
     try:
@@ -238,3 +248,163 @@ def edit_config(config_file_path):
     ttk.Button(root, text="Save", command=save_config).pack(pady=10)
 
     root.mainloop()
+
+
+def _set_by_path(d, path, value):
+    keys = path.split(".")
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    d[keys[-1]] = value
+
+
+def edit_config_gtk(config_file_path):
+    """GTK config editor (AppIndicator path only). No tkinter fallback."""
+    if not _GTK_AVAILABLE or Gtk is None:
+        return
+    with open(config_file_path, "r") as f:
+        config = yaml.safe_load(f.read())
+    try:
+        config_schema = request_config_schema()
+    except Exception as e:
+        dlg = Gtk.MessageDialog(
+            transient_for=None, flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=f"Failed to fetch config schema: {e}",
+        )
+        dlg.run()
+        dlg.destroy()
+        return
+    widgets = {}  # path -> (widget, type_str)
+
+    win = Gtk.Window(title="Edit Configuration")
+    win.set_default_size(800, 600)
+    nb = Gtk.Notebook()
+    win.add(nb)
+
+    def add_tab(name, section_dict, prefix):
+        sw = Gtk.ScrolledWindow()
+        grid = Gtk.Grid()
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+        grid.set_margin_top(10)
+        grid.set_margin_bottom(10)
+        sw.add(grid)
+        nb.append_page(sw, Gtk.Label(label=name))
+        row = 0
+        for key, value in (section_dict or {}).items():
+            if isinstance(value, dict):
+                continue
+            full_key = f"{prefix}{key}" if prefix else key
+            grid.attach(Gtk.Label(label=key, xalign=0), 0, row, 1, 1)
+            if isinstance(value, bool):
+                w = Gtk.CheckButton()
+                w.set_active(value)
+                widgets[full_key] = (w, "bool")
+            elif isinstance(value, int):
+                w = Gtk.SpinButton.new_with_range(-1e9, 1e9, 1)
+                w.set_value(value)
+                widgets[full_key] = (w, "int")
+            else:
+                w = Gtk.Entry()
+                w.set_text(str(value))
+                w.set_hexpand(True)
+                widgets[full_key] = (w, "str")
+            grid.attach(w, 1, row, 1, 1)
+            row += 1
+
+    general = {k: v for k, v in config.items() if k not in ("sync_jobs", "rclone_options", "bisync_options", "resync_options")}
+    add_tab("General", general, "")
+
+    sync_jobs = config.get("sync_jobs", {})
+    sync_sw = Gtk.ScrolledWindow()
+    sync_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    sync_sw.add(sync_box)
+    nb.append_page(sync_sw, Gtk.Label(label="Sync Jobs"))
+    for job_name, job_cfg in sync_jobs.items():
+        fr = Gtk.Frame(label=job_name)
+        fr.set_margin_start(10)
+        fr.set_margin_end(10)
+        fr.set_margin_top(5)
+        fr.set_margin_bottom(5)
+        g = Gtk.Grid()
+        g.set_margin_start(10)
+        g.set_margin_bottom(10)
+        fr.add(g)
+        sync_box.pack_start(fr, False, False, 0)
+        r = 0
+        for k, v in job_cfg.items():
+            if isinstance(v, dict):
+                continue
+            full = f"sync_jobs.{job_name}.{k}"
+            g.attach(Gtk.Label(label=k, xalign=0), 0, r, 1, 1)
+            if isinstance(v, bool):
+                w = Gtk.CheckButton()
+                w.set_active(v)
+                widgets[full] = (w, "bool")
+            else:
+                w = Gtk.Entry()
+                w.set_text(str(v))
+                w.set_hexpand(True)
+                widgets[full] = (w, "str")
+            g.attach(w, 1, r, 1, 1)
+            r += 1
+
+    add_tab("Rclone Options", config.get("rclone_options", {}), "rclone_options.")
+    add_tab("Bisync Options", config.get("bisync_options", {}), "bisync_options.")
+    add_tab("Resync Options", config.get("resync_options", {}), "resync_options.")
+
+    def save_config_gtk(btn):
+        for path, (w, t) in widgets.items():
+            if t == "bool":
+                val = w.get_active()
+            elif t == "int":
+                val = int(w.get_value())
+            else:
+                val = w.get_text()
+            _set_by_path(config, path, val)
+        with open(config_file_path, "r") as f:
+            lines = f.readlines()
+
+        def update_value(lines, path, value):
+            pat = re.compile(r"^(\s*{}: ).*$".format(re.escape(path)))
+            for i, line in enumerate(lines):
+                if pat.match(line):
+                    lines[i] = pat.sub(r"\1{}\n".format(value), line)
+                    return True
+            return False
+
+        def update_config_lines(cdict, pfx=""):
+            for key, value in cdict.items():
+                full_key = f"{pfx}{key}" if pfx else key
+                if isinstance(value, dict):
+                    update_config_lines(value, f"{full_key}.")
+                else:
+                    if not update_value(lines, full_key, value):
+                        lines.append(f"{full_key}: {value}\n")
+
+        update_config_lines(config)
+        with open(config_file_path, "w") as f:
+            f.writelines(lines)
+        dlg = Gtk.MessageDialog(
+            transient_for=win, flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="Configuration saved successfully",
+        )
+        dlg.run()
+        dlg.destroy()
+        win.destroy()
+
+    vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    win.remove(nb)
+    vbox.pack_start(nb, True, True, 0)
+    btn_box = Gtk.Box()
+    btn_box.set_margin_top(10)
+    btn_box.set_margin_bottom(10)
+    save_btn = Gtk.Button(label="Save")
+    save_btn.connect("clicked", save_config_gtk)
+    btn_box.pack_start(save_btn, False, False, 0)
+    vbox.pack_start(btn_box, False, False, 0)
+    win.add(vbox)
+    win.show_all()
