@@ -6,7 +6,9 @@ from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.utils import check_and_create_lock_file
 from rclone_bisync_manager.scheduler import scheduler
 from rclone_bisync_manager.sync import perform_sync_operations
+from rclone_bisync_manager.sync_context import build_sync_context
 from rclone_bisync_manager.config import config, signal_handler
+from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.daemon_state import DaemonRuntimeState
 import rclone_bisync_manager.daemon_state as state_module
 from rclone_bisync_manager.runtime_paths import (
@@ -69,7 +71,7 @@ def daemon_main():
             state.config_invalid = False
             state.config_error_message = None
             print("Scheduling tasks")
-            scheduler.schedule_tasks()
+            scheduler.schedule_tasks(config._config.sync_jobs, config._config.run_missed_jobs)
         except Exception as e:
             error_trace = traceback.format_exc()
             print(f"Configuration error: {str(e)}")
@@ -147,6 +149,9 @@ def daemon_main():
 
 def write_crash_log(error_message):
     crash_log_path = get_crash_log_path()
+    crash_dir = os.path.dirname(crash_log_path)
+    if crash_dir:
+        os.makedirs(crash_dir, exist_ok=True)
     with open(crash_log_path, 'w') as f:
         f.write(error_message)
 
@@ -155,7 +160,12 @@ def process_sync_queue():
     state = state_module.daemon_state
     if state is None:
         return
+    if not getattr(config, "_config", None):
+        return
     while not state.sync_queue.empty() and not state.shutting_down:
+        key = None
+        force_bisync = False
+        force_resync = False
         with state.sync_lock:
             if state.currently_syncing is None:
                 key, force_bisync, force_resync = state.sync_queue.get_nowait()
@@ -165,17 +175,22 @@ def process_sync_queue():
             else:
                 break
 
-        if key in config._config.sync_jobs and not state.shutting_down:
-            perform_sync_operations(key, force_bisync, force_resync)
+        if key is not None and key in config._config.sync_jobs and not state.shutting_down:
+            ctx = build_sync_context(key, config)
+            perform_sync_operations(key, force_bisync, force_resync, context=ctx)
+            config._last_log_position = ctx.log_state.last_log_position
 
-        with state.sync_lock:
-            state.currently_syncing = None
-            state.current_sync_start_time = None
+        if key is not None:
+            with state.sync_lock:
+                state.currently_syncing = None
+                state.current_sync_start_time = None
 
 
 def check_scheduled_tasks():
     state = state_module.daemon_state
     if state is None:
+        return
+    if not getattr(config, "_config", None):
         return
     while True:
         next_task = scheduler.get_next_task()
@@ -183,8 +198,10 @@ def check_scheduled_tasks():
             now = datetime.now()
             if now >= next_task.scheduled_time:
                 task = scheduler.pop_next_task()
+                if task.path_key not in config._config.sync_jobs:
+                    log_message(f"Skipping scheduled task: job '{task.path_key}' no longer in config.")
+                    continue
                 add_to_sync_queue(task.path_key)
-                # Reschedule the task
                 job_config = config._config.sync_jobs[task.path_key]
                 cron = croniter(job_config.schedule, now)
                 next_run = cron.get_next(datetime)
@@ -199,6 +216,9 @@ def add_to_sync_queue(key, force_bisync=False, resync=False):
     state = state_module.daemon_state
     if state is None:
         return
+    if not getattr(config, "_config", None) or key not in config._config.sync_jobs:
+        log_message(f"Skipping add_to_sync_queue: job '{key}' not in config.")
+        return
     if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
         config._config.sync_jobs[key].force_operation = force_bisync
         config._config.sync_jobs[key].force_resync = resync
@@ -211,10 +231,14 @@ def stop_daemon():
         print("Daemon is not running.")
         return
     result = request_stop()
-    if result and result.get("status") == "success":
+    if result is None:
+        print("Daemon is not running (no response from socket).")
+        return
+    if isinstance(result, dict) and result.get(sp.STATUS) == "success":
         print("Daemon is shutting down. Use 'daemon status' to check progress.")
-    elif result:
-        print(f"Error stopping daemon: {result.get('message', result)}")
+    else:
+        msg = result.get(sp.MESSAGE, result) if isinstance(result, dict) else result
+        print(f"Error stopping daemon: {msg}")
 
 
 def print_daemon_status():
@@ -222,7 +246,10 @@ def print_daemon_status():
     if status_dict is None:
         print("Daemon is not running.")
         return
-    if status_dict.get("shutting_down", False):
+    if not isinstance(status_dict, dict):
+        print("Unexpected status response from daemon.")
+        return
+    if status_dict.get(sp.SHUTTING_DOWN, False):
         print("Daemon is shutting down. Current status:")
     print(json.dumps(status_dict, ensure_ascii=False, indent=2))
 
@@ -239,11 +266,28 @@ def handle_add_sync_request():
 
     state = state_module.daemon_state
     while state is not None and state.running and not state.shutting_down:
+        conn = None
         try:
             conn, addr = server.accept()
-            data = conn.recv(1024).decode()
-            sync_request = json.loads(data)
-            job = sync_request['job_key']
+            data = conn.recv(1024).decode('utf-8', errors='replace')
+            try:
+                sync_request = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                sync_request = None
+            if not isinstance(sync_request, dict):
+                if conn is not None:
+                    try:
+                        conn.sendall(b"ERROR: invalid JSON or non-object payload")
+                    except (OSError, socket.error):
+                        pass
+                continue
+            job = sync_request.get('job_key')
+            if job is None:
+                conn.sendall(b"ERROR: missing job_key")
+                continue
+            if not getattr(config, "_config", None):
+                conn.sendall(b"ERROR: config not loaded")
+                continue
             force_bisync = sync_request.get('force_bisync', False)
             resync = sync_request.get('resync', False)
 
@@ -258,14 +302,27 @@ def handle_add_sync_request():
             else:
                 log_error(f"Sync job '{job}' not found in configuration")
                 conn.sendall(b"ERROR: Job not found")
-            conn.close()
         except socket.timeout:
             continue
         except Exception as e:
             log_error(f"Error handling add-sync request: {str(e)}")
+            if conn is not None:
+                try:
+                    conn.sendall(b"ERROR: invalid request")
+                except (OSError, socket.error):
+                    pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
 
     server.close()
-    os.unlink(socket_path)
+    try:
+        os.unlink(socket_path)
+    except OSError:
+        pass
 
 
 def reload_config():
@@ -278,12 +335,12 @@ def reload_config():
         config.load_and_validate_config(args)
         log_message("Config reloaded successfully.")
         scheduler.clear_tasks()
-        scheduler.schedule_tasks()
+        scheduler.schedule_tasks(config._config.sync_jobs, config._config.run_missed_jobs)
         state.config_invalid = False
         state.in_limbo = False
         state.config_error_message = None
         return True
-    except (ValueError, FileNotFoundError) as e:
+    except Exception as e:
         error_message = f"Error reloading config: {str(e)}"
         log_error(error_message)
         state.config_invalid = True

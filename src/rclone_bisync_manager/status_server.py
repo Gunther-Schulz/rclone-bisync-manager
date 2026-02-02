@@ -14,6 +14,7 @@ from datetime import datetime, date
 
 from rclone_bisync_manager.logging_utils import log_error
 from rclone_bisync_manager.logging_utils import log_message
+from rclone_bisync_manager import status_protocol as sp
 
 
 def start_status_server(handlers=None, state=None, config=None):
@@ -30,7 +31,10 @@ def start_status_server(handlers=None, state=None, config=None):
     c = config if config is not None else s
 
     if os.path.exists(socket_path):
-        os.unlink(socket_path)
+        try:
+            os.unlink(socket_path)
+        except OSError:
+            pass
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(socket_path)
@@ -45,7 +49,10 @@ def start_status_server(handlers=None, state=None, config=None):
             continue
 
     server.close()
-    os.unlink(socket_path)
+    try:
+        os.unlink(socket_path)
+    except OSError:
+        pass
 
 
 def handle_client(conn, handlers=None, state=None, config=None):
@@ -55,7 +62,7 @@ def handle_client(conn, handlers=None, state=None, config=None):
     s = state if state is not None else default_config
     c = config if config is not None else s
     try:
-        data = conn.recv(4096).decode().strip()
+        data = conn.recv(4096).decode('utf-8', errors='replace').strip()
 
         if data == "RELOAD":
             if "RELOAD" in handlers:
@@ -63,15 +70,15 @@ def handle_client(conn, handlers=None, state=None, config=None):
             else:
                 success = False
             response = json.dumps({
-                "status": "success" if success else "error",
-                "message": "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {getattr(s, 'config_error_message', None) or 'unknown'}"
+                sp.STATUS: "success" if success else "error",
+                sp.MESSAGE: "Configuration reloaded successfully" if success else f"Error reloading configuration. Daemon is in limbo state. Error: {getattr(s, 'config_error_message', None) or 'unknown'}"
             })
         elif data == "STOP":
             s.running = False
             s.shutting_down = True
             response = json.dumps({
-                "status": "success",
-                "message": "Shutdown signal sent to daemon"
+                sp.STATUS: "success",
+                sp.MESSAGE: "Shutdown signal sent to daemon"
             })
         elif data == "STATUS":
             response = generate_status_report(s, c)
@@ -79,8 +86,8 @@ def handle_client(conn, handlers=None, state=None, config=None):
             response = generate_config_report()
         else:
             response = json.dumps({
-                "status": "error",
-                "message": "Invalid command"
+                sp.STATUS: "error",
+                sp.MESSAGE: "Invalid command"
             })
 
         conn.sendall(response.encode())
@@ -97,41 +104,45 @@ def generate_status_report(state=None, config=None):
     c = config if config is not None else default_config
     try:
         store = get_sync_state_store()
+        c_config = getattr(c, "_config", None)
         status = {
-            "pid": os.getpid(),
-            "running": s.running,
-            "shutting_down": s.shutting_down,
-            "in_limbo": getattr(s, "in_limbo", True),
-            "config_invalid": getattr(s, "config_invalid", False),
-            "config_error_message": getattr(s, "config_error_message", None),
-            "currently_syncing": s.currently_syncing,
-            "queued_paths": list(s.queued_paths),
-            "config_changed_on_disk": c.config_changed_on_disk,
-            "config_file_location": str(c.config_file),
-            "log_file_location": str(c._config.log_file_path) if c._config else None,
-            "sync_errors": store.sync_errors
+            sp.PID: os.getpid(),
+            sp.RUNNING: s.running,
+            sp.SHUTTING_DOWN: s.shutting_down,
+            sp.IN_LIMBO: getattr(s, "in_limbo", True),
+            sp.CONFIG_INVALID: getattr(s, "config_invalid", False),
+            sp.CONFIG_ERROR_MESSAGE: getattr(s, "config_error_message", None),
+            sp.CURRENTLY_SYNCING: s.currently_syncing,
+            sp.QUEUED_PATHS: list(s.queued_paths),
+            sp.CONFIG_CHANGED_ON_DISK: getattr(c, "config_changed_on_disk", False),
+            sp.CONFIG_FILE_LOCATION: str(getattr(c, "config_file", "") or ""),
+            sp.LOG_FILE_LOCATION: str(c_config.log_file_path) if c_config else None,
+            sp.SYNC_ERRORS: store.sync_errors
         }
 
-        if c._config and not getattr(s, "in_limbo", True) and not getattr(s, "config_invalid", False):
-            status["current_config"] = model_to_dict(c._config)
-            status["sync_jobs"] = {}
-            for key, value in c._config.sync_jobs.items():
+        if c_config and not getattr(s, "in_limbo", True) and not getattr(s, "config_invalid", False):
+            status[sp.CURRENT_CONFIG] = model_to_dict(c_config)
+            status[sp.SYNC_JOBS] = {}
+            hash_warnings = getattr(c, "hash_warnings", {}) or {}
+            for key, value in c_config.sync_jobs.items():
                 if value.active:
                     job_state = store.sync_state.get_job_state(key)
-                    status["sync_jobs"][key] = model_to_dict(value)
-                    status["sync_jobs"][key].update({
-                        "last_sync": job_state["last_sync"].isoformat() if job_state["last_sync"] else None,
-                        "next_run": job_state["next_run"].isoformat() if job_state["next_run"] else None,
-                        "sync_status": standardize_status(job_state["sync_status"]),
-                        "resync_status": standardize_status(job_state["resync_status"]),
-                        "hash_warnings": c.hash_warnings.get(key, False)
+                    status[sp.SYNC_JOBS][key] = model_to_dict(value)
+                    def _iso_or_none(v):
+                        return v.isoformat() if v is not None and hasattr(v, "isoformat") else None
+                    status[sp.SYNC_JOBS][key].update({
+                        sp.LAST_SYNC: _iso_or_none(job_state["last_sync"]),
+                        sp.NEXT_RUN: _iso_or_none(job_state["next_run"]),
+                        sp.SYNC_STATUS: standardize_status(job_state["sync_status"]),
+                        sp.RESYNC_STATUS: standardize_status(job_state["resync_status"]),
+                        sp.HASH_WARNINGS: hash_warnings.get(key, False)
                     })
 
         return json.dumps(status, default=json_serializer, ensure_ascii=False)
     except Exception as e:
         error_message = f"Error generating status report: {str(e)}"
         log_error(error_message)
-        return json.dumps({"status": "error", "message": error_message})
+        return json.dumps({sp.STATUS: "error", sp.MESSAGE: error_message})
 
 
 def model_to_dict(obj: Any) -> dict:
@@ -168,7 +179,7 @@ def generate_config_report():
     except Exception as e:
         error_message = f"Error generating config report: {str(e)}"
         log_error(error_message)
-        return json.dumps({"status": "error", "message": error_message})
+        return json.dumps({sp.STATUS: "error", sp.MESSAGE: error_message})
 
 
 def standardize_status(status):

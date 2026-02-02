@@ -23,7 +23,7 @@
 
 - [ ] Refactor code to eliminate 'global' keyword (if possible)
 
-## Refactor plan
+## Refactor plan — status (done vs left)
 
 ### Tray: use modern AppIndicator / SNI path (GNOME-native) — DONE
 
@@ -91,3 +91,21 @@ main.py: Thin entrypoint that parses args, builds “environment” and “confi
 Tray: Use the shared daemon client and paths; consider reusing core logging and, if useful, a small shared “status/state” type instead of re-deriving everything in the tray.
 Sync + scheduler: Introduce a narrow interface for “run this job” and “persist sync state” so sync and scheduler don’t depend on the giant config/sync_state globals; then add types and annotations with 3.14 in mind.
 That’s the picture: one big global “config,” duplicated paths and protocol, mixed concerns in main and config, and tray reimplementing core behavior. Fixing paths and splitting config/state will give the biggest leverage; the rest can follow step by step.
+
+---
+
+### Refactor status: what's done vs left
+
+| # | Topic | Done | Left |
+|---|--------|------|------|
+| 1 | Global state / God objects | Daemon runtime → `DaemonRuntimeState` (daemon_state.py). Sync persistence → `SyncStateStore` (sync_state_store.py). | `config` still a global singleton (80+ refs). Holds paths, schema, CLI merge, status paths, hash_warnings, _last_log_position. scheduler/logger still global. |
+| 2 | main.py / orchestration | Thin main: parse args → load config → `run_command(args, config)`. Commands layer in commands.py; socket/lock in daemon_client + runtime_paths. | Daemon startup still one block (bootstrap + DaemonContext + daemon_main); could split "bootstrap" vs "daemonize" vs "loop." |
+| 3 | Hardcoded paths | `runtime_paths.py`: single place for status socket, add_sync socket, lock file, crash log. Used by daemon_client, status_server, daemon_functions, utils, commands, tray. | Paths still fixed under `/tmp`; no env override or XDG-style runtime base yet. |
+| 4 | Config class | Sync state/errors → SyncStateStore. Daemon flags (running, queue, in_limbo, etc.) → DaemonRuntimeState; status_server gets state from that. | Config still has: config file path, load/validate, status_file_path, hash_warnings, _last_log_position, "config changed" / mtime. Fused with process state. |
+| 5 | Tight coupling | status_server accepts handlers + state + config; daemon passes DaemonRuntimeState. Scheduler/sync use get_sync_state_store(). | status_server still imports reload_config inside handle_client. sync still imports config (write-back _last_log_position, read _config for status). No clear "core domain" without config. |
+| 6 | Tray vs core | Shared `daemon_client` (request_status, request_reload, request_stop, request_add_sync, request_config_schema). Shared `status_protocol` (sp.*) for JSON keys. Tray uses runtime_paths (crash log). | Tray still has its own DaemonState enum and log_message/args; no shared status DTO. |
+| 7 | Logging | Core: logging_utils (log_message, log_error, set_config). | Tray uses stdlib logging + its own log_message; two logging models. |
+| 8 | Error handling / exit | main uses sys.exit(result); commands return 0/1. | Mixed use of sys.exit(1), exit(1), return 1; crash log ownership spread (daemon_functions write, tray read). |
+| 9 | Sync and scheduler | `SyncContext` + `build_sync_context()`; perform_sync_operations(key, ..., context=ctx). Scheduler takes sync_jobs/run_missed_jobs as args. | sync still uses get_sync_state_store() and config (hash_warnings, _last_log_position write-back). No "state writer" interface; scheduler still uses config._config. |
+| 10 | Python 3.14 | pyproject 3.12+; no deprecated AST. | No shared types/protocols module; pathlib only in status_server; globals remain for free-threading. |
+| 11 | "Refactor first" checklist | **Paths:** runtime_paths in place, used everywhere. **Daemon client / protocol:** daemon_client + status_protocol used by CLI and tray. **main:** thin; commands.py dispatches. **Split config:** DaemonRuntimeState + SyncStateStore done; Config still heavy. | **Split config (cont'd):** Immutable "loaded config" vs Config not done. **Tray:** still re-derives state (DaemonState enum); could use shared status DTO. **Sync + scheduler:** narrow "run this job" + state writer interface not done; types/protocols not added. |

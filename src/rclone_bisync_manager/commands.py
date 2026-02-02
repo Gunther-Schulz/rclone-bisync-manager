@@ -20,7 +20,9 @@ from rclone_bisync_manager.logging_utils import (
     setup_loggers,
 )
 from rclone_bisync_manager.runtime_paths import get_lock_file_path
+from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.sync import perform_sync_operations
+from rclone_bisync_manager.sync_context import build_sync_context
 from rclone_bisync_manager.utils import (
     check_and_create_lock_file,
     check_tools,
@@ -55,7 +57,7 @@ def _bootstrap_for_daemon(args, config_obj):
     config_obj.initialize_config(args)
     set_config(config_obj)
     ensure_log_file_path()
-    setup_loggers(args.console_log)
+    setup_loggers(getattr(args, 'console_log', False))
     log_config_file_location(config_obj.config_file)
     log_message("Daemon initialization started")
     if hasattr(config_obj, "_config") and config_obj._config is not None and hasattr(config_obj._config, "log_file_path"):
@@ -120,13 +122,19 @@ def run_daemon_reload(args):
         print("Daemon is not running.")
         return 1
     print(json.dumps(result, indent=2))
-    return 0 if result.get("status") == "success" else 1
+    if not isinstance(result, dict):
+        return 1
+    return 0 if result.get(sp.STATUS) == "success" else 1
 
 
 def run_sync(args, config_obj):
     """Run sync jobs (one-off, non-daemon). Returns 0 on success, 1 on error."""
     if os.path.exists(get_lock_file_path()):
         print("Error: Daemon is running. Use 'daemon stop' to stop it before running sync manually.")
+        return 1
+
+    if not getattr(config_obj, "_config", None):
+        print("Error: Configuration not loaded.")
         return 1
 
     lock_fd, error_message = acquire_sync_lock()
@@ -145,11 +153,23 @@ def run_sync(args, config_obj):
                 print(f"Error: The following sync job(s) do not exist: {', '.join(invalid_jobs)}")
                 return 1
 
-        config_obj._config.dry_run = args.dry_run
+        config_obj._config.dry_run = getattr(args, 'dry_run', False)
         config_obj._config.force_resync = getattr(args, "force_resync", False)
-        config_obj._config.force_operation = getattr(args, "force_operation", False)
+        config_obj._config.force_operation = (
+            getattr(args, "force_operation", False) or getattr(args, "force_bisync", False)
+        )
+        resync_jobs = set(getattr(args, "resync", None) or [])
+        force_bisync_global = getattr(config_obj._config, "force_operation", False)
         for key in paths_to_sync:
-            perform_sync_operations(key)
+            ctx = build_sync_context(key, config_obj)
+            force_resync = (key in resync_jobs) or getattr(config_obj._config, "force_resync", False)
+            perform_sync_operations(
+                key,
+                force_bisync=force_bisync_global,
+                force_resync=force_resync,
+                context=ctx,
+            )
+            config_obj._last_log_position = ctx.log_state.last_log_position
         return 0
     finally:
         release_sync_lock(lock_fd)

@@ -23,6 +23,7 @@ from rclone_bisync_manager.daemon_client import (
     request_reload,
     request_add_sync,
 )
+from rclone_bisync_manager import status_protocol as sp
 import sys
 
 # AppIndicator3 (SNI) + GTK only; required for tray
@@ -126,25 +127,25 @@ class DaemonManager:
         if status is None:
             return DaemonState.OFFLINE
         elif isinstance(status, dict):
-            if status.get('status') == 'error':
+            if status.get(sp.STATUS) == 'error':
                 self.daemon_start_error = status.get(
-                    'message', 'Unknown error occurred')
+                    sp.MESSAGE, 'Unknown error occurred')
                 return DaemonState.FAILED
-            elif status.get('error'):
+            elif status.get(sp.ERROR):
                 return DaemonState.FAILED
-            elif status.get('shutting_down'):
+            elif status.get(sp.SHUTTING_DOWN):
                 return DaemonState.SHUTTING_DOWN
-            elif status.get('in_limbo'):
+            elif status.get(sp.IN_LIMBO):
                 return DaemonState.LIMBO
-            elif status.get('config_invalid'):
+            elif status.get(sp.CONFIG_INVALID):
                 return DaemonState.CONFIG_INVALID
             elif self._has_sync_issues(status):
                 return DaemonState.SYNC_ISSUES
-            elif status.get('config_changed_on_disk'):
+            elif status.get(sp.CONFIG_CHANGED_ON_DISK):
                 return DaemonState.CONFIG_CHANGED
-            elif status.get('currently_syncing'):
+            elif status.get(sp.CURRENTLY_SYNCING):
                 return DaemonState.SYNCING
-            elif status.get('running', False):
+            elif status.get(sp.RUNNING, False):
                 return DaemonState.RUNNING
             else:
                 return DaemonState.OFFLINE
@@ -155,12 +156,12 @@ class DaemonManager:
     def _has_sync_issues(self, status):
         return (
             any(
-                job["sync_status"] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
-                job["resync_status"] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
-                job.get("hash_warnings", False)
-                for job in status.get("sync_jobs", {}).values()
+                job[sp.SYNC_STATUS] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
+                job[sp.RESYNC_STATUS] not in ["COMPLETED", "NONE", "IN_PROGRESS"] or
+                job.get(sp.HASH_WARNINGS, False)
+                for job in status.get(sp.SYNC_JOBS, {}).values()
             ) or
-            bool(status.get("sync_errors"))
+            bool(status.get(sp.SYNC_ERRORS))
         )
 
     def get_menu_spec(self, status):
@@ -206,20 +207,20 @@ class DaemonManager:
 
     def _get_failed_spec(self, status):
         items = [{"type": "item", "label": "⚠️ Daemon is not running", "callback": None, "enabled": False}]
-        error_message = status.get("error") if status else None
+        error_message = status.get(sp.ERROR) if status else None
         error_message = error_message or self.daemon_start_error or "Unknown error"
         items.append({"type": "item", "label": f"Error: {error_message.split(chr(10))[0]}", "callback": None, "enabled": False})
-        if self.daemon_start_error or (status and status.get("error")):
-            items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or status.get("error")), "enabled": True})
+        if self.daemon_start_error or (status and status.get(sp.ERROR)):
+            items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or status.get(sp.ERROR)), "enabled": True})
         return items
 
     def _get_limbo_spec(self, status):
         items = [{"type": "item", "label": "⚠️ Daemon is in limbo state", "callback": None, "enabled": False}]
         if status:
-            if status.get("config_invalid", False):
+            if status.get(sp.CONFIG_INVALID, False):
                 items.append({"type": "item", "label": "⚠️ Config is invalid", "callback": None, "enabled": False})
-                items.append({"type": "item", "label": f"Error: {status.get('config_error_message', 'Unknown error')[:30]}...", "callback": None, "enabled": False})
-            if status.get("config_changed_on_disk", False):
+                items.append({"type": "item", "label": f"Error: {status.get(sp.CONFIG_ERROR_MESSAGE, 'Unknown error')[:30]}...", "callback": None, "enabled": False})
+            if status.get(sp.CONFIG_CHANGED_ON_DISK, False):
                 items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
         return items
 
@@ -228,11 +229,11 @@ class DaemonManager:
         if status:
             if self._has_sync_issues(status):
                 items.append({"type": "item", "label": "⚠ Sync issues detected", "callback": None, "enabled": False})
-            if status.get("config_changed_on_disk"):
+            if status.get(sp.CONFIG_CHANGED_ON_DISK):
                 items.append({"type": "item", "label": "⚠️ Config changed on disk", "callback": None, "enabled": False})
-            if self._has_sync_issues(status) or status.get("config_changed_on_disk"):
+            if self._has_sync_issues(status) or status.get(sp.CONFIG_CHANGED_ON_DISK):
                 items.append({"type": "separator"})
-            currently_syncing = status.get("currently_syncing")
+            currently_syncing = status.get(sp.CURRENTLY_SYNCING)
             if currently_syncing:
                 items.append({"type": "item", "label": "Currently syncing:", "callback": None, "enabled": False})
                 if isinstance(currently_syncing, str):
@@ -240,22 +241,22 @@ class DaemonManager:
                 elif isinstance(currently_syncing, list):
                     for job in currently_syncing:
                         items.append({"type": "item", "label": f"  {job.strip()}", "callback": None, "enabled": False})
-            queued_jobs = status.get("queued_paths", [])
+            queued_jobs = status.get(sp.QUEUED_PATHS, [])
             if queued_jobs:
                 items.append({"type": "item", "label": "Queued jobs:", "callback": None, "enabled": False})
                 for job in queued_jobs:
                     items.append({"type": "item", "label": f"  {job}", "callback": None, "enabled": False})
-            if "sync_jobs" in status:
+            if sp.SYNC_JOBS in status:
                 jobs_submenu = []
-                for job_key, job_status in status["sync_jobs"].items():
+                for job_key, job_status in status[sp.SYNC_JOBS].items():
                     job_submenu = [
                         {"type": "item", "label": "⚡ Sync Now", "callback": create_sync_now_handler(job_key), "enabled": True},
                         {"type": "item", "label": "⚡ Force Sync Now", "callback": create_sync_now_handler(job_key, force_bisync=True), "enabled": True},
                         {"type": "item", "label": "⚡ Resync + Sync Now", "callback": create_sync_now_handler(job_key, resync=True), "enabled": True},
-                        {"type": "item", "label": f"Last sync: {job_status['last_sync'] or 'Never'}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Next run: {job_status['next_run'] or 'Not scheduled'}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Sync status: {job_status['sync_status']}", "callback": None, "enabled": False},
-                        {"type": "item", "label": f"Resync status: {job_status['resync_status']}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Last sync: {job_status[sp.LAST_SYNC] or 'Never'}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Next run: {job_status[sp.NEXT_RUN] or 'Not scheduled'}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Sync status: {job_status[sp.SYNC_STATUS]}", "callback": None, "enabled": False},
+                        {"type": "item", "label": f"Resync status: {job_status[sp.RESYNC_STATUS]}", "callback": None, "enabled": False},
                     ]
                     jobs_submenu.append({"type": "item", "label": job_key, "callback": None, "enabled": True, "submenu": job_submenu})
                 items.append({"type": "item", "label": "Sync Jobs", "callback": None, "enabled": True, "submenu": jobs_submenu})
@@ -317,7 +318,7 @@ class DaemonManager:
     def get_config_file_path(self):
         status = get_daemon_status()
         if status and isinstance(status, dict):
-            return status.get('config_file_location')
+            return status.get(sp.CONFIG_FILE_LOCATION)
         return None
 
 
@@ -447,13 +448,13 @@ def reload_config():
     global daemon_manager
     try:
         response_data = request_reload()
-        if response_data.get("status") == "success":
+        if response_data.get(sp.STATUS) == "success":
             log_message("Configuration reloaded successfully")
         else:
             log_message(f"Error reloading configuration: {
-                        response_data.get('message', 'Unknown error')}", level=logging.ERROR)
+                        response_data.get(sp.MESSAGE, 'Unknown error')}", level=logging.ERROR)
         update_queue.put(True)
-        return response_data.get("status") == "success"
+        return response_data.get(sp.STATUS) == "success"
     except Exception as e:
         log_message(f"Error communicating with daemon: {
                     str(e)}", level=logging.ERROR)
@@ -600,36 +601,36 @@ def _show_status_window_gtk():
         elif current_state == DaemonState.INITIAL:
             status_text = "Daemon is initializing..."
         gen_box.pack_start(Gtk.Label(label=status_text, xalign=0), False, False, 0)
-        gen_box.pack_start(Gtk.Label(label=f"Config: {'Valid' if not status.get('config_invalid', False) else 'Invalid'}", xalign=0), False, False, 0)
-        gen_box.pack_start(Gtk.Label(label=f"Config changed on disk: {'Yes' if status.get('config_changed_on_disk', False) else 'No'}", xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label=f"Config: {'Valid' if not status.get(sp.CONFIG_INVALID, False) else 'Invalid'}", xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label=f"Config changed on disk: {'Yes' if status.get(sp.CONFIG_CHANGED_ON_DISK, False) else 'No'}", xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label="Currently syncing:", xalign=0), False, False, 0)
-        gen_box.pack_start(Gtk.Label(label=str(status.get("currently_syncing", "None")), xalign=0), False, False, 0)
+        gen_box.pack_start(Gtk.Label(label=str(status.get(sp.CURRENTLY_SYNCING, "None")), xalign=0), False, False, 0)
         gen_box.pack_start(Gtk.Label(label="Queued jobs:", xalign=0), False, False, 0)
-        for j in status.get("queued_paths", []) or []:
+        for j in status.get(sp.QUEUED_PATHS, []) or []:
             gen_box.pack_start(Gtk.Label(label=f"  {j}", xalign=0), False, False, 0)
-        if not status.get("queued_paths"):
+        if not status.get(sp.QUEUED_PATHS):
             gen_box.pack_start(Gtk.Label(label="None", xalign=0), False, False, 0)
         # Sync Jobs
         jobs_sw = Gtk.ScrolledWindow()
         jobs_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         jobs_sw.add(jobs_box)
         nb.append_page(jobs_sw, Gtk.Label(label="Sync Jobs"))
-        for job_key, job_status in (status.get("sync_jobs") or {}).items():
+        for job_key, job_status in (status.get(sp.SYNC_JOBS) or {}).items():
             fr = Gtk.Frame(label=job_key)
             fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             fr.add(fr_box)
-            fr_box.pack_start(Gtk.Label(label=f"Last sync: {job_status.get('last_sync', 'N/A')}", xalign=0), False, False, 0)
-            fr_box.pack_start(Gtk.Label(label=f"Next run: {job_status.get('next_run', 'N/A')}", xalign=0), False, False, 0)
-            fr_box.pack_start(Gtk.Label(label=f"Sync status: {job_status.get('sync_status', 'N/A')}", xalign=0), False, False, 0)
-            fr_box.pack_start(Gtk.Label(label=f"Resync status: {job_status.get('resync_status', 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Last sync: {job_status.get(sp.LAST_SYNC, 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Next run: {job_status.get(sp.NEXT_RUN, 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Sync status: {job_status.get(sp.SYNC_STATUS, 'N/A')}", xalign=0), False, False, 0)
+            fr_box.pack_start(Gtk.Label(label=f"Resync status: {job_status.get(sp.RESYNC_STATUS, 'N/A')}", xalign=0), False, False, 0)
             jobs_box.pack_start(fr, False, False, 0)
         # Sync Errors
         err_sw = Gtk.ScrolledWindow()
         err_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         err_sw.add(err_box)
         nb.append_page(err_sw, Gtk.Label(label="Sync Errors"))
-        if status.get("sync_errors"):
-            for path, err in status["sync_errors"].items():
+        if status.get(sp.SYNC_ERRORS):
+            for path, err in status[sp.SYNC_ERRORS].items():
                 fr = Gtk.Frame(label=path)
                 fr_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
                 fr.add(fr_box)
@@ -644,7 +645,7 @@ def _show_status_window_gtk():
         cfg_tv.set_editable(False)
         cfg_sw.add(cfg_tv)
         nb.append_page(cfg_sw, Gtk.Label(label="Config"))
-        cfg_path = status.get("config_file_location")
+        cfg_path = status.get(sp.CONFIG_FILE_LOCATION)
         if cfg_path and os.path.exists(cfg_path):
             with open(cfg_path, "r") as f:
                 cfg_tv.get_buffer().set_text(f.read())
@@ -683,12 +684,12 @@ def open_log_folder():
 
 def get_config_file_path():
     status = get_daemon_status()
-    return status.get("config_file_location") if status else None
+    return status.get(sp.CONFIG_FILE_LOCATION) if status else None
 
 
 def get_log_file_path():
     status = get_daemon_status()
-    return status.get("log_file_location") if status else None
+    return status.get(sp.LOG_FILE_LOCATION) if status else None
 
 
 def _show_text_window_gtk(title, content):

@@ -93,6 +93,9 @@ class ConfigSchema(OptionsValidatorMixin):
         if v is None:
             raise ValueError(
                 "sync_jobs cannot be None. Please provide at least one sync job.")
+        if not isinstance(v, dict):
+            raise ValueError(
+                "sync_jobs must be a mapping (dict) of job keys to job configs.")
 
         validated_jobs = {}
         errors = []
@@ -187,7 +190,7 @@ class Config:
                 f"Configuration file not found: {self.config_file}")
 
         try:
-            with open(self.config_file, 'r') as f:
+            with open(self.config_file, 'r', encoding='utf-8', errors='replace') as f:
                 config_data = yaml.safe_load(f)
         except yaml.YAMLError as e:
             error_message = f"Error parsing YAML in configuration file: {
@@ -214,7 +217,7 @@ class Config:
 
     def _merge_cli_args(self, config_data, args):
         # Override global options
-        config_data['dry_run'] = args.dry_run
+        config_data['dry_run'] = getattr(args, 'dry_run', False)
 
         # Override sync job options
         if hasattr(args, 'specific_sync_jobs') and args.specific_sync_jobs:
@@ -222,29 +225,32 @@ class Config:
                 if job_key in config_data['sync_jobs']:
                     config_data['sync_jobs'][job_key]['active'] = True
 
-        if hasattr(args, 'force_resync') and args.force_resync:
-            for job_key in (args.resync or []):
+        resync_list = getattr(args, 'resync', None) or []
+        if resync_list:
+            for job_key in resync_list:
                 if job_key in config_data['sync_jobs']:
                     config_data['sync_jobs'][job_key]['force_resync'] = True
 
-        if hasattr(args, 'force_operation') and args.force_operation:
+        force_bisync_or_op = getattr(args, 'force_operation', False) or getattr(args, 'force_bisync', False)
+        if force_bisync_or_op:
             for job_key in config_data['sync_jobs']:
                 config_data['sync_jobs'][job_key]['force_operation'] = True
 
     def _update_internal_fields(self, args):
-        self.console_log = args.console_log
+        self.console_log = getattr(args, 'console_log', False)
         self.specific_sync_jobs = args.sync_jobs if hasattr(
             args, 'sync_jobs') else None
         self.force_operation = args.force_bisync if hasattr(
             args, 'force_bisync') else False
-        self.daemon_mode = args.command == 'daemon'
+        self.daemon_mode = getattr(args, 'command', None) == 'daemon'
 
     def _format_validation_errors(self, e):
         error_messages = []
         for error in e.errors():
             if isinstance(error, dict):
-                field = '.'.join(str(loc) for loc in error['loc'])
-                msg = error['msg']
+                loc = error.get('loc', [])
+                msg = error.get('msg', str(error))
+                field = '.'.join(str(x) for x in loc) if loc else '?'
                 error_messages.append(f"Error in {field}: {msg}")
             else:
                 error_messages.append(str(error))
@@ -266,7 +272,10 @@ class Config:
             return os.path.join(self.cache_dir, f'{unique_id}.status')
 
     def check_config_changed(self):
-        current_mtime = os.path.getmtime(self.config_file)
+        try:
+            current_mtime = os.path.getmtime(self.config_file)
+        except OSError:
+            return
         if self.last_config_mtime is None:
             self.last_config_mtime = current_mtime
         elif current_mtime > self.last_config_mtime:
@@ -275,7 +284,10 @@ class Config:
 
     def reset_config_changed_flag(self):
         self.config_changed_on_disk = False
-        self.last_config_mtime = os.path.getmtime(self.config_file)
+        try:
+            self.last_config_mtime = os.path.getmtime(self.config_file)
+        except OSError:
+            self.last_config_mtime = None
 
 
 config = Config()

@@ -47,7 +47,7 @@ class SyncStateStore:
         state_file = os.path.join(self.cache_dir, 'sync_state.json')
         if os.path.exists(state_file) and os.path.getsize(state_file) > 0:
             try:
-                with open(state_file, 'r') as f:
+                with open(state_file, 'r', encoding='utf-8', errors='replace') as f:
                     state = json.load(f)
                     self.sync_state.sync_status = state.get("sync_status", {})
                     self.sync_state.resync_status = state.get("resync_status", {})
@@ -61,7 +61,7 @@ class SyncStateStore:
                         return out
                     self.sync_state.last_sync_times = parse_dt(state.get("last_sync_times"))
                     self.sync_state.next_run_times = parse_dt(state.get("next_run_times"))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 log_error("Error decoding sync_state.json. Initializing with empty state.")
                 self._initialize_empty_sync_state()
         else:
@@ -69,15 +69,23 @@ class SyncStateStore:
             self._initialize_empty_sync_state()
         self._load_sync_errors()
 
+    def _serialize_datetime_dict(self, d):
+        """Serialize dict of datetime values; skip non-datetime or None to avoid AttributeError."""
+        out = {}
+        for k, v in (d or {}).items():
+            if v is not None and hasattr(v, 'isoformat'):
+                out[k] = v.isoformat()
+        return out
+
     def save(self):
         os.makedirs(self.cache_dir, exist_ok=True)
         state_file = os.path.join(self.cache_dir, 'sync_state.json')
-        with open(state_file, 'w') as f:
+        with open(state_file, 'w', encoding='utf-8') as f:
             json.dump({
                 "sync_status": self.sync_state.sync_status,
                 "resync_status": self.sync_state.resync_status,
-                "last_sync_times": {k: v.isoformat() for k, v in self.sync_state.last_sync_times.items()},
-                "next_run_times": {k: v.isoformat() for k, v in self.sync_state.next_run_times.items()}
+                "last_sync_times": self._serialize_datetime_dict(self.sync_state.last_sync_times),
+                "next_run_times": self._serialize_datetime_dict(self.sync_state.next_run_times)
             }, f)
         self._save_sync_errors()
 
@@ -88,13 +96,17 @@ class SyncStateStore:
         self.sync_state.next_run_times = {}
 
     def _save_sync_errors(self):
-        with open(self._sync_errors_file, 'w') as f:
+        with open(self._sync_errors_file, 'w', encoding='utf-8') as f:
             json.dump(self.sync_errors, f, default=str)
 
     def _load_sync_errors(self):
         if os.path.exists(self._sync_errors_file):
-            with open(self._sync_errors_file, 'r') as f:
-                self.sync_errors = json.load(f)
+            try:
+                with open(self._sync_errors_file, 'r', encoding='utf-8', errors='replace') as f:
+                    self.sync_errors = json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                log_error("Error decoding sync_errors.json. Starting with empty sync_errors.")
+                self.sync_errors = {}
         else:
             self.sync_errors = {}
 

@@ -57,7 +57,8 @@ def check_tools():
 
 
 def ensure_rclone_dir():
-    rclone_dir = os.path.join(os.environ['HOME'], '.cache', 'rclone', 'bisync')
+    home = os.environ.get('HOME') or os.path.expanduser('~')
+    rclone_dir = os.path.join(home, '.cache', 'rclone', 'bisync')
     if not os.access(rclone_dir, os.W_OK):
         os.makedirs(rclone_dir, exist_ok=True)
         os.chmod(rclone_dir, 0o777)
@@ -71,12 +72,15 @@ def handle_filter_changes():
     if os.path.exists(config._config.exclusion_rules_file):
         current_md5 = calculate_md5(config._config.exclusion_rules_file)
         if os.path.exists(stored_md5_file):
-            with open(stored_md5_file, 'r') as f:
-                stored_md5 = f.read().strip()
+            try:
+                with open(stored_md5_file, 'r', encoding='utf-8', errors='replace') as f:
+                    stored_md5 = f.read().strip()
+            except OSError:
+                stored_md5 = ""
         else:
             stored_md5 = ""
         if current_md5 != stored_md5:
-            with open(stored_md5_file, 'w') as f:
+            with open(stored_md5_file, 'w', encoding='utf-8') as f:
                 f.write(current_md5)
             log_message("Filter file has changed. A resync is required.")
             for job_key in config._config.sync_jobs:
@@ -93,12 +97,6 @@ def calculate_md5(file_path):
     return hash_md5.hexdigest()
 
 
-def ensure_log_file_path():
-    global log_file_path, error_log_file_path
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
-    os.makedirs(os.path.dirname(error_log_file_path), exist_ok=True)
-
-
 def check_and_create_lock_file():
     lock_file_path = get_lock_file_path()
 
@@ -112,8 +110,11 @@ def check_and_create_lock_file():
                     return None, f"Daemon is already running (PID: {pid})"
             # If we reach here, the PID doesn't exist or isn't our process
             os.remove(lock_file_path)
-        except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
-            os.remove(lock_file_path)
+        except (ValueError, OSError, UnicodeDecodeError, psutil.NoSuchProcess, psutil.AccessDenied):
+            try:
+                os.remove(lock_file_path)
+            except OSError:
+                pass
 
     try:
         lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)

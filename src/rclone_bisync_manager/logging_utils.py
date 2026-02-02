@@ -26,7 +26,7 @@ def setup_loggers(console_log=False):
     if config:
         ensure_log_file_path()
         logger = FileLogger(config.log_file_path)
-    config.console_log = console_log
+        config.console_log = console_log
 
 
 class FileLogger:
@@ -36,7 +36,7 @@ class FileLogger:
     def log(self, level, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"{timestamp} - {level} - {message}\n"
-        with open(self.file_path, 'a') as f:
+        with open(self.file_path, 'a', encoding='utf-8') as f:
             f.write(log_entry)
 
     def info(self, message):
