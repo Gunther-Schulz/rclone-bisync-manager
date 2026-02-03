@@ -180,7 +180,7 @@ class DaemonManager:
         if status is None:
             spec.append({"type": "item", "label": "Start Daemon", "callback": start_daemon, "enabled": True})
         elif current_state == DaemonState.SHUTTING_DOWN:
-            spec.append({"type": "item", "label": "Daemon is down...", "callback": None, "enabled": False})
+            spec.append({"type": "item", "label": "Daemon is shutting down...", "callback": None, "enabled": False})
         else:
             spec.append({"type": "item", "label": "Stop Daemon", "callback": stop_daemon, "enabled": True})
 
@@ -293,6 +293,22 @@ class DaemonManager:
             return Colors.RED
         else:
             return Colors.GRAY
+
+    def _underlying_active_color_for_status(self, status):
+        """Color we'd show if not shutting down/limbo (for top half of split icon)."""
+        if not isinstance(status, dict):
+            return Colors.GRAY
+        if status.get(sp.CURRENTLY_SYNCING):
+            return Colors.BLUE
+        if status.get(sp.CONFIG_CHANGED_ON_DISK):
+            return Colors.AMBER
+        if _has_sync_issues(status):
+            return Colors.RED
+        if status.get(sp.CONFIG_INVALID):
+            return Colors.RED
+        if status.get(sp.RUNNING):
+            return Colors.GREEN
+        return Colors.GRAY
 
 
 def _build_gtk_menu(spec):
@@ -607,10 +623,31 @@ def create_status_image_style2(color, thickness):
     return image
 
 
-def create_status_image(color, style=1, thickness=40):
+def _composite_icon_top_bottom(img_top, img_bottom):
+    """Composite two same-size RGBA images: top half from img_top, bottom half from img_bottom."""
+    w, h = img_top.size
+    result = img_top.copy()
+    mask = Image.new("L", (w, h), 0)
+    for y in range(h // 2, h):
+        for x in range(w):
+            mask.putpixel((x, y), 255)
+    result.paste(img_bottom, (0, 0), mask)
+    return result
+
+
+def create_status_image(color, style=1, thickness=40, bottom_color=None):
+    """If bottom_color is set, draw icon with top half = color, bottom half = bottom_color (e.g. shutdown transition)."""
     if style == 2:
-        return create_status_image_style2(color, thickness)
-    return create_status_image_style1(color, thickness)
+        img = create_status_image_style2(color, thickness)
+    else:
+        img = create_status_image_style1(color, thickness)
+    if bottom_color is not None:
+        if style == 2:
+            img_bottom = create_status_image_style2(bottom_color, thickness)
+        else:
+            img_bottom = create_status_image_style1(bottom_color, thickness)
+        img = _composite_icon_top_bottom(img, img_bottom)
+    return img
 
 
 def _show_status_window_gtk():
@@ -710,6 +747,8 @@ def _show_status_window_gtk():
         status_text = "Daemon is running"
         if current_state == DaemonState.LIMBO:
             status_text = "⚠ Daemon is in limbo state"
+        elif current_state == DaemonState.SHUTTING_DOWN:
+            status_text = "Daemon is shutting down..."
         elif current_state == DaemonState.INITIAL:
             status_text = "Daemon is initializing..."
         elif current_state == DaemonState.SYNCING:
@@ -863,14 +902,25 @@ def show_text_window(title, content):
     _show_text_window_gtk(title, content)
 
 
-def _write_tray_icon_to_path(path, display_state):
-    """Write status image to path (for AppIndicator). display_state is derived at paint time from fresh status."""
+def _write_tray_icon_to_path(path, display_state, status=None):
+    """Write status image to path (for AppIndicator). display_state is derived at paint time from fresh status.
+    For SHUTTING_DOWN/LIMBO, status is used to get the top-half color (underlying active state); bottom half is grey."""
     tray_state = get_tray_state()
     if tray_state is None or tray_state.daemon_manager is None or tray_state.args is None:
         return
     try:
-        color = tray_state.daemon_manager._icon_color_for_state(display_state)
-        img = create_status_image(color, style=tray_state.args.icon_style, thickness=tray_state.args.icon_thickness)
+        dm = tray_state.daemon_manager
+        style = tray_state.args.icon_style
+        thickness = tray_state.args.icon_thickness
+        if display_state in (DaemonState.SHUTTING_DOWN, DaemonState.LIMBO) and status is not None:
+            top_color = dm._underlying_active_color_for_status(status)
+            bottom_color = Colors.GRAY
+            img = create_status_image(
+                top_color, style=style, thickness=thickness, bottom_color=bottom_color
+            )
+        else:
+            color = dm._icon_color_for_state(display_state)
+            img = create_status_image(color, style=style, thickness=thickness)
         img.save(path, "PNG")
     except Exception as e:
         log_message(f"Error writing tray icon: {e}", level=logging.ERROR)
@@ -895,7 +945,7 @@ def _update_appindicator_ui():
         tmp = tempfile.gettempdir()
         path = os.path.join(tmp, f"rclone-bisync-manager-tray-icon-{state.icon_counter}.png")
         state.icon_counter += 1
-        _write_tray_icon_to_path(path, display_state)
+        _write_tray_icon_to_path(path, display_state, status=status)
         if hasattr(state.indicator, "set_icon_full"):
             state.indicator.set_icon_full(path, "rclone-bisync-manager status")
         else:
