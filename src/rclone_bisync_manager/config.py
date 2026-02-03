@@ -13,6 +13,12 @@ def _xdg_base(key: str, fallback_path: str) -> str:
     return os.path.expanduser(env_dir(key, fallback_path))
 
 
+def get_default_config_file() -> str:
+    """Return default config file path (same as CLI; used by tray for --config default)."""
+    return os.path.join(
+        _xdg_base('XDG_CONFIG_HOME', '~/.config'), 'rclone-bisync-manager', 'config.yaml')
+
+
 class OptionsValidatorMixin(BaseModel):
     rclone_options: Dict[str, Any] = Field(default_factory=dict)
     bisync_options: Dict[str, Any] = Field(default_factory=dict)

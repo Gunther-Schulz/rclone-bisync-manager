@@ -62,7 +62,6 @@ A daemon-based manager for automated, bidirectional file sync using [rclone bisy
 
 ```bash
 yay -S rclone-bisync-manager-git
-yay -S rclone-bisync-manager-tray-git   # optional, for tray
 ```
 
 ### Other Linux (pip)
@@ -71,11 +70,7 @@ yay -S rclone-bisync-manager-tray-git   # optional, for tray
 pip install rclone-bisync-manager
 ```
 
-With tray support:
-
-```bash
-pip install rclone-bisync-manager[tray]
-```
+The package includes the daemon, CLI, and system tray.
 
 ---
 
@@ -426,8 +421,6 @@ The daemon runs a status server on a Unix socket (path under the runtime base, e
 - **`rclone-bisync-manager daemon status`** – Prints current status.
 
 Status includes: daemon PID, running/limbo/shutting down, config validity, currently syncing jobs, queued jobs, per-job last sync / next run / sync status / resync status / hash warnings, sync errors, config and log file paths.
-
-Very large configs (many sync jobs or large job definitions) can produce a large status payload and may cause slower tray/CLI response or higher memory use; keeping job count and config size reasonable is recommended.
 
 ---
 

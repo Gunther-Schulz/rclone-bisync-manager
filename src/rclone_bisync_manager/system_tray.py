@@ -21,6 +21,7 @@ from rclone_bisync_manager.daemon_client import (
     request_reload,
     request_add_sync,
 )
+from rclone_bisync_manager.config import get_default_config_file
 from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.status_protocol import DaemonState, status_to_display_state, _has_sync_issues
 import sys
@@ -1255,7 +1256,8 @@ def run_tray_appindicator():
     parser.add_argument("--icon-thickness", type=int, default=_DEFAULT_ICON_THICKNESS)
     parser.add_argument("--log-level", type=str, choices=_LOG_LEVEL_CHOICES, default=_DEFAULT_LOG_LEVEL)
     parser.add_argument("--enable-experimental", action="store_true")
-    parser.add_argument(_ARG_CONFIG, type=str)
+    parser.add_argument(_ARG_CONFIG, type=str, default=get_default_config_file(),
+                        help="Config file path (default: same XDG path as CLI)")
     state.args = parser.parse_args()
     state.update_queue = Queue()
     state.last_status = None
