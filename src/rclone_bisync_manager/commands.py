@@ -40,8 +40,7 @@ def run_command(args, config_obj):
     """Dispatch by (command, action). Returns exit code 0 or 1, or never returns (daemon start)."""
     if args.command == "daemon":
         if args.action == "start":
-            run_daemon_start(args, config_obj)
-            return None  # unreachable
+            return run_daemon_start(args, config_obj)
         if args.action == "stop":
             return run_daemon_stop()
         if args.action == "status":
@@ -77,7 +76,7 @@ def _bootstrap_for_daemon(args, config_obj):
 
 
 def run_daemon_start(args, config_obj):
-    """Bootstrap, lock, then run under DaemonContext. Never returns on success; sys.exit(1) on failure."""
+    """Bootstrap, lock, then run under DaemonContext. Never returns on success; returns 1 on failure."""
     try:
         # --- Bootstrap: logging, tools, dirs, filters (no lock yet) ---
         print("Initializing daemon...")
@@ -112,7 +111,7 @@ def run_daemon_start(args, config_obj):
         error_trace = traceback.format_exc()
         log_error(f"Error starting daemon: {str(e)}\n{error_trace}")
         print(f"Error starting daemon: {str(e)}\nFull traceback:\n{error_trace}")
-        sys.exit(1)
+        return 1
 
 
 def run_daemon_stop():

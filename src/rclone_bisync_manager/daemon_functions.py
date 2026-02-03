@@ -30,6 +30,8 @@ from croniter import croniter
 _daemon_config = None
 _daemon_scheduler = None
 
+# Daemon child process uses sys.exit(1) on failure so "daemon start" fails and CLI/tray see the exit code.
+
 
 def _run_main_loop(state, status_thread):
     """Run the main daemon loop and graceful shutdown. Uses state_module.daemon_state, _daemon_config, _daemon_scheduler."""
