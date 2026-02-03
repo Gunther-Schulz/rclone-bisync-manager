@@ -361,7 +361,7 @@ def _apply_status_result(state, status):
                     log_message(f"New status: {json.dumps(status, default=str)[:100]}...", level=logging.DEBUG)
                 except (TypeError, ValueError):
                     log_message("New status: (unable to serialize for debug)", level=logging.DEBUG)
-            state.update_queue.put(True)
+                state.update_queue.put(True)
         else:
             state.offline_miss_count += 1
             if state.offline_miss_count >= OFFLINE_CLEAR_AFTER_MISSES:
@@ -872,11 +872,17 @@ def _update_appindicator_ui():
         if status is not None:
             state.daemon_manager.update_sync_feedback(status)
         display_state = state.daemon_manager.get_effective_state_for_display(status)
-        # Use the *other* path so the indicator always sees a new path and reloads the icon
-        # (avoids grey icon + updated menu when reusing the same path after startup)
-        path = state.icon_paths[1 - state.icon_index]
+        path = state.icon_paths[state.icon_index]
         _write_tray_icon_to_path(path, display_state)
-        state.indicator.set_icon(path)
+        # Use set_icon_full (proper API; set_icon is deprecated) and status toggle to force repaint
+        # (AppIndicator caches by path; toggling ATTENTION->ACTIVE forces reload without path hack)
+        if hasattr(state.indicator, "set_icon_full"):
+            state.indicator.set_icon_full(path, "rclone-bisync-manager status")
+        else:
+            state.indicator.set_icon(path)
+        status_enum = AppIndicator3.IndicatorStatus
+        state.indicator.set_status(status_enum.ATTENTION)
+        state.indicator.set_status(status_enum.ACTIVE)
         state.icon_index = 1 - state.icon_index
         spec = state.daemon_manager.get_menu_spec(status)
         menu = _build_gtk_menu(spec)
