@@ -2,6 +2,8 @@
 
 Reference for PKGBUILD: use these Arch native packages instead of PyPI wheels so installs use repo builds (e.g. for Python 3.12/3.13 that Arch ships).
 
+**Python path:** The PKGBUILD does not hardcode `site-packages` or a Python version. It uses `python -m build` and `python -m installer --destdir="$pkgdir"` per [Arch Wiki Python package guidelines](https://wiki.archlinux.org/title/Python_package_guidelines#Using_site-packages), so the install path follows the build system’s default Python (works with 3.12, 3.13, etc.).
+
 All package names were checked with `pacman -Ss` / Arch package database. Repo = **extra** unless noted.
 
 ## Runtime (from pyproject.toml)
