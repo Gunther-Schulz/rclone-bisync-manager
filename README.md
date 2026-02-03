@@ -6,6 +6,10 @@ A daemon-based manager for automated, bidirectional file sync using [rclone bisy
 
 **Note:** This project is under active development and not yet recommended for production use.
 
+**Disclaimer:** Use at your own risk. Data loss is possible with any sync application—misconfiguration, bugs, or conflicts can affect your files. The risk is reduced because the actual sync is performed by [rclone](https://rclone.org/), which is mature and widely used; this app only schedules and invokes rclone. Still, keep backups of important data and test with non-critical paths first.
+
+**Version:** The app version is defined in `pyproject.toml` (single source of truth). Check it with `rclone-bisync-manager --version` or `pip show rclone-bisync-manager`. GitHub releases are tagged (e.g. `v0.1.0`).
+
 ---
 
 ## Contents
@@ -266,6 +270,7 @@ All commands accept optional **`--config PATH`** to use a config file other than
 
 ### Global options (CLI)
 
+- **`--version`** / **`-V`** – Print version and exit (no config loaded).
 - **`--config PATH`** – Config file path.
 - **`-d` / `--dry-run`** – Dry run (no changes).
 - **`--console-log`** – Also print log messages to the console (useful for daemon start debugging).

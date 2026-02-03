@@ -3,6 +3,8 @@ import argparse
 
 def parse_args():
     parser = argparse.ArgumentParser(description="RClone BiSync Manager")
+    parser.add_argument('--version', '-V', action='store_true',
+                        help='Show version and exit.')
 
     # Global options
     global_parser = argparse.ArgumentParser(add_help=False)
@@ -13,7 +15,7 @@ def parse_args():
     global_parser.add_argument('--config', type=str,
                                help='Specify a custom config file location.')
 
-    subparsers = parser.add_subparsers(dest='command', required=True)
+    subparsers = parser.add_subparsers(dest='command', required=False)
 
     # Daemon command
     daemon_parser = subparsers.add_parser(
@@ -38,5 +40,10 @@ def parse_args():
         'sync_jobs', nargs='+', help='Names of the sync jobs to add')
 
     args = parser.parse_args()
+
+    if getattr(args, 'version', False):
+        return args
+    if args.command is None:
+        parser.error('the following arguments are required: command')
 
     return args

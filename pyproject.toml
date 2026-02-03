@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rclone-bisync-manager"
-version = "0.1.0"
+version = "0.2.0a1"
 description = "A daemon-based solution for automated, bidirectional synchronization of files using RClone"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 license = { file = "LICENSE" }
@@ -22,6 +22,7 @@ dependencies = [
     "CairoSVG>=2.7.1",
 ]
 classifiers = [
+    "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",

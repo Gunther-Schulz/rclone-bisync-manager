@@ -96,6 +96,14 @@ def handle_client(conn, handlers=None, state=None, config=None):
         conn.close()
 
 
+def _get_version():
+    try:
+        from importlib.metadata import version
+        return version("rclone-bisync-manager")
+    except Exception:
+        return "unknown"
+
+
 def generate_status_report(state=None, config=None):
     """state: runtime (running, shutting_down, currently_syncing, queued_paths, in_limbo, config_invalid). config: _config, paths, hash_warnings. sync_errors from get_sync_state_store()."""
     from rclone_bisync_manager.config import config as default_config
@@ -105,6 +113,7 @@ def generate_status_report(state=None, config=None):
         store = get_sync_state_store()
         c_config = getattr(c, "_config", None)
         status = {
+            sp.VERSION: _get_version(),
             sp.PID: os.getpid(),
             sp.RUNNING: s.running,
             sp.SHUTTING_DOWN: s.shutting_down,

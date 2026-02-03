@@ -550,6 +550,13 @@ def _show_status_window_gtk():
 
     win.connect("destroy", _on_status_win_destroy)
 
+    def _tray_version():
+        try:
+            from importlib.metadata import version
+            return version("rclone-bisync-manager")
+        except Exception:
+            return "unknown"
+
     if current_state in [DaemonState.OFFLINE, DaemonState.FAILED]:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.set_margin_start(20)
@@ -557,6 +564,7 @@ def _show_status_window_gtk():
         box.set_margin_top(20)
         box.set_margin_bottom(20)
         win.add(box)
+        box.pack_start(Gtk.Label(label=f"Version: {_tray_version()}", xalign=0), False, False, 0)
         lbl = Gtk.Label(label="⚠ Daemon is not running")
         lbl.get_style_context().add_class("error")
         lbl.set_xalign(0)
@@ -614,6 +622,8 @@ def _show_status_window_gtk():
         elif current_state == DaemonState.SYNC_ISSUES:
             status_text = "⚠ Sync issues detected"
         gen_box.pack_start(Gtk.Label(label=status_text, xalign=0), False, False, 0)
+        version_val = status.get(sp.VERSION) or _tray_version()
+        gen_box.pack_start(Gtk.Label(label=f"Version: {version_val}", xalign=0), False, False, 0)
         pid_val = status.get(sp.PID)
         if pid_val is not None:
             gen_box.pack_start(Gtk.Label(label=f"PID: {pid_val}", xalign=0), False, False, 0)

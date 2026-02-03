@@ -3,6 +3,7 @@
 import enum
 
 # Top-level keys (success response)
+VERSION = "version"
 PID = "pid"
 RUNNING = "running"
 SHUTTING_DOWN = "shutting_down"

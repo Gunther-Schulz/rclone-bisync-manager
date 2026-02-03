@@ -8,8 +8,20 @@ from rclone_bisync_manager.config import config
 from rclone_bisync_manager.logging_utils import log_error
 
 
+def _get_version():
+    try:
+        from importlib.metadata import version
+        return version("rclone-bisync-manager")
+    except Exception:
+        return "unknown"
+
+
 def main():
     args = parse_args()
+
+    if getattr(args, "version", False):
+        print(_get_version())
+        sys.exit(0)
 
     if args.config:
         config.set_config_file(args.config)
