@@ -63,3 +63,5 @@ Options: `--config PATH`, `--log-level DEBUG|INFO|...`, `--icon-style 1|2`, `--i
   ```
 
   Commit is aborted if tests fail. Skip once: `git commit --no-verify`.
+
+**Python version:** Requires Python 3.12+. Optional: Python 3.14+ free-threading (PEP 703) may affect threading assumptions; not required for current usage.
