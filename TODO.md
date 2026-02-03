@@ -3,7 +3,7 @@
 ## Development
 
 - [ ] **Postponed:** Implement separate filter files per job.
-- [ ] **Tray status refactor (planned):** Single source of truth for icon/menu; paint from poll thread’s stored status only (no UI re-fetch). Currently the icon uses `state.last_status`, but status window (line ~981), `_get_status_path` (~1161), and some menu paths (~766) still call `get_daemon_status()` (blocking re-fetch). Refactor: use `state.last_status` (under lock) for all UI; only the poll loop updates it.
+- [x] **Tray status refactor:** Single source of truth for icon/menu; paint from poll thread’s stored status only (no UI re-fetch). `_get_status_path`, status window on open, and `start_daemon` “already running” now use `state.last_status` under lock. `get_daemon_status()` only used at startup to populate `last_status`.
 
 ---
 

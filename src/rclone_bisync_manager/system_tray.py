@@ -153,6 +153,18 @@ _STATE_COLORS = {
     DaemonState.FAILED: Colors.RED,
 }
 
+# Short display names for state (status window title, menu, etc.)
+_DISPLAY_RUNNING = "Running"
+_DISPLAY_SYNCING = "Syncing"
+_DISPLAY_LIMBO = "Limbo"
+_DISPLAY_INITIAL = "Initializing"
+_DISPLAY_CONFIG_CHANGED = "Config changed"
+_DISPLAY_CONFIG_INVALID = "Config invalid"
+_DISPLAY_SYNC_ISSUES = "Sync issues"
+_DISPLAY_SHUTTING_DOWN = "Shutting down"
+_DISPLAY_OFFLINE = "Offline"
+_DISPLAY_FAILED = "Not running"
+
 _STATE_DISPLAY_NAMES = {
     DaemonState.RUNNING: _DISPLAY_RUNNING,
     DaemonState.SYNCING: _DISPLAY_SYNCING,
@@ -172,18 +184,6 @@ _RELOAD_DISABLED_STATES = (DaemonState.INITIAL, DaemonState.SHUTTING_DOWN)
 
 # States that mean daemon is not running (for status window offline/error UI)
 _STATES_NO_DAEMON = (DaemonState.OFFLINE, DaemonState.FAILED)
-
-# Short display names for state (status window title, etc.)
-_DISPLAY_RUNNING = "Running"
-_DISPLAY_SYNCING = "Syncing"
-_DISPLAY_LIMBO = "Limbo"
-_DISPLAY_INITIAL = "Initializing"
-_DISPLAY_CONFIG_CHANGED = "Config changed"
-_DISPLAY_CONFIG_INVALID = "Config invalid"
-_DISPLAY_SYNC_ISSUES = "Sync issues"
-_DISPLAY_SHUTTING_DOWN = "Shutting down"
-_DISPLAY_OFFLINE = "Offline"
-_DISPLAY_FAILED = "Not running"
 
 # Menu/status label for shutting-down state (used in menu and status window)
 _LABEL_SHUTTING_DOWN = "Daemon is shutting down..."
@@ -652,7 +652,7 @@ def _log_status_changed(status):
 
 
 def get_daemon_status():
-    """Blocking fetch: request status and update state.last_status. Used at startup and by menu actions."""
+    """Blocking fetch: request status and update state.last_status. Used at startup only; UI uses state.last_status (no re-fetch)."""
     state, _ = _get_tray_state_and_daemon()
     if state is None:
         return None
@@ -762,8 +762,9 @@ def start_daemon(widget=None):
     if state is None:
         log_message(_LOG_DAEMON_MANAGER_UNAVAILABLE, level=logging.ERROR)
         return
-    # Check if the daemon is already running
-    current_status = get_daemon_status()
+    # Check if the daemon is already running (use stored status to avoid blocking)
+    with state.last_status_lock:
+        current_status = state.last_status
     if current_status is not None:
         log_message(_LOG_START_ALREADY_RUNNING, level=logging.INFO)
         show_notification(_NOTIFY_ALREADY_RUNNING_TITLE, _NOTIFY_ALREADY_RUNNING_BODY)
@@ -971,15 +972,17 @@ def _make_refresh_status_cb(win):
 
 
 def _show_status_window_gtk():
-    """GTK status window (AppIndicator path only)."""
+    """GTK status window (AppIndicator path only). Uses stored last_status (no blocking fetch)."""
     state, dm = _get_tray_state_and_daemon()
     if not APPINDICATOR_AVAILABLE or state is None:
         return
     if state.status_window_gtk is not None and state.status_window_gtk.get_visible():
         state.status_window_gtk.present()
         return
-    status = _as_status_dict(get_daemon_status())
-    current_state = dm.get_current_state(status)
+    with state.last_status_lock:
+        raw_status = state.last_status
+    status = _as_status_dict(raw_status)
+    current_state = dm.get_current_state(raw_status)
 
     state_title = _STATE_DISPLAY_NAMES.get(current_state, _LABEL_STATUS_FALLBACK)
     win = Gtk.Window(title=f"{_LABEL_STATUS_WINDOW_TITLE}{state_title}")
@@ -1157,8 +1160,13 @@ def open_log_folder(widget=None):
 
 
 def _get_status_path(key):
-    """Return status[key] from fresh daemon status, or None if unavailable."""
-    return _as_status_dict(get_daemon_status()).get(key)
+    """Return status[key] from stored last_status (no blocking fetch). Used for config/log paths."""
+    state, _ = _get_tray_state_and_daemon()
+    if state is None:
+        return None
+    with state.last_status_lock:
+        status = state.last_status
+    return _as_status_dict(status).get(key) if status is not None else None
 
 
 def get_config_file_path():
