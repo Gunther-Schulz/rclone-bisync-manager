@@ -1,6 +1,7 @@
 """Single source of truth for status JSON keys (server builds with these; tray/CLI consume with these)."""
 
 import enum
+from typing import Any, TypedDict
 
 # Top-level keys (success response)
 VERSION = "version"
@@ -32,6 +33,28 @@ MESSAGE = "message"
 ERROR = "error"
 
 
+class StatusResponse(TypedDict, total=False):
+    """Shared type for the status dict (success and error responses). Top-level keys only; sync_jobs values are variable."""
+    version: str
+    pid: int
+    running: bool
+    shutting_down: bool
+    in_limbo: bool
+    config_invalid: bool
+    config_error_message: str | None
+    currently_syncing: str | None
+    queued_paths: list
+    config_changed_on_disk: bool
+    config_file_location: str
+    log_file_location: str | None
+    sync_errors: dict
+    current_config: dict
+    sync_jobs: dict[str, Any]
+    status: str
+    message: str
+    error: str | None
+
+
 class DaemonState(enum.Enum):
     """Display state derived from status dict; shared by tray and any CLI/UI consumer."""
     INITIAL = "initial"
@@ -47,7 +70,7 @@ class DaemonState(enum.Enum):
     FAILED = "failed"
 
 
-def _has_sync_issues(status: dict | None) -> bool:
+def _has_sync_issues(status: StatusResponse | None) -> bool:
     if not isinstance(status, dict):
         return False
     sync_jobs = status.get(SYNC_JOBS)
@@ -64,7 +87,7 @@ def _has_sync_issues(status: dict | None) -> bool:
     )
 
 
-def status_to_display_state(status: dict | None, daemon_start_error: str | None = None) -> DaemonState:
+def status_to_display_state(status: StatusResponse | None, daemon_start_error: str | None = None) -> DaemonState:
     """Map status dict (or None) to DaemonState. Pure function; caller sets daemon_start_error when FAILED."""
     if daemon_start_error:
         return DaemonState.FAILED

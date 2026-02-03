@@ -14,6 +14,7 @@ from datetime import datetime, date
 
 from rclone_bisync_manager.logging_utils import log_error, log_message
 from rclone_bisync_manager import status_protocol as sp
+from rclone_bisync_manager.status_protocol import StatusResponse
 
 
 def start_status_server(handlers=None, state=None, config=None):
@@ -112,7 +113,7 @@ def generate_status_report(state=None, config=None):
     try:
         store = get_sync_state_store()
         c_config = getattr(c, "_config", None)
-        status = {
+        status: StatusResponse = {
             sp.VERSION: _get_version(),
             sp.PID: os.getpid(),
             sp.RUNNING: s.running,

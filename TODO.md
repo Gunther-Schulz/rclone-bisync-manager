@@ -49,7 +49,7 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 
 ## Refactor status (done vs left)
 
-Verified in code 2025-02-03; table updated after tray refactor and error/exit unification (commands return 0/1; main single exit; daemon child sys.exit documented).
+Verified in code 2025-02-03; table updated after tray refactor, error/exit unification, and StatusResponse TypedDict.
 
 | # | Topic | Done | Left |
 |---|--------|------|------|
@@ -62,5 +62,5 @@ Verified in code 2025-02-03; table updated after tray refactor and error/exit un
 | 7 | Logging | Core and tray: logging_utils (log_message, log_error, set_config, setup_loggers). | — |
 | 8 | Error / exit | main sys.exit(result); crash log in runtime_paths (clear/write/read). commands return 0/1; run_daemon_start returns 1 on failure; daemon child sys.exit(1) documented. | — |
 | 9 | Sync / scheduler | SyncContext + build_sync_context(..., state_store=); perform_sync_operations(..., context=ctx) requires context; context.state_store used; handle_rclone_exit_code(..., store=). | — |
-| 10 | Python 3.14 | pyproject requires-python ">=3.12"; type annotations in status_protocol, runtime_paths. DEV.md free-threading note (PEP 703). | No shared TypedDict for status. Module-level config/scheduler in main/commands remain. |
+| 10 | Python 3.14 | pyproject requires-python ">=3.12"; type annotations in status_protocol, runtime_paths. DEV.md free-threading note (PEP 703). StatusResponse TypedDict for status dict. | Module-level config/scheduler in main/commands remain. |
 | 11 | "Refactor first" | Paths, daemon client, protocol, main thin, DaemonRuntimeState, SyncStateStore, LogStatePersistence, tray shared DTO + logging + state ref, crash log, sync decouple, daemon injection. | Immutable "loaded config" vs Config not done. |
