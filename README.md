@@ -136,6 +136,9 @@ These options apply to the overall behavior of RClone BiSync Manager:
 - `local_base_path`: The base directory for all local sync paths.
 - `exclusion_rules_file`: Optional: Path to a file containing exclusion rules for syncing.
 - `redirect_rclone_log_output`: Whether to redirect rclone's log output to the manager's log file.
+- `log_file_path`: Path to the daemon log file. Defaults to a path under `XDG_STATE_HOME` (or `~/.local/state`).
+- `log_rotation_max_mb`: Optional. Max log file size in megabytes before rotation (e.g. `5` for 5 MB). Empty = default 5 MB.
+- `log_rotation_backup_count`: Optional. Number of rotated log files to keep. Empty = default 5.
 - `run_missed_jobs`: Whether to run missed jobs when the daemon starts.
 - `run_initial_sync_on_startup`: Whether to perform an initial sync when the daemon starts.
 - `max_cpu_usage_percent`: Maximum CPU usage allowed for sync operations.

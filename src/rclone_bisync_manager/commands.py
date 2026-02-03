@@ -60,8 +60,9 @@ def _bootstrap_for_daemon(args, config_obj):
     setup_loggers(getattr(args, 'console_log', False))
     log_config_file_location(config_obj.config_file)
     log_message("Daemon initialization started")
-    if hasattr(config_obj, "_config") and config_obj._config is not None and hasattr(config_obj._config, "log_file_path"):
-        print(f"Using log file: {config_obj._config.log_file_path}")
+    log_path = getattr(config_obj, "log_file_path", None)
+    if log_path:
+        print(f"Using log file: {log_path}")
     else:
         print("Warning: Log file path not set or configuration not loaded properly.")
     print("Checking tools and directories...")

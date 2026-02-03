@@ -219,6 +219,7 @@ def read_status(job_key):
 
 
 def get_log_file_position(context):
+    """Return current log file size for position tracking. With log rotation, position may reset when file rotates."""
     log_file_path = context.log_file_path
     if os.path.exists(log_file_path):
         return os.path.getsize(log_file_path)
@@ -226,6 +227,7 @@ def get_log_file_position(context):
 
 
 def check_for_hash_warnings(key, context):
+    """Scan new log lines for hash warnings. Best-effort when log rotation is enabled (position may not match after rotate)."""
     log_file_path = context.log_file_path
     if os.path.exists(log_file_path):
         current_position = os.path.getsize(log_file_path)

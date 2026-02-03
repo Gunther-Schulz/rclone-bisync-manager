@@ -3,7 +3,6 @@
 import copy
 import logging
 import os
-import re
 import yaml
 
 from rclone_bisync_manager.daemon_client import request_config_schema
@@ -30,6 +29,8 @@ GENERAL_FIELDS = [
     ("run_initial_sync_on_startup", "Run initial sync on startup"),
     ("dry_run", "Dry run (global)"),
     ("log_file_path", "Log file path"),
+    ("log_rotation_max_mb", "Log rotation max size (MB, optional)"),
+    ("log_rotation_backup_count", "Log rotation backup count (optional)"),
 ]
 
 GENERAL_TOOLTIPS = {
@@ -41,6 +42,8 @@ GENERAL_TOOLTIPS = {
     "run_initial_sync_on_startup": "If true, run an initial sync for each job when the daemon starts.",
     "dry_run": "Global dry run: show what would be done without making changes.",
     "log_file_path": "Path to the daemon log file.",
+    "log_rotation_max_mb": "Max log file size in megabytes before rotation (e.g. 5 for 5 MB). Empty = use default (5 MB).",
+    "log_rotation_backup_count": "Number of rotated log files to keep. Empty = use default (5).",
 }
 
 # Sync job fields in display order with human labels (scalar only; option dicts handled separately)
@@ -140,6 +143,18 @@ def _safe_yaml_dump(value):
     if isinstance(value, (list, dict)):
         return yaml.dump(value, default_flow_style=False, allow_unicode=True).strip()
     return str(value)
+
+
+def _parse_optional_int(value):
+    """Convert value to int or None for optional config fields (e.g. log_rotation_*)."""
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_yaml_load(text):
@@ -256,7 +271,7 @@ def edit_config_gtk(config_file_path):
                 _set_tooltip(w, tooltips, key)
                 widgets[full_key] = (w, "bool")
                 row += 1
-            elif isinstance(value, int):
+            elif isinstance(value, int) and full_key not in ("log_rotation_max_mb", "log_rotation_backup_count"):
                 grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
                 w = Gtk.SpinButton.new_with_range(-1e9, 1e9, 1)
                 w.set_value(value)
@@ -439,6 +454,15 @@ def edit_config_gtk(config_file_path):
         for path, (w, t) in widgets.items():
             val = get_widget_value(w, t)
             _set_by_path(built, path, val)
+        # Optional int fields: convert to int or None; clamp invalid so YAML loads (Schema: gt=0, ge=0).
+        for key in ("log_rotation_max_mb", "log_rotation_backup_count"):
+            if key in built:
+                v = _parse_optional_int(built[key])
+                if key == "log_rotation_max_mb" and v is not None and v <= 0:
+                    v = None
+                elif key == "log_rotation_backup_count" and v is not None and v < 0:
+                    v = None
+                built[key] = v
         return built
 
     def _normalize_for_compare(c):
@@ -570,6 +594,15 @@ def edit_config_gtk(config_file_path):
         for path, (w, t) in widgets.items():
             val = get_widget_value(w, t)
             _set_by_path(config, path, val)
+        # Optional int fields: convert to int or None; clamp invalid so YAML loads (Schema: gt=0, ge=0).
+        for key in ("log_rotation_max_mb", "log_rotation_backup_count"):
+            if key in config:
+                v = _parse_optional_int(config[key])
+                if key == "log_rotation_max_mb" and v is not None and v <= 0:
+                    v = None
+                elif key == "log_rotation_backup_count" and v is not None and v < 0:
+                    v = None
+                config[key] = v
         # Check if file was modified on disk (hand-edit, another process).
         try:
             current_mtime = os.path.getmtime(config_file_path)

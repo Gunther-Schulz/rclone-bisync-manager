@@ -23,6 +23,17 @@
 
 - [ ] Refactor code to eliminate 'global' keyword (if possible)
 
+### Logging improvement (rotation + config)
+
+- [x] **log_file_path from YAML ignored:** Config wrapper’s `log_file_path` was never updated from `_config` after load. **Fixed:** In `config.load_and_validate_config()`, after successful validation we set `self.log_file_path = self._config.log_file_path` so `logging_utils` and callers use the path from `config.yaml`.
+- [x] **Step 1 — Log rotation:** Add stdlib `RotatingFileHandler` in `logging_utils` (maxBytes=5MB, backupCount=5); keep public API (`log_message`, `log_error`, `set_config`, `setup_loggers`, `ensure_log_file_path`). Daemon/tray use `config.log_file_path` (synced from YAML).
+- [x] **Step 2 — Optional YAML for rotation:** Optional config fields so users can tune rotation without code change.
+  - **Schema:** `ConfigSchema` has `log_rotation_max_mb`, `log_rotation_backup_count` (Optional[int] = None). Defaults in code when None: 5 MB, 5.
+  - **Config wrapper:** Synced from `_config` after load; initialized to None in `_init_logging_paths`.
+  - **logging_utils:** `_get_rotation_params()` reads config; `RotatingFileHandler` uses those or defaults.
+  - **Config editor:** `GENERAL_FIELDS` + `GENERAL_TOOLTIPS`; optional ints as Entry; `build_config_from_widgets` uses `_parse_optional_int`.
+  - **Example YAML:** Commented optional entries in `examples/config.yaml.example`.
+
 ## Issues and hardening
 
 - [x] **Socket leak in daemon_client:** Client sockets were not closed on exception (connect/send/recv/json). Fixed: `try`/`finally` so socket is always closed.

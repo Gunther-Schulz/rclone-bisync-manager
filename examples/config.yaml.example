@@ -16,6 +16,10 @@ run_missed_jobs: true
 # Run initial sync on startup
 run_initial_sync_on_startup: true
 
+# Optional: daemon log file rotation (empty = use defaults: 5 MB max size, 5 backups)
+# log_rotation_max_mb: 5
+# log_rotation_backup_count: 5
+
 # Define the paths to be synchronized
 sync_jobs:
   example_job:

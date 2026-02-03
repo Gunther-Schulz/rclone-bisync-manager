@@ -707,10 +707,14 @@ def open_log_folder(widget=None):
     log_file_path = get_log_file_path()
     if log_file_path:
         log_dir = os.path.dirname(log_file_path)
-        if os.name == 'nt':  # For Windows
-            os.startfile(log_dir)
-        elif os.name == 'posix':  # For macOS and Linux
-            subprocess.call(('xdg-open', log_dir))
+        if log_dir:  # only open dir when path has a directory component
+            if os.name == 'nt':  # For Windows
+                os.startfile(log_dir)
+            elif os.name == 'posix':  # For macOS and Linux
+                subprocess.call(('xdg-open', log_dir))
+        else:
+            log_message("Log path has no directory (e.g. plain filename); cannot open folder.", level=logging.INFO)
+            show_notification("Log folder", "Log path has no directory component.")
     else:
         log_message("Log file path not found", level=logging.ERROR)
         show_notification("Log folder", "Path not available. Is the daemon running?")

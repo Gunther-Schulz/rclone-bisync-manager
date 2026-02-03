@@ -79,7 +79,24 @@ class ConfigSchema(OptionsValidatorMixin):
         'rclone-bisync-manager.log'
     ))
 
+    # Optional log rotation: max size in megabytes before rotation, number of backup files (None = use code defaults)
+    log_rotation_max_mb: Optional[int] = Field(None, gt=0)
+    log_rotation_backup_count: Optional[int] = Field(None, ge=0)
+
     model_config = ConfigDict(extra='forbid')
+
+    @field_validator('log_rotation_max_mb', 'log_rotation_backup_count', mode='before')
+    @classmethod
+    def coerce_optional_int(cls, v):
+        """Coerce empty string or invalid to None so YAML with '' or missing key loads correctly."""
+        if v is None or v == '':
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
 
     @field_validator('sync_jobs', mode='before')
     @classmethod
@@ -184,11 +201,15 @@ class Config:
             'XDG_STATE_HOME', os.path.expanduser('~/.local/state')), 'rclone-bisync-manager', 'logs')
         self.log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager.log')
+        self.log_rotation_max_mb = None
+        self.log_rotation_backup_count = None
 
     def set_config_file(self, config_file):
         self.config_file = os.path.expanduser(config_file)
         self._init_file_paths()
-        self._init_logging_paths()
+        # Only reset logging paths when config not yet loaded; otherwise keep YAML values.
+        if self._config is None:
+            self._init_logging_paths()
 
     def initialize_config(self, args):
         self.args = args
@@ -220,6 +241,10 @@ class Config:
             if self._config != new_config:
                 self._config = new_config
                 log_message("Configuration loaded and validated successfully.")
+            # Sync logging-related attributes from schema to wrapper so logging_utils and callers use YAML values.
+            self.log_file_path = self._config.log_file_path
+            self.log_rotation_max_mb = getattr(self._config, "log_rotation_max_mb", None)
+            self.log_rotation_backup_count = getattr(self._config, "log_rotation_backup_count", None)
         except ValidationError as e:
             error_message = self._format_validation_errors(e)
             log_error(f"Configuration on disk is invalid: {error_message}")
