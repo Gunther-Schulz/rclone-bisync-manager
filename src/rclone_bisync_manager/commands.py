@@ -8,7 +8,7 @@ import traceback
 
 import daemon
 
-from rclone_bisync_manager.config import config, signal_handler
+from rclone_bisync_manager.config import signal_handler
 from rclone_bisync_manager.daemon_client import request_add_sync, request_reload
 import rclone_bisync_manager.daemon_functions as daemon_functions
 from rclone_bisync_manager.daemon_functions import daemon_main, print_daemon_status, stop_daemon
@@ -93,6 +93,7 @@ def run_daemon_start(args, config_obj):
         log_message("Starting daemon in limbo state...")
         daemon_functions._daemon_config = config_obj
         daemon_functions._daemon_scheduler = SyncScheduler()
+        set_config(config_obj)
         with daemon.DaemonContext(
             working_directory="/",
             umask=0o002,
@@ -164,23 +165,20 @@ def run_sync(args, config_obj):
                 print(f"Error: The following sync job(s) do not exist: {', '.join(invalid_jobs)}")
                 return 1
 
-        config_obj._config.dry_run = getattr(args, 'dry_run', False)
-        config_obj._config.force_resync = getattr(args, "force_resync", False)
-        config_obj._config.force_operation = (
-            getattr(args, "force_operation", False) or getattr(args, "force_bisync", False)
-        )
         resync_jobs = set(getattr(args, "resync", None) or [])
-        force_bisync_global = getattr(config_obj._config, "force_operation", False)
+        force_bisync_global = getattr(args, "force_operation", False) or getattr(args, "force_bisync", False)
+        dry_run_override = getattr(args, "dry_run", False)
         for key in paths_to_sync:
-            ctx = build_sync_context(key, config_obj)
-            force_resync = (key in resync_jobs) or getattr(config_obj._config, "force_resync", False)
+            force_resync = (key in resync_jobs) or getattr(args, "force_resync", False)
+            ctx = build_sync_context(
+                key,
+                config_obj,
+                dry_run_override=dry_run_override,
+                force_bisync_override=force_bisync_global,
+                force_resync_override=force_resync,
+            )
             try:
-                perform_sync_operations(
-                    key,
-                    force_bisync=force_bisync_global,
-                    force_resync=force_resync,
-                    context=ctx,
-                )
+                perform_sync_operations(key, context=ctx)
                 config_obj._last_log_position = ctx.log_state.last_log_position
             except Exception as e:
                 print(f"Error syncing job '{key}': {e}")

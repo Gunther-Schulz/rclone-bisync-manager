@@ -156,7 +156,7 @@ Once at least one remote exists, continue with [Quick start](#quick-start) and [
 |--------|-------------|
 | `local_base_path` | Base directory for all local sync paths (required). |
 | `exclusion_rules_file` | Optional path to filter/exclusion file. If the file changes, a resync is triggered for all jobs. |
-| `max_cpu_usage_percent` | CPU limit for sync (0–100). Default: 100. |
+| `max_cpu_usage_percent` | CPU limit for sync (0–100). Requires cpulimit; ignored if not installed. Default: 100. |
 | `redirect_rclone_log_output` | Redirect rclone log output into the manager log file. Default: false. |
 | `run_missed_jobs` | Run jobs that were missed while daemon was stopped. Default: false. |
 | `run_initial_sync_on_startup` | Run an initial sync when the daemon starts. Default: true. |
@@ -426,6 +426,8 @@ The daemon runs a status server on a Unix socket (path under the runtime base, e
 - **`rclone-bisync-manager daemon status`** – Prints current status.
 
 Status includes: daemon PID, running/limbo/shutting down, config validity, currently syncing jobs, queued jobs, per-job last sync / next run / sync status / resync status / hash warnings, sync errors, config and log file paths.
+
+Very large configs (many sync jobs or large job definitions) can produce a large status payload and may cause slower tray/CLI response or higher memory use; keeping job count and config size reasonable is recommended.
 
 ---
 

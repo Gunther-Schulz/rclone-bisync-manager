@@ -336,7 +336,20 @@ class Config:
             self.last_config_mtime = None
 
 
-config = Config()
+# Mutable ref so main/daemon can inject config; no module-level config name (see get_config/set_config)
+_config_ref = [None]
+
+
+def get_config():
+    """Return current config instance; creates one on first use if not set (e.g. tests)."""
+    if _config_ref[0] is None:
+        _config_ref[0] = Config()
+    return _config_ref[0]
+
+
+def set_config(c):
+    """Set current config instance (e.g. for tests or explicit injection). Main uses get_config() so the ref is set on first use."""
+    _config_ref[0] = c
 
 
 def signal_handler(signum, frame):

@@ -193,8 +193,13 @@ def process_sync_queue():
             log_message(f"Skipping queued job '{key}': no longer in config.")
         elif key is not None and key in _daemon_config._config.sync_jobs and not state.shutting_down:
             try:
-                ctx = build_sync_context(key, _daemon_config)
-                perform_sync_operations(key, force_bisync, force_resync, context=ctx)
+                ctx = build_sync_context(
+                    key,
+                    _daemon_config,
+                    force_bisync_override=force_bisync,
+                    force_resync_override=force_resync,
+                )
+                perform_sync_operations(key, context=ctx)
                 _daemon_config._last_log_position = ctx.log_state.last_log_position
             except Exception as e:
                 log_error(f"Sync failed for job '{key}': {e}\n{traceback.format_exc()}")
@@ -238,8 +243,6 @@ def add_to_sync_queue(key, force_bisync=False, resync=False):
         log_message(f"Skipping add_to_sync_queue: job '{key}' not in config.")
         return
     if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
-        _daemon_config._config.sync_jobs[key].force_operation = force_bisync
-        _daemon_config._config.sync_jobs[key].force_resync = resync
         state.sync_queue.put_nowait((key, force_bisync, resync))
         state.queued_paths.add(key)
 
@@ -310,10 +313,7 @@ def handle_add_sync_request():
             resync = bool(sync_request.get('resync', False))
 
             if job in _daemon_config._config.sync_jobs:
-                _daemon_config._config.sync_jobs[job].force_operation = force_bisync
-                _daemon_config._config.sync_jobs[job].force_resync = resync
-                add_to_sync_queue(
-                    job, force_bisync=force_bisync, resync=resync)
+                add_to_sync_queue(job, force_bisync=force_bisync, resync=resync)
                 log_message(f"Added sync job '{job}' to queue (Force bisync: {force_bisync}, Resync: {resync})")
                 conn.sendall(b"OK")
             else:

@@ -154,7 +154,7 @@ _store_ref = [None]
 def get_sync_state_store():
     """Return the singleton SyncStateStore, creating and loading it on first use."""
     if _store_ref[0] is None:
-        from rclone_bisync_manager.config import config
-        _store_ref[0] = SyncStateStore(config.cache_dir)
+        from rclone_bisync_manager.config import get_config
+        _store_ref[0] = SyncStateStore(get_config().cache_dir)
         _store_ref[0].load()
     return _store_ref[0]

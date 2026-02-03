@@ -6,7 +6,7 @@ import hashlib
 import psutil
 from rclone_bisync_manager.env_helpers import env_dir
 from rclone_bisync_manager.logging_utils import log_message, log_error
-from rclone_bisync_manager.config import config
+from rclone_bisync_manager.config import get_config
 from rclone_bisync_manager.runtime_paths import get_lock_file_path
 import fcntl
 import errno
@@ -22,9 +22,10 @@ def check_local_rclone_test(local_path):
     if result.returncode != 0:
         log_error(f"Local rclone test failed for {local_path}")
         return False
-    if config.rclone_test_file_name not in (result.stdout or ""):
-        log_message(f"{config.rclone_test_file_name} file not found in {
-                    local_path}. To add it run 'rclone touch \"{local_path}/{config.rclone_test_file_name}\"'")
+    cfg = get_config()
+    if cfg.rclone_test_file_name not in (result.stdout or ""):
+        log_message(f"{cfg.rclone_test_file_name} file not found in {
+                    local_path}. To add it run 'rclone touch \"{local_path}/{cfg.rclone_test_file_name}\"'")
         return False
     return True
 
@@ -35,9 +36,10 @@ def check_remote_rclone_test(remote_path):
     if result.returncode != 0:
         log_error(f"Remote rclone test failed for {remote_path}")
         return False
-    if config.rclone_test_file_name not in (result.stdout or ""):
-        log_message(f"{config.rclone_test_file_name} file not found in {
-                    remote_path}. To add it run 'rclone touch \"{remote_path}/{config.rclone_test_file_name}\"'")
+    cfg = get_config()
+    if cfg.rclone_test_file_name not in (result.stdout or ""):
+        log_message(f"{cfg.rclone_test_file_name} file not found in {
+                    remote_path}. To add it run 'rclone touch \"{remote_path}/{cfg.rclone_test_file_name}\"'")
         return False
     return True
 
@@ -67,12 +69,13 @@ def ensure_rclone_dir():
 
 
 def handle_filter_changes():
-    if not config._config or not config._config.exclusion_rules_file:
+    cfg = get_config()
+    if not cfg._config or not cfg._config.exclusion_rules_file:
         return
-    stored_md5_file = os.path.join(config.cache_dir, '.filter_md5')
-    os.makedirs(config.cache_dir, exist_ok=True)
-    if os.path.exists(config._config.exclusion_rules_file):
-        current_md5 = calculate_md5(config._config.exclusion_rules_file)
+    stored_md5_file = os.path.join(cfg.cache_dir, '.filter_md5')
+    os.makedirs(cfg.cache_dir, exist_ok=True)
+    if os.path.exists(cfg._config.exclusion_rules_file):
+        current_md5 = calculate_md5(cfg._config.exclusion_rules_file)
         if os.path.exists(stored_md5_file):
             try:
                 with open(stored_md5_file, 'r', encoding='utf-8', errors='replace') as f:
@@ -85,10 +88,10 @@ def handle_filter_changes():
             with open(stored_md5_file, 'w', encoding='utf-8') as f:
                 f.write(current_md5)
             log_message("Filter file has changed. A resync is required.")
-            for job_key in config._config.sync_jobs:
-                config._config.sync_jobs[job_key].force_resync = True
+            for job_key in cfg._config.sync_jobs:
+                cfg._config.sync_jobs[job_key].force_resync = True
     else:
-        log_message(f"Exclusion rules file not found: {config._config.exclusion_rules_file}")
+        log_message(f"Exclusion rules file not found: {cfg._config.exclusion_rules_file}")
 
 
 def calculate_md5(file_path):

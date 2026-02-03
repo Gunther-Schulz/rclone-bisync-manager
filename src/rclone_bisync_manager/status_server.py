@@ -23,7 +23,8 @@ def start_status_server(handlers=None, state=None, config=None):
     state: daemon runtime state (running, shutting_down, in_limbo, config_invalid, etc.).
     config: config object (_config, paths, etc.). Sync state/errors come from get_sync_state_store().
     """
-    from rclone_bisync_manager.config import config as default_config
+    from rclone_bisync_manager.config import get_config
+    default_config = get_config()
     socket_path = get_status_socket_path()
     if handlers is None:
         handlers = {}
@@ -56,7 +57,8 @@ def start_status_server(handlers=None, state=None, config=None):
 
 
 def handle_client(conn, handlers=None, state=None, config=None):
-    from rclone_bisync_manager.config import config as default_config
+    from rclone_bisync_manager.config import get_config
+    default_config = get_config()
     if handlers is None:
         handlers = {}
     s = state if state is not None else default_config
@@ -93,6 +95,10 @@ def handle_client(conn, handlers=None, state=None, config=None):
         conn.sendall(response.encode())
     except Exception as e:
         log_error(f"Error handling client request: {str(e)}")
+        try:
+            conn.sendall(json.dumps({sp.STATUS: "error", sp.MESSAGE: str(e)}).encode())
+        except (OSError, AttributeError):
+            pass
     finally:
         conn.close()
 
@@ -107,7 +113,8 @@ def _get_version():
 
 def generate_status_report(state=None, config=None):
     """state: runtime (running, shutting_down, currently_syncing, queued_paths, in_limbo, config_invalid). config: _config, paths, hash_warnings. sync_errors from get_sync_state_store()."""
-    from rclone_bisync_manager.config import config as default_config
+    from rclone_bisync_manager.config import get_config
+    default_config = get_config()
     s = state if state is not None else default_config
     c = config if config is not None else default_config
     try:
@@ -116,13 +123,13 @@ def generate_status_report(state=None, config=None):
         status: StatusResponse = {
             sp.VERSION: _get_version(),
             sp.PID: os.getpid(),
-            sp.RUNNING: s.running,
-            sp.SHUTTING_DOWN: s.shutting_down,
+            sp.RUNNING: getattr(s, "running", False),
+            sp.SHUTTING_DOWN: getattr(s, "shutting_down", False),
             sp.IN_LIMBO: getattr(s, "in_limbo", True),
             sp.CONFIG_INVALID: getattr(s, "config_invalid", False),
             sp.CONFIG_ERROR_MESSAGE: getattr(s, "config_error_message", None),
-            sp.CURRENTLY_SYNCING: s.currently_syncing,
-            sp.QUEUED_PATHS: list(s.queued_paths),
+            sp.CURRENTLY_SYNCING: getattr(s, "currently_syncing", None),
+            sp.QUEUED_PATHS: list(getattr(s, "queued_paths", [])),
             sp.CONFIG_CHANGED_ON_DISK: getattr(c, "config_changed_on_disk", False),
             sp.CONFIG_FILE_LOCATION: str(getattr(c, "config_file", "") or ""),
             sp.LOG_FILE_LOCATION: str(c_config.log_file_path) if c_config else None,

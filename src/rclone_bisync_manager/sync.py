@@ -6,8 +6,8 @@ from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.sync_state_store import get_sync_state_store
 
 
-def perform_sync_operations(key, force_bisync=False, force_resync=False, context=None):
-    """Run resync/bisync for one job. Requires context (from build_sync_context). Caller should set config_obj._last_log_position = context.log_state.last_log_position after return."""
+def perform_sync_operations(key, context=None):
+    """Run resync/bisync for one job. Requires context (from build_sync_context); force flags come from context.force_bisync/context.force_resync. Caller should set config_obj._last_log_position = context.log_state.last_log_position after return."""
     if context is None:
         raise ValueError("perform_sync_operations requires context.")
     value = context.job
@@ -19,7 +19,7 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
 
     ensure_local_directory(local_path)
 
-    log_message(f"Performing sync operation for {key}. Force bisync: {force_bisync}, Force resync: {force_resync}, Dry run: {context.dry_run}")
+    log_message(f"Performing sync operation for {key}. Force bisync: {context.force_bisync}, Force resync: {context.force_resync}, Dry run: {context.dry_run}")
 
     status = read_status(key, context=context)
     resync_status = status.get("resync_status", "NONE")
@@ -28,22 +28,22 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
     resync_result = status.get("resync_status", "NONE")
     bisync_result = status.get("sync_status", "NONE")
 
-    if force_resync or resync_status in ["NONE", "IN_PROGRESS"]:
-        log_message(f"Initiating resync for {key}. Force resync: {force_resync}, Resync status: {resync_status}")
+    if context.force_resync or resync_status in ["NONE", "IN_PROGRESS"]:
+        log_message(f"Initiating resync for {key}. Force resync: {context.force_resync}, Resync status: {resync_status}")
         write_status(key, resync_status="IN_PROGRESS", context=context)
         resync_result = resync(key, remote_path, local_path, context)
         write_status(key, resync_status=resync_result, context=context)
 
         if resync_result == "COMPLETED":
             log_message(f"Resync completed for {key}, proceeding with bisync.")
-            bisync_result = bisync(key, remote_path, local_path, force_bisync, context)
+            bisync_result = bisync(key, remote_path, local_path, context)
             write_status(key, sync_status=bisync_result, context=context)
         else:
             log_error(f"Resync failed for {key}. Manual intervention or force resync required.")
             return
     else:
-        log_message(f"Proceeding with bisync for {key}. Force bisync: {force_bisync}")
-        bisync_result = bisync(key, remote_path, local_path, force_bisync, context)
+        log_message(f"Proceeding with bisync for {key}. Force bisync: {context.force_bisync}")
+        bisync_result = bisync(key, remote_path, local_path, context)
         write_status(key, sync_status=bisync_result, context=context)
 
     store = context.state_store or get_sync_state_store()
@@ -54,19 +54,17 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
     store.save()
 
 
-def bisync(key, remote_path, local_path, force_bisync, context):
+def bisync(key, remote_path, local_path, context):
     log_message(f"Bisync started for {local_path} at {datetime.now()}" +
                 (" - Performing a dry run" if context.dry_run else "") +
-                (f" - Force bisync {'enabled' if force_bisync else 'disabled'}"))
+                (f" - Force bisync {'enabled' if context.force_bisync else 'disabled'}"))
 
     context.log_state.last_log_position = get_log_file_position(context)
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
     rclone_args.extend(get_rclone_args(
         context.bisync_options, 'bisync', context.job_key, context.job, context))
-
-    if force_bisync:
-        rclone_args.append('--force')
+    # --force is already added by get_rclone_args from context.force_bisync
 
     result = run_rclone_command(rclone_args, context)
 
@@ -80,8 +78,7 @@ def bisync(key, remote_path, local_path, force_bisync, context):
 
 
 def resync(key, remote_path, local_path, context):
-    value = context.job
-    log_message(f"Resync called with force_resync: {value.force_resync}")
+    log_message(f"Resync called with force_resync: {context.force_resync}")
 
     log_message(f"Resync started for {local_path} at {datetime.now()}" +
                 (" - Performing a dry run" if context.dry_run else ""))
@@ -118,7 +115,7 @@ def get_rclone_args(options, operation_type, job_key, job, context):
     }
 
     merged_options['dry_run'] = context.dry_run
-    merged_options['force'] = job.force_operation
+    merged_options['force'] = context.force_bisync
 
     for opt_key, opt_value in merged_options.items():
         option_key = f"--{str(opt_key).replace('_', '-')}"

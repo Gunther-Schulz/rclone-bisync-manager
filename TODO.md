@@ -21,8 +21,7 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 
 ## Development
 
-- [ ] Implement internal Python CPU limiter.
-- [ ] Implement separate filter files per job.
+- [ ] **Postponed:** Implement separate filter files per job.
 
 ## Improvements
 
@@ -30,7 +29,7 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 
 ## Issues and hardening
 
-- [ ] **Status payload size:** Very large payload (many/large jobs) can cause long receive time or high memory. Options: slim STATUS (omit/truncate `current_config` or per-job details), or document practical limit.
+- [x] **Status payload size:** Very large payload (many/large jobs) can cause long receive time or high memory. Documented practical limit in README (Status server). Optional future: slim STATUS (omit/truncate `current_config` or per-job details).
 
 ---
 
@@ -53,7 +52,7 @@ Verified in code 2025-02-03; table updated after tray refactor, error/exit unifi
 
 | # | Topic | Done | Left |
 |---|--------|------|------|
-| 1 | Global state | DaemonRuntimeState, SyncStateStore. Daemon path: _daemon_config, _daemon_scheduler injected. logging_utils/sync_state_store use refs (no global keyword). Tray: TrayState + _tray_state_ref, get_tray_state/set_tray_state (no global keyword). | `config`/scheduler still module-level (main/commands/CLI). |
+| 1 | Global state | DaemonRuntimeState, SyncStateStore. Daemon path: _daemon_config, _daemon_scheduler injected. logging_utils/sync_state_store use refs (no global keyword). Tray: TrayState + _tray_state_ref, get_tray_state/set_tray_state (no global keyword). Main: get_config() (no local Config() creation). Scheduler only in daemon path (injected). | — |
 | 2 | main / orchestration | Thin main → run_command; commands.py; runtime_paths + daemon_client. Daemon phases (Bootstrap / Lock / Daemonize / Run loop). | — |
 | 3 | Paths | runtime_paths.py: sockets, lock, crash log; env_dir(RCLONE_BISYNC_MANAGER_RUNTIME_DIR, XDG_RUNTIME_DIR). | — |
 | 4 | Config class | LogStatePersistence as Config property (_log_state). SyncStateStore/DaemonRuntimeState are separate (not Config props). | Config still: config_file, load_and_validate_config, status_file_path, check_config_changed / last_config_mtime. |
@@ -62,5 +61,5 @@ Verified in code 2025-02-03; table updated after tray refactor, error/exit unifi
 | 7 | Logging | Core and tray: logging_utils (log_message, log_error, set_config, setup_loggers). | — |
 | 8 | Error / exit | main sys.exit(result); crash log in runtime_paths (clear/write/read). commands return 0/1; run_daemon_start returns 1 on failure; daemon child sys.exit(1) documented. | — |
 | 9 | Sync / scheduler | SyncContext + build_sync_context(..., state_store=); perform_sync_operations(..., context=ctx) requires context; context.state_store used; handle_rclone_exit_code(..., store=). | — |
-| 10 | Python 3.14 | pyproject requires-python ">=3.12"; type annotations in status_protocol, runtime_paths. DEV.md free-threading note (PEP 703). StatusResponse TypedDict for status dict. | Module-level config/scheduler in main/commands remain. |
-| 11 | "Refactor first" | Paths, daemon client, protocol, main thin, DaemonRuntimeState, SyncStateStore, LogStatePersistence, tray shared DTO + logging + state ref, crash log, sync decouple, daemon injection. | Immutable "loaded config" vs Config not done. |
+| 10 | Python 3.14 | pyproject requires-python ">=3.12"; type annotations in status_protocol, runtime_paths. DEV.md free-threading note (PEP 703). StatusResponse TypedDict for status dict. Main uses get_config(). | — |
+| 11 | "Refactor first" | Paths, daemon client, protocol, main thin, DaemonRuntimeState, SyncStateStore, LogStatePersistence, tray shared DTO + logging + state ref, crash log, sync decouple, daemon injection. SyncContext force_bisync/force_resync overrides; no mutation of _config for dry_run/force_* in run path (daemon/CLI pass overrides; sync uses context). | — |

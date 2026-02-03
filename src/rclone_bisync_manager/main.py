@@ -4,7 +4,7 @@ import sys
 
 from rclone_bisync_manager.cli import parse_args
 from rclone_bisync_manager.commands import run_command
-from rclone_bisync_manager.config import config
+from rclone_bisync_manager.config import get_config
 from rclone_bisync_manager.logging_utils import log_error
 
 
@@ -23,6 +23,7 @@ def main():
         print(_get_version())
         sys.exit(0)
 
+    config = get_config()
     if args.config:
         config.set_config_file(args.config)
     else:
@@ -38,8 +39,7 @@ def main():
         sys.exit(1)
 
     result = run_command(args, config)
-    if result is not None:
-        sys.exit(result)
+    sys.exit(result if result is not None else 0)
 
 
 if __name__ == "__main__":
