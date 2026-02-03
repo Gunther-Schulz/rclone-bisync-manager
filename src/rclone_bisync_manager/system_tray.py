@@ -80,6 +80,10 @@ MIN_SYNC_FEEDBACK_SECONDS = 2.0
 # Consecutive None polls after which we clear last_status so UI shows OFFLINE (single source of truth)
 OFFLINE_CLEAR_AFTER_MISSES = 5
 
+# Ensures at most one status fetch runs at a time; fetch runs in a worker so poll loop never blocks on socket
+_status_fetch_in_progress = [False]
+_status_fetch_lock = Lock()
+
 
 class Colors:
     YELLOW = (255, 235, 59)
@@ -318,6 +322,7 @@ def _build_gtk_menu(spec):
 
 
 def get_daemon_status():
+    """Blocking fetch: request status and update state.last_status. Used at startup and by menu actions."""
     state = get_tray_state()
     if state is None:
         return None
@@ -339,6 +344,47 @@ def get_daemon_status():
         log_message(f"Error communicating with daemon: {
                     str(e)}", level=logging.ERROR)
         return None
+
+
+def _apply_status_result(state, status):
+    """Apply a status result from a worker: update last_status, offline_miss_count, log, and queue UI refresh."""
+    try:
+        if status is not None:
+            state.offline_miss_count = 0
+            state.daemon_manager.update_sync_feedback(status)
+            with state.last_status_lock:
+                changed = status != state.last_status
+                state.last_status = status
+            if changed:
+                log_message("Daemon status changed", level=logging.INFO)
+                try:
+                    log_message(f"New status: {json.dumps(status, default=str)[:100]}...", level=logging.DEBUG)
+                except (TypeError, ValueError):
+                    log_message("New status: (unable to serialize for debug)", level=logging.DEBUG)
+            state.update_queue.put(True)
+        else:
+            state.offline_miss_count += 1
+            if state.offline_miss_count >= OFFLINE_CLEAR_AFTER_MISSES:
+                with state.last_status_lock:
+                    state.last_status = None
+                state.update_queue.put(True)
+    except Exception as e:
+        log_message(f"Error applying status result: {e}", level=logging.ERROR)
+
+
+def _status_fetch_worker(state):
+    """Run in a thread: blocking request_status so the poll loop never blocks on the socket.
+    The log line 'Daemon process started, waiting for it to initialize...' can sit until the first
+    status response arrives; if the poll loop blocked here, no further log lines would appear until
+    the daemon responded (e.g. after the first sync). Running the fetch in a worker avoids that."""
+    try:
+        status = request_status(timeout=8, retries=2, retry_delay=0.3)
+    except Exception as e:
+        log_message(f"Error fetching daemon status: {e}", level=logging.ERROR)
+        status = None
+    finally:
+        _status_fetch_in_progress[0] = False
+    _apply_status_result(state, status)
 
 
 def create_sync_now_handler(job_key, force_bisync=False, resync=False):
@@ -826,7 +872,9 @@ def _update_appindicator_ui():
         if status is not None:
             state.daemon_manager.update_sync_feedback(status)
         display_state = state.daemon_manager.get_effective_state_for_display(status)
-        path = state.icon_paths[state.icon_index]
+        # Use the *other* path so the indicator always sees a new path and reloads the icon
+        # (avoids grey icon + updated menu when reusing the same path after startup)
+        path = state.icon_paths[1 - state.icon_index]
         _write_tray_icon_to_path(path, display_state)
         state.indicator.set_icon(path)
         state.icon_index = 1 - state.icon_index
@@ -872,6 +920,8 @@ def run_tray_appindicator():
     if cleared:
         log_message("Cleared existing crash log", level=logging.INFO)
     initial_status = get_daemon_status()
+    with state.last_status_lock:
+        state.last_status = initial_status
     if initial_status is not None:
         state.daemon_manager.update_sync_feedback(initial_status)
     initial_state = state.daemon_manager.get_effective_state_for_display(initial_status)
@@ -928,7 +978,10 @@ def update_menu_and_icon():
 
 
 def check_status_and_update():
-    last_status = None
+    """Poll loop: crash log, sync feedback expiry, and start a non-blocking status fetch worker.
+    The worker runs request_status() in a thread so this loop never blocks on the socket; otherwise
+    the log would stall at 'Daemon process started, waiting for it to initialize...' until the
+    daemon responded (e.g. after the first sync)."""
     while True:
         try:
             state = get_tray_state()
@@ -944,32 +997,20 @@ def check_status_and_update():
                     log_message("Daemon crashed.", level=logging.ERROR)
                     log_message(f"Crash message: {
                                 crash_message}", level=logging.ERROR)
+                time.sleep(1)
                 continue
 
-            current_status = get_daemon_status()
-            if current_status is None:
-                state.offline_miss_count += 1
-                if state.offline_miss_count >= OFFLINE_CLEAR_AFTER_MISSES:
-                    with state.last_status_lock:
-                        state.last_status = None
-                    state.update_queue.put(True)
-            else:
-                state.offline_miss_count = 0
-                state.daemon_manager.update_sync_feedback(current_status)
             # Clear expired feedback and trigger one more icon update when it expires
             with state.daemon_manager.state_lock:
                 if state.daemon_manager.sync_feedback_until > 0 and time.monotonic() >= state.daemon_manager.sync_feedback_until:
                     state.daemon_manager.sync_feedback_until = 0
                     state.update_queue.put(True)
 
-            # Refresh when status changed; skip when holding sticky (first None tick)
-            holding_sticky = current_status is None and state.offline_miss_count < 2
-            if not holding_sticky and current_status != last_status:
-                log_message("Status or state changed. Updating menu and icon.", level=logging.DEBUG)
-                log_message(f"New status: {current_status}", level=logging.DEBUG)
-                state.update_queue.put(True)
-
-            last_status = current_status
+            # Start a status fetch in a worker so we never block here on the socket
+            with _status_fetch_lock:
+                if not _status_fetch_in_progress[0]:
+                    _status_fetch_in_progress[0] = True
+                    Thread(target=_status_fetch_worker, args=(state,), daemon=True).start()
 
         except Exception as e:
             log_message(f"Error in check_status_and_update: {
