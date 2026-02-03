@@ -21,3 +21,16 @@ Options: `--log-level DEBUG|INFO|WARNING|ERROR|CRITICAL` (default NONE), `--enab
 
 **Debug:** Use `--console-log` for daemon/sync so logs go to stdout; use `--log-level DEBUG` (or INFO) for the tray.
 
+## Tests
+
+Run tests: `pytest tests/ -v` (from repo root; requires `pip install -e ".[dev]"` so pytest and the package are available).
+
+**Pre-commit hook (run tests before each commit):**  
+Install once so git uses the repo’s hooks:
+
+```bash
+git config core.hooksPath githooks
+```
+
+Then every `git commit` runs `pytest tests/ -q`; the commit is aborted if tests fail. To skip the hook once: `git commit --no-verify`.
+

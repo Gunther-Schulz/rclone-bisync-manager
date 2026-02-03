@@ -39,6 +39,15 @@ rclone-bisync-manager-tray = "rclone_bisync_manager.system_tray:main"
 where = ["src"]
 include = ["rclone_bisync_manager"]
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/Gunther-Schulz/rclone-bisync-manager"
 "Bug Tracker" = "https://github.com/Gunther-Schulz/rclone-bisync-manager/issues"

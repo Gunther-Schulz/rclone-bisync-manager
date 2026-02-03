@@ -14,6 +14,28 @@
 - [ ] Test per-sync job options override
 - [ ] Verify exclude rule file changes trigger a resync
 
+### Automated tests (for beta)
+
+- [x] **Unit:** `env_helpers.env_dir` (unset, empty, whitespace, normal value)
+- [x] **Unit:** Config schema validation (valid minimal, invalid cron, disallowed keys in options)
+- [x] **Unit:** Scheduler `check_missed_jobs` / `schedule_tasks` (with patched store; run_missed_jobs True/False, missed not overwritten)
+- [x] **Unit:** SyncStateStore load/save roundtrip, empty/invalid JSON; SyncState get_job_state
+- [x] **Unit:** status_protocol _has_sync_issues, status_to_display_state
+- [x] **Integration:** Status server response shape (version, pid, running) with minimal state; standardize_status
+- [x] **Unit:** runtime_paths path suffixes; write/read/clear crash log (patched path)
+- [x] **Unit:** sync handle_rclone_exit_code (COMPLETED/FAILED, error recording)
+- [x] **Unit:** utils calculate_md5
+- [ ] **Manual / e2e:** Missed runs, suspend, per-job overrides, exclude-file resync (keep in Testing above)
+
+## Beta readiness (checklist)
+
+To move from alpha to beta:
+
+1. **Tests:** Add at least a small automated test suite (see “Automated tests” above). Pytest + `tests/` with a few unit tests is enough to catch regressions.
+2. **README:** Change “not yet recommended for production” to a beta disclaimer (e.g. “Beta — suitable for production use with backups; please report bugs”).
+3. **Version/classifier:** Bump to `0.3.0b1` (or `0.2.0b1`); set PyPI classifier to `Development Status :: 4 - Beta`.
+4. **Optional:** CHANGELOG or release notes for the first beta tag; document known limitations (e.g. tray/stop mitigations in Known Issues).
+
 ## Development
 
 - [ ] Implement internal Python CPU limiter
