@@ -13,10 +13,11 @@ _GTK_AVAILABLE = False
 try:
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gdk, Gtk
+    from gi.repository import Gdk, GLib, Gtk
     _GTK_AVAILABLE = True
 except (ImportError, ValueError):
     Gdk = None
+    GLib = None
     Gtk = None
 
 # General (top-level) fields in display order with human labels
@@ -202,7 +203,7 @@ def edit_config_gtk(config_file_path):
 
     win = Gtk.Window(title="Edit Configuration")
     win.set_default_size(820, 620)
-    status_label = Gtk.Label(label="Saved")
+    status_label = Gtk.Label(label="No changes")
     status_label.set_margin_start(4)
     status_label.set_margin_end(4)
 
@@ -465,7 +466,7 @@ def edit_config_gtk(config_file_path):
         return c
 
     def update_dirty_indicator(*_args):
-        """Update status label and window title: Saved vs Unsaved changes (current widgets vs last_saved_config)."""
+        """Update status label and window title: No changes vs Unsaved changes (current widgets vs last_saved_config)."""
         built = build_config_from_widgets()
         try:
             a = _normalize_for_compare(built)
@@ -490,13 +491,13 @@ def edit_config_gtk(config_file_path):
             log_message(f"config_editor: dirty check exception: {e}", level=logging.DEBUG)
         if dirty:
             status_label.set_text("Unsaved changes")
-            status_label.set_tooltip_text("Current form values differ from the last saved state (disk).")
+            status_label.set_tooltip_text("Current form values differ from the file on disk.")
             if Gdk is not None:
                 status_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.75, 0.4, 0.0, 1.0))  # orange
             win.set_title("Edit Configuration • Unsaved changes")
         else:
-            status_label.set_text("Saved")
-            status_label.set_tooltip_text("Current form matches the last saved state (disk).")
+            status_label.set_text("No changes")
+            status_label.set_tooltip_text("Form matches the file on disk (no unsaved changes).")
             if Gdk is not None:
                 status_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.0, 0.55, 0.0, 1.0))  # green
             win.set_title("Edit Configuration")
@@ -635,7 +636,19 @@ def edit_config_gtk(config_file_path):
     def on_window_focus_in(win, event):
         check_file_changed_on_disk()
 
+    def on_timer_check_disk():
+        check_file_changed_on_disk()
+        return True  # keep timer running
+
     win.connect("focus-in-event", on_window_focus_in)
+    # Periodically check mtime so "File changed on disk" updates when tray reloads config, etc.
+    _timer_id = GLib.timeout_add_seconds(2, on_timer_check_disk) if GLib is not None else None
+
+    def on_window_destroy(win):
+        if _timer_id is not None and GLib is not None:
+            GLib.source_remove(_timer_id)
+
+    win.connect("destroy", on_window_destroy)
 
     for path, (w, t) in widgets.items():
         connect_widget_change(w, t)

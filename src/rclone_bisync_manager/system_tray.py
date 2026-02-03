@@ -138,7 +138,7 @@ class DaemonManager:
         else:
             spec.extend(self._get_normal_spec(status))
 
-        edit_config_enabled = current_state in [DaemonState.RUNNING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]
+        edit_config_enabled = current_state in [DaemonState.RUNNING, DaemonState.SYNCING, DaemonState.CONFIG_INVALID, DaemonState.CONFIG_CHANGED, DaemonState.LIMBO, DaemonState.SYNC_ISSUES]
         spec.extend([
             {"type": "separator"},
             {"type": "item", "label": "Config & Logs", "callback": None, "enabled": True, "submenu": [
