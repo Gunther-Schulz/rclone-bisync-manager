@@ -23,6 +23,10 @@ class SyncScheduler:
         for key, job in sync_jobs.items():
             if getattr(job, "active", True):
                 try:
+                    # Don't overwrite a missed run: if we already have a task due (scheduled_time <= now), keep it
+                    existing = self.task_map.get(key)
+                    if existing is not None and existing.scheduled_time <= now:
+                        continue
                     cron_obj = croniter(job.schedule, now)
                     next_run = cron_obj.get_next(datetime)
                     self.schedule_task(key, next_run)
