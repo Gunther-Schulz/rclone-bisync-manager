@@ -3,30 +3,25 @@ import subprocess
 from datetime import datetime
 from rclone_bisync_manager.utils import is_cpulimit_installed, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
 from rclone_bisync_manager.logging_utils import log_message, log_error
-from rclone_bisync_manager.config import config
 from rclone_bisync_manager.sync_state_store import get_sync_state_store
 
 
 def perform_sync_operations(key, force_bisync=False, force_resync=False, context=None):
+    """Run resync/bisync for one job. Requires context (from build_sync_context). Caller should set config_obj._last_log_position = context.log_state.last_log_position after return."""
     if context is None:
-        from rclone_bisync_manager.sync_context import build_sync_context
-        context = build_sync_context(key, config)
-        write_back_log_position = True
-    else:
-        write_back_log_position = False
-
+        raise ValueError("perform_sync_operations requires context.")
     value = context.job
     local_path = os.path.join(context.local_base_path, value.local)
     remote_path = f"{value.rclone_remote}:{value.remote}"
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
-        return
+        return  # Skip sync; caller still does _last_log_position = ctx.log_state.last_log_position
 
     ensure_local_directory(local_path)
 
     log_message(f"Performing sync operation for {key}. Force bisync: {force_bisync}, Force resync: {force_resync}, Dry run: {context.dry_run}")
 
-    status = read_status(key)
+    status = read_status(key, context=context)
     resync_status = status.get("resync_status", "NONE")
     log_message(f"Current resync status for {key}: {resync_status}")
 
@@ -51,15 +46,12 @@ def perform_sync_operations(key, force_bisync=False, force_resync=False, context
         bisync_result = bisync(key, remote_path, local_path, force_bisync, context)
         write_status(key, sync_status=bisync_result, context=context)
 
-    store = get_sync_state_store()
+    store = context.state_store or get_sync_state_store()
     store.sync_state.update_job_state(key,
                                        sync_status=bisync_result,
                                        resync_status=resync_result,
                                        last_sync=datetime.now())
     store.save()
-
-    if write_back_log_position:
-        config._last_log_position = context.log_state.last_log_position
 
 
 def bisync(key, remote_path, local_path, force_bisync, context):
@@ -81,7 +73,8 @@ def bisync(key, remote_path, local_path, force_bisync, context):
     check_for_hash_warnings(key, context)
 
     sync_result = handle_rclone_exit_code(
-        result.returncode, local_path, "Bisync")
+        result.returncode, local_path, "Bisync", store=context.state_store or get_sync_state_store()
+    )
     log_message(f"Bisync status for {local_path}: {sync_result}")
     return sync_result
 
@@ -99,7 +92,8 @@ def resync(key, remote_path, local_path, context):
 
     result = run_rclone_command(rclone_args, context)
     sync_result = handle_rclone_exit_code(
-        result.returncode, local_path, "Resync")
+        result.returncode, local_path, "Resync", store=context.state_store or get_sync_state_store()
+    )
     log_message(f"Resync status for {local_path}: {sync_result}")
 
     return sync_result
@@ -160,8 +154,8 @@ def run_rclone_command(rclone_args, context):
         return subprocess.run(rclone_args, capture_output=True, text=True)
 
 
-def handle_rclone_exit_code(result_code, local_path, sync_type):
-
+def handle_rclone_exit_code(result_code, local_path, sync_type, store=None):
+    """Return COMPLETED or FAILED; record/clear sync error in store. Uses get_sync_state_store() when store is None."""
     messages = {
         0: "completed successfully",
         1: "Non-critical error. A rerun may be successful.",
@@ -175,10 +169,13 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
         9: "successful but no files were transferred.",
         10: "Duration limit exceeded, please check the logs for more information."
     }
-    message = messages.get(result_code, f"failed with an unknown error code {
-                           result_code}, please check the logs for more information.")
+    message = messages.get(
+        result_code,
+        f"failed with an unknown error code {result_code}, please check the logs for more information.",
+    )
 
-    store = get_sync_state_store()
+    if store is None:
+        store = get_sync_state_store()
     if result_code != 0 and result_code != 9:
         store.update_sync_error(local_path, sync_type, result_code, message)
     else:
@@ -193,11 +190,10 @@ def handle_rclone_exit_code(result_code, local_path, sync_type):
 
 
 def write_status(job_key, sync_status=None, resync_status=None, context=None):
-    c = getattr(config, "_config", None)
-    dry_run = context.dry_run if context is not None else (c.dry_run if c else False)
+    dry_run = context.dry_run if context is not None else False
     if dry_run:
         return
-    store = get_sync_state_store()
+    store = (getattr(context, "state_store", None) if context is not None else None) or get_sync_state_store()
     if sync_status is not None:
         store.sync_state.sync_status[job_key] = sync_status
     if resync_status is not None:
@@ -206,8 +202,8 @@ def write_status(job_key, sync_status=None, resync_status=None, context=None):
     store.save()
 
 
-def read_status(job_key):
-    store = get_sync_state_store()
+def read_status(job_key, context=None):
+    store = (getattr(context, "state_store", None) if context is not None else None) or get_sync_state_store()
     sync_status = store.sync_state.sync_status.get(job_key, "NONE")
     resync_status = store.sync_state.resync_status.get(job_key, "NONE")
     last_sync_time = store.sync_state.last_sync_times.get(job_key)

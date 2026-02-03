@@ -8,10 +8,9 @@ import traceback
 from rclone_bisync_manager.status_server import start_status_server
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.utils import check_and_create_lock_file
-from rclone_bisync_manager.scheduler import scheduler
 from rclone_bisync_manager.sync import perform_sync_operations
 from rclone_bisync_manager.sync_context import build_sync_context
-from rclone_bisync_manager.config import config, signal_handler
+from rclone_bisync_manager.config import signal_handler
 from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.daemon_state import DaemonRuntimeState
 import rclone_bisync_manager.daemon_state as state_module
@@ -27,16 +26,20 @@ from datetime import datetime
 import fcntl
 from croniter import croniter
 
+# Injected by run_daemon_start before DaemonContext; used by daemon_main and helpers.
+_daemon_config = None
+_daemon_scheduler = None
+
 
 def _run_main_loop(state, status_thread):
-    """Run the main daemon loop and graceful shutdown. Uses state_module.daemon_state, config, scheduler."""
+    """Run the main daemon loop and graceful shutdown. Uses state_module.daemon_state, _daemon_config, _daemon_scheduler."""
     last_config_check = time.time()
     config_check_interval = 1
 
     while state.running:
         current_time = time.time()
         if current_time - last_config_check >= config_check_interval:
-            config.check_config_changed()
+            _daemon_config.check_config_changed()
             last_config_check = current_time
 
         if not state.in_limbo and not state.config_invalid:
@@ -77,6 +80,9 @@ def _run_main_loop(state, status_thread):
 def daemon_main():
     """Run loop entry (child after fork): acquire lifecycle lock, state, signals, threads, config load, main loop, shutdown."""
     print("Entering daemon_main()")
+    if _daemon_config is None or _daemon_scheduler is None:
+        log_error("daemon_main called without injected config/scheduler (must be started via run_daemon_start).")
+        sys.exit(1)
 
     # --- Acquire lifecycle lock (child; parent lock was for start serialization only) ---
     lock_fd, error_message = check_and_create_lock_file()
@@ -87,7 +93,7 @@ def daemon_main():
 
     # --- State setup ---
     state = DaemonRuntimeState()
-    state.args = config.args
+    state.args = _daemon_config.args
     state.lock_fd = lock_fd
     state_module.daemon_state = state
 
@@ -104,7 +110,7 @@ def daemon_main():
         print("Starting status server thread")
         status_thread = threading.Thread(
             target=start_status_server,
-            kwargs={"handlers": {"RELOAD": reload_config}, "state": state, "config": config},
+            kwargs={"handlers": {"RELOAD": reload_config}, "state": state, "config": _daemon_config},
             daemon=True,
         )
         status_thread.start()
@@ -117,7 +123,7 @@ def daemon_main():
         # --- Config load (exit limbo on success) ---
         print("Attempting to load and validate config")
         try:
-            config.load_and_validate_config(config.args)
+            _daemon_config.load_and_validate_config(_daemon_config.args)
             print("Configuration loaded and validated successfully")
             log_message(
                 "Configuration loaded and validated successfully. Exiting limbo state.")
@@ -126,7 +132,7 @@ def daemon_main():
             state.config_error_message = None
             clear_crash_log()
             print("Scheduling tasks")
-            scheduler.schedule_tasks(config._config.sync_jobs, config._config.run_missed_jobs)
+            _daemon_scheduler.schedule_tasks(_daemon_config._config.sync_jobs, _daemon_config._config.run_missed_jobs)
         except Exception as e:
             error_trace = traceback.format_exc()
             error_message = f"Configuration error: {str(e)}\n{error_trace}"
@@ -166,7 +172,7 @@ def process_sync_queue():
     state = state_module.daemon_state
     if state is None:
         return
-    if not getattr(config, "_config", None):
+    if not getattr(_daemon_config, "_config", None):
         return
     while not state.sync_queue.empty() and not state.shutting_down:
         key = None
@@ -181,11 +187,15 @@ def process_sync_queue():
             else:
                 break
 
-        if key is not None and key in config._config.sync_jobs and not state.shutting_down:
-            ctx = build_sync_context(key, config)
-            perform_sync_operations(key, force_bisync, force_resync, context=ctx)
-            config._last_log_position = ctx.log_state.last_log_position
-
+        if key is not None and key not in _daemon_config._config.sync_jobs:
+            log_message(f"Skipping queued job '{key}': no longer in config.")
+        elif key is not None and key in _daemon_config._config.sync_jobs and not state.shutting_down:
+            try:
+                ctx = build_sync_context(key, _daemon_config)
+                perform_sync_operations(key, force_bisync, force_resync, context=ctx)
+                _daemon_config._last_log_position = ctx.log_state.last_log_position
+            except Exception as e:
+                log_error(f"Sync failed for job '{key}': {e}\n{traceback.format_exc()}")
         if key is not None:
             with state.sync_lock:
                 state.currently_syncing = None
@@ -196,22 +206,22 @@ def check_scheduled_tasks():
     state = state_module.daemon_state
     if state is None:
         return
-    if not getattr(config, "_config", None):
+    if not getattr(_daemon_config, "_config", None):
         return
     while True:
-        next_task = scheduler.get_next_task()
+        next_task = _daemon_scheduler.get_next_task()
         if next_task and not state.shutting_down:
             now = datetime.now()
             if now >= next_task.scheduled_time:
-                task = scheduler.pop_next_task()
-                if task.path_key not in config._config.sync_jobs:
+                task = _daemon_scheduler.pop_next_task()
+                if task.path_key not in _daemon_config._config.sync_jobs:
                     log_message(f"Skipping scheduled task: job '{task.path_key}' no longer in config.")
                     continue
                 add_to_sync_queue(task.path_key)
-                job_config = config._config.sync_jobs[task.path_key]
+                job_config = _daemon_config._config.sync_jobs[task.path_key]
                 cron = croniter(job_config.schedule, now)
                 next_run = cron.get_next(datetime)
-                scheduler.schedule_task(task.path_key, next_run)
+                _daemon_scheduler.schedule_task(task.path_key, next_run)
             else:
                 break
         else:
@@ -222,12 +232,12 @@ def add_to_sync_queue(key, force_bisync=False, resync=False):
     state = state_module.daemon_state
     if state is None:
         return
-    if not getattr(config, "_config", None) or key not in config._config.sync_jobs:
+    if not getattr(_daemon_config, "_config", None) or key not in _daemon_config._config.sync_jobs:
         log_message(f"Skipping add_to_sync_queue: job '{key}' not in config.")
         return
     if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
-        config._config.sync_jobs[key].force_operation = force_bisync
-        config._config.sync_jobs[key].force_resync = resync
+        _daemon_config._config.sync_jobs[key].force_operation = force_bisync
+        _daemon_config._config.sync_jobs[key].force_resync = resync
         state.sync_queue.put_nowait((key, force_bisync, resync))
         state.queued_paths.add(key)
 
@@ -291,19 +301,18 @@ def handle_add_sync_request():
             if job is None:
                 conn.sendall(b"ERROR: missing job_key")
                 continue
-            if not getattr(config, "_config", None):
+            if not getattr(_daemon_config, "_config", None):
                 conn.sendall(b"ERROR: config not loaded")
                 continue
             force_bisync = bool(sync_request.get('force_bisync', False))
             resync = bool(sync_request.get('resync', False))
 
-            if job in config._config.sync_jobs:
-                config._config.sync_jobs[job].force_operation = force_bisync
-                config._config.sync_jobs[job].force_resync = resync
+            if job in _daemon_config._config.sync_jobs:
+                _daemon_config._config.sync_jobs[job].force_operation = force_bisync
+                _daemon_config._config.sync_jobs[job].force_resync = resync
                 add_to_sync_queue(
                     job, force_bisync=force_bisync, resync=resync)
-                log_message(f"Added sync job '{job}' to queue (Force bisync: {
-                            force_bisync}, Resync: {resync})")
+                log_message(f"Added sync job '{job}' to queue (Force bisync: {force_bisync}, Resync: {resync})")
                 conn.sendall(b"OK")
             else:
                 log_error(f"Sync job '{job}' not found in configuration")
@@ -335,13 +344,13 @@ def reload_config():
     state = state_module.daemon_state
     if state is None:
         return False
-    args = state.args if state.args is not None else config.args
+    args = state.args if state.args is not None else _daemon_config.args
     try:
-        config.load_and_validate_config(args)
-        config.reset_config_changed_flag()  # Only clear after successful load so status never briefly reports False before apply
+        _daemon_config.load_and_validate_config(args)
+        _daemon_config.reset_config_changed_flag()  # Only clear after successful load so status never briefly reports False before apply
         log_message("Config reloaded successfully.")
-        scheduler.clear_tasks()
-        scheduler.schedule_tasks(config._config.sync_jobs, config._config.run_missed_jobs)
+        _daemon_scheduler.clear_tasks()
+        _daemon_scheduler.schedule_tasks(_daemon_config._config.sync_jobs, _daemon_config._config.run_missed_jobs)
         state.config_invalid = False
         state.in_limbo = False
         state.config_error_message = None

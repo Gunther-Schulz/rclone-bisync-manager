@@ -26,7 +26,7 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 
 ## Improvements
 
-- [ ] Refactor to eliminate `global` keyword (if possible).
+- [ ] Refactor to eliminate remaining `global` keyword (config in config.py, scheduler in scheduler.py, logger/config in logging_utils) — daemon path now uses injected _daemon_config/_daemon_scheduler.
 
 ## Issues and hardening
 
@@ -43,21 +43,24 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 - Optional retry for STOP/status when daemon busy; tray uses retries.
 - Log: log_file_path from YAML; RotatingFileHandler; optional log_rotation_max_mb / log_rotation_backup_count in config.
 - Pre-commit hook: `githooks/pre-commit` runs pytest; install with `git config core.hooksPath githooks`.
+- **Refactor (CLIPPY):** sync decoupled from global config (perform_sync_operations requires context; SyncContext.state_store; write_status/read_status/handle_rclone_exit_code use context.store or fallback). Daemon path uses injected _daemon_config and _daemon_scheduler (set in run_daemon_start before DaemonContext). Exception handling: run_sync and process_sync_queue catch sync failures and log (with traceback in daemon); skip logging when queued job no longer in config.
 
 ---
 
 ## Refactor status (done vs left)
 
+Verified in code 2025-02-02; updated after refactor implementation.
+
 | # | Topic | Done | Left |
 |---|--------|------|------|
-| 1 | Global state | DaemonRuntimeState, SyncStateStore. | `config` still global (80+ refs). scheduler/logger global. |
+| 1 | Global state | DaemonRuntimeState, SyncStateStore. Daemon path: _daemon_config, _daemon_scheduler injected by run_daemon_start (no config/scheduler import in daemon_functions). | `config` still global (config.py; main/commands/CLI). `scheduler` global (scheduler.py). `logger`/config in logging_utils. |
 | 2 | main / orchestration | Thin main → run_command; commands.py; runtime_paths + daemon_client. Daemon phases (Bootstrap / Lock / Daemonize / Run loop). | — |
-| 3 | Paths | runtime_paths.py: sockets, lock, crash log; env override (RCLONE_BISYNC_MANAGER_RUNTIME_DIR, XDG_RUNTIME_DIR). | — |
-| 4 | Config class | SyncStateStore, DaemonRuntimeState, LogStatePersistence (Config properties). | Config still: file path, load/validate, status_file_path, "config changed" / mtime. |
-| 5 | Coupling | status_server accepts handlers + state + config; no reload_config import. Scheduler/sync use get_sync_state_store(). | sync still imports config (_last_log_position, _config). |
+| 3 | Paths | runtime_paths.py: sockets, lock, crash log; env_dir(RCLONE_BISYNC_MANAGER_RUNTIME_DIR, XDG_RUNTIME_DIR). | — |
+| 4 | Config class | LogStatePersistence as Config property (_log_state). SyncStateStore/DaemonRuntimeState are separate (not Config props). | Config still: config_file, load_and_validate_config, status_file_path, check_config_changed / last_config_mtime. |
+| 5 | Coupling | status_server(handlers=, state=, config=). sync no longer imports config; uses context.state_store, context.dry_run; callers set _last_log_position. | — |
 | 6 | Tray vs core | Shared daemon_client, status_protocol, runtime_paths. DaemonState + status_to_display_state. Unified logging_utils. | — |
 | 7 | Logging | Core and tray: logging_utils (log_message, log_error, set_config, setup_loggers). | — |
-| 8 | Error / exit | main sys.exit(result); crash log in runtime_paths (clear/write/read). | Mixed sys.exit(1)/return 1 elsewhere. |
-| 9 | Sync / scheduler | SyncContext + build_sync_context; perform_sync_operations(..., context=ctx). Scheduler takes sync_jobs/run_missed_jobs. | sync still uses get_sync_state_store() and config._config; no injected state writer. |
-| 10 | Python 3.14 | pyproject 3.12+; type annotations in status_protocol, runtime_paths; DEV.md free-threading note. | No shared TypedDict for status; globals remain. |
-| 11 | "Refactor first" | Paths, daemon client, protocol, main thin, DaemonRuntimeState, SyncStateStore, LogStatePersistence, tray shared DTO + logging, crash log in runtime_paths. | Immutable "loaded config" vs Config not done. Sync state writer injection not done. |
+| 8 | Error / exit | main sys.exit(result); crash log in runtime_paths (clear/write/read). | commands.py: return 1 in many branches, sys.exit(1) once; daemon_functions: sys.exit(1). |
+| 9 | Sync / scheduler | SyncContext + build_sync_context(..., state_store=); perform_sync_operations(..., context=ctx) requires context; context.state_store used; handle_rclone_exit_code(..., store=). | — |
+| 10 | Python 3.14 | pyproject requires-python ">=3.12"; type annotations in status_protocol, runtime_paths. | DEV.md has no free-threading note. No shared TypedDict for status; globals remain. |
+| 11 | "Refactor first" | Paths, daemon client, protocol, main thin, DaemonRuntimeState, SyncStateStore, LogStatePersistence, tray shared DTO + logging, crash log, sync decouple, daemon injection. | Immutable "loaded config" vs Config not done. |

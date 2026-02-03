@@ -10,7 +10,9 @@ import daemon
 
 from rclone_bisync_manager.config import config, signal_handler
 from rclone_bisync_manager.daemon_client import request_add_sync, request_reload
+import rclone_bisync_manager.daemon_functions as daemon_functions
 from rclone_bisync_manager.daemon_functions import daemon_main, print_daemon_status, stop_daemon
+from rclone_bisync_manager.scheduler import SyncScheduler
 from rclone_bisync_manager.logging_utils import (
     ensure_log_file_path,
     log_config_file_location,
@@ -90,6 +92,8 @@ def run_daemon_start(args, config_obj):
         # --- Daemonize: child runs run loop; parent exits ---
         print("Starting daemon process...")
         log_message("Starting daemon in limbo state...")
+        daemon_functions._daemon_config = config_obj
+        daemon_functions._daemon_scheduler = SyncScheduler()
         with daemon.DaemonContext(
             working_directory="/",
             umask=0o002,
@@ -171,13 +175,17 @@ def run_sync(args, config_obj):
         for key in paths_to_sync:
             ctx = build_sync_context(key, config_obj)
             force_resync = (key in resync_jobs) or getattr(config_obj._config, "force_resync", False)
-            perform_sync_operations(
-                key,
-                force_bisync=force_bisync_global,
-                force_resync=force_resync,
-                context=ctx,
-            )
-            config_obj._last_log_position = ctx.log_state.last_log_position
+            try:
+                perform_sync_operations(
+                    key,
+                    force_bisync=force_bisync_global,
+                    force_resync=force_resync,
+                    context=ctx,
+                )
+                config_obj._last_log_position = ctx.log_state.last_log_position
+            except Exception as e:
+                print(f"Error syncing job '{key}': {e}")
+                return 1
         return 0
     finally:
         release_sync_lock(lock_fd)
