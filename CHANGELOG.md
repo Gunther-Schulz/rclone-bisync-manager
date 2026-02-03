@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0b1] - Beta (2025-02-03)
+
+### Changed
+
+- **Packaging:** Tray is now part of the main app. Single package provides both `rclone-bisync-manager` (daemon/CLI) and `rclone-bisync-manager-tray`; separate tray package is deprecated.
+- **AUR:** `rclone-bisync-manager-git` installs tray desktop file and icon, and adds tray dependencies (python-pillow, python-gobject, python-cairosvg) and optdepends (libappindicator, gtk3, libnotify). `rclone-bisync-manager-tray-git` is no longer needed.
+
+### Project
+
+- Version set to `0.4.0b1` (beta 0.4).
+
+---
+
 ## [0.3.0b1] - Beta (2025-02-02)
 
 First beta release. Suitable for production use with backups; please report bugs.
@@ -44,5 +57,6 @@ First beta release. Suitable for production use with backups; please report bugs
 
 - **0.2.0a1** and prior: Alpha releases; initial daemon, tray, scheduler, and rclone bisync integration.
 
-[Unreleased]: https://github.com/Gunther-Schulz/rclone-bisync-manager/compare/v0.3.0b1...HEAD
+[Unreleased]: https://github.com/Gunther-Schulz/rclone-bisync-manager/compare/v0.4.0b1...HEAD
+[0.4.0b1]: https://github.com/Gunther-Schulz/rclone-bisync-manager/compare/v0.3.0b1...v0.4.0b1
 [0.3.0b1]: https://github.com/Gunther-Schulz/rclone-bisync-manager/compare/v0.2.0a1...v0.3.0b1
