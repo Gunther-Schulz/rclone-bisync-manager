@@ -4,6 +4,7 @@ import shutil
 import hashlib
 
 import psutil
+from rclone_bisync_manager.env_helpers import env_dir
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import config
 from rclone_bisync_manager.runtime_paths import get_lock_file_path
@@ -58,8 +59,8 @@ def check_tools():
 
 
 def ensure_rclone_dir():
-    home = os.environ.get('HOME') or os.path.expanduser('~')
-    rclone_dir = os.path.join(home, '.cache', 'rclone', 'bisync')
+    home = os.path.expanduser(env_dir("HOME", "~"))
+    rclone_dir = os.path.join(home, ".cache", "rclone", "bisync")
     if not os.access(rclone_dir, os.W_OK):
         os.makedirs(rclone_dir, exist_ok=True)
         os.chmod(rclone_dir, 0o777)

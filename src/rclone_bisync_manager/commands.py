@@ -19,6 +19,7 @@ from rclone_bisync_manager.logging_utils import (
     set_config,
     setup_loggers,
 )
+from rclone_bisync_manager.env_helpers import env_dir
 from rclone_bisync_manager.runtime_paths import get_lock_file_path
 from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.sync import perform_sync_operations
@@ -69,7 +70,7 @@ def _bootstrap_for_daemon(args, config_obj):
     check_tools()
     ensure_rclone_dir()
     handle_filter_changes()
-    if not os.environ.get("HOME"):
+    if not env_dir("HOME", ""):
         raise ValueError("Unable to determine home directory")
 
 

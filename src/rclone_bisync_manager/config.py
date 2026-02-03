@@ -5,14 +5,12 @@ from croniter import croniter
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, DirectoryPath
 from rclone_bisync_manager.logging_utils import log_message, log_error
+from rclone_bisync_manager.env_helpers import env_dir
 
 
 def _xdg_base(key: str, fallback_path: str) -> str:
     """Return XDG env value or expanded fallback. Treats empty/unset as use fallback (XDG spec)."""
-    v = os.environ.get(key)
-    if v is None or (isinstance(v, str) and not v.strip()):
-        return os.path.expanduser(fallback_path)
-    return v.strip()
+    return os.path.expanduser(env_dir(key, fallback_path))
 
 
 class OptionsValidatorMixin(BaseModel):

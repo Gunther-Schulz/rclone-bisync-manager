@@ -3,17 +3,16 @@
 import os
 from pathlib import Path
 
+from rclone_bisync_manager.env_helpers import env_dir
+
 # Base directory for runtime files; overridable via env (e.g. tests, XDG_RUNTIME_DIR).
-# Treat empty env as unset so we don't use relative paths.
-def _runtime_base_dir() -> Path:
-    for key in ("RCLONE_BISYNC_MANAGER_RUNTIME_DIR", "XDG_RUNTIME_DIR"):
-        v = os.environ.get(key)
-        if v is not None and isinstance(v, str) and v.strip():
-            return Path(v.strip())
-    return Path("/tmp")
-
-
-_runtime_base = _runtime_base_dir()
+# Empty env = unset (see env_helpers.env_dir).
+_base = (
+    env_dir("RCLONE_BISYNC_MANAGER_RUNTIME_DIR", "")
+    or env_dir("XDG_RUNTIME_DIR", "")
+    or "/tmp"
+)
+_runtime_base = Path(_base)
 
 
 def get_status_socket_path() -> str:
