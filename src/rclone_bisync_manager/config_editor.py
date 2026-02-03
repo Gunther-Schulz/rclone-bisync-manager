@@ -2,6 +2,7 @@
 
 import copy
 import logging
+import os
 import re
 import yaml
 
@@ -151,12 +152,36 @@ def _safe_yaml_load(text):
         return text  # fallback to string if invalid YAML
 
 
+def _config_for_save(c):
+    """Return a copy of config with None and empty dict omitted (minimal file, preserves hand-added keys)."""
+    if c is None:
+        return None
+    if isinstance(c, dict):
+        out = {}
+        for k, v in c.items():
+            vn = _config_for_save(v)
+            if vn is None:
+                continue
+            if isinstance(vn, dict) and len(vn) == 0:
+                continue
+            out[k] = vn
+        return out
+    if isinstance(c, list):
+        return [_config_for_save(x) for x in c]
+    return c
+
+
 def edit_config_gtk(config_file_path):
     """Open GTK config editor for the given config file. No-op if GTK unavailable."""
     if not _GTK_AVAILABLE or Gtk is None:
         return
     with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
         config = yaml.safe_load(f.read()) or {}
+    # Track file mtime to detect external edits (hand-edits, another process).
+    try:
+        _file_mtime = os.path.getmtime(config_file_path)
+    except OSError:
+        _file_mtime = None
     # Cache original values so Revert restores state from when editor was opened (even after Save).
     config_original = copy.deepcopy(config)
     # What we last wrote to disk (or initial load). Used for dirty indicator: current widgets vs this.
@@ -416,7 +441,7 @@ def edit_config_gtk(config_file_path):
         return built
 
     def _normalize_for_compare(c):
-        """Normalize so empty string/missing/None are comparable; drop dict keys with None value.
+        """Normalize so empty string/missing/None/empty-dict are comparable; drop dict keys with None or {} value.
         Option-like strings (e.g. log_level) are normalized to canonical form (case-insensitive)."""
         if c is None:
             return None
@@ -426,7 +451,15 @@ def edit_config_gtk(config_file_path):
             low = c.strip().lower()
             return _OPTION_CANONICAL.get(low, c)
         if isinstance(c, dict):
-            return {k: v for k, v in ((k, _normalize_for_compare(v)) for k, v in c.items()) if v is not None}
+            out = {}
+            for k, v in c.items():
+                vn = _normalize_for_compare(v)
+                if vn is None:
+                    continue
+                if isinstance(vn, dict) and len(vn) == 0:
+                    continue  # treat empty dict same as missing key
+                out[k] = vn
+            return out
         if isinstance(c, list):
             return [_normalize_for_compare(x) for x in c]
         return c
@@ -496,51 +529,84 @@ def edit_config_gtk(config_file_path):
         dlg.run()
         dlg.destroy()
 
+    def reload_from_disk(btn=None):
+        """Re-read config from disk and repopulate widgets. Preserves hand-added keys."""
+        nonlocal config, config_original, last_saved_config, _file_mtime
+        try:
+            with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
+                config = yaml.safe_load(f.read()) or {}
+        except OSError as e:
+            dlg = Gtk.MessageDialog(
+                transient_for=win, flags=0,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text=f"Could not read config file: {e}",
+            )
+            dlg.run()
+            dlg.destroy()
+            return
+        try:
+            _file_mtime = os.path.getmtime(config_file_path)
+        except OSError:
+            _file_mtime = None
+        config_original = copy.deepcopy(config)
+        last_saved_config = copy.deepcopy(config)
+        for path, (w, t) in widgets.items():
+            val = _get_by_path(config, path)
+            set_widget_value(w, t, val)
+        update_dirty_indicator()
+        dlg = Gtk.MessageDialog(
+            transient_for=win, flags=0,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text="Reloaded from disk. Any unsaved editor changes were discarded.",
+        )
+        dlg.run()
+        dlg.destroy()
+
     def save_config_gtk(btn):
+        # Build full config from widgets (preserves keys we don't have widgets for).
         for path, (w, t) in widgets.items():
             val = get_widget_value(w, t)
             _set_by_path(config, path, val)
-        with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-
-        def update_value(lines, path, value):
-            if not path:
-                return False
-            if value is None:
-                value = ""
-            if isinstance(value, (list, dict)):
-                value_str = yaml.dump(value, default_flow_style=False, allow_unicode=True).strip()
-            else:
-                value_str = str(value)
-            pat = re.compile(r"^(\s*{}: ).*$".format(re.escape(path)))
-            for i, line in enumerate(lines):
-                if pat.match(line):
-                    prefix = pat.match(line).group(1)
-                    if "\n" in value_str:
-                        parts = value_str.split("\n")
-                        lines[i] = prefix + parts[0] + "\n"
-                        for j, rest in enumerate(parts[1:]):
-                            lines.insert(i + 1 + j, "  " + rest + "\n")
-                    else:
-                        lines[i] = prefix + value_str + "\n"
-                    return True
-            return False
-
-        def update_config_lines(cdict, pfx=""):
-            for key, value in cdict.items():
-                full_key = f"{pfx}{key}" if pfx else key
-                if isinstance(value, dict) and not (key in ("rclone_options", "bisync_options", "resync_options") or pfx.startswith("sync_jobs.")):
-                    update_config_lines(value, f"{full_key}.")
-                else:
-                    if not update_value(lines, full_key, value):
-                        val_str = yaml.dump(value, default_flow_style=False, allow_unicode=True).strip() if isinstance(value, (list, dict)) else str(value)
-                        lines.append(f"{full_key}: {val_str}\n")
-
-        update_config_lines(config)
+        # Check if file was modified on disk (hand-edit, another process).
+        try:
+            current_mtime = os.path.getmtime(config_file_path)
+        except OSError:
+            current_mtime = None
+        if _file_mtime is not None and current_mtime is not None and current_mtime != _file_mtime:
+            dlg = Gtk.MessageDialog(
+                transient_for=win, flags=0,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.NONE,
+                text="The config file was modified on disk.",
+            )
+            dlg.add_buttons(
+                "Reload from disk", Gtk.ResponseType.REJECT,
+                "Overwrite", Gtk.ResponseType.ACCEPT,
+                "Cancel", Gtk.ResponseType.CANCEL,
+            )
+            dlg.format_secondary_text(
+                "Reload discards your editor changes. Overwrite saves your current editor contents to the file."
+            )
+            res = dlg.run()
+            dlg.destroy()
+            if res == Gtk.ResponseType.CANCEL:
+                return
+            if res == Gtk.ResponseType.REJECT:
+                reload_from_disk()
+                return
+            # Overwrite: fall through and save
+        # Normalize for save: omit None and empty dict so file stays minimal.
+        to_write = _config_for_save(config)
         with open(config_file_path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
+            yaml.dump(to_write, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        try:
+            _file_mtime = os.path.getmtime(config_file_path)
+        except OSError:
+            pass
         last_saved_config.clear()
-        last_saved_config.update(copy.deepcopy(config))
+        last_saved_config.update(copy.deepcopy(to_write))
         update_dirty_indicator()
         dlg = Gtk.MessageDialog(
             transient_for=win, flags=0,
@@ -551,6 +617,25 @@ def edit_config_gtk(config_file_path):
         dlg.run()
         dlg.destroy()
         win.destroy()
+
+    def check_file_changed_on_disk():
+        """If file mtime changed on disk, show hint on status label (non-blocking)."""
+        if _file_mtime is None:
+            return
+        try:
+            current = os.path.getmtime(config_file_path)
+        except OSError:
+            return
+        if current != _file_mtime:
+            status_label.set_text("File changed on disk — use Reload from disk to load.")
+            if Gdk is not None:
+                status_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.75, 0.4, 0.0, 1.0))
+            status_label.set_tooltip_text("The config file was modified outside the editor. Click Reload from disk to load the latest version.")
+
+    def on_window_focus_in(win, event):
+        check_file_changed_on_disk()
+
+    win.connect("focus-in-event", on_window_focus_in)
 
     for path, (w, t) in widgets.items():
         connect_widget_change(w, t)
@@ -565,6 +650,10 @@ def edit_config_gtk(config_file_path):
     vbox.pack_start(status_label, False, False, 0)
     btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     btn_box.set_margin_top(4)
+    reload_btn = Gtk.Button(label="Reload from disk")
+    reload_btn.set_tooltip_text("Re-read the config file from disk and discard any unsaved editor changes.")
+    reload_btn.connect("clicked", reload_from_disk)
+    btn_box.pack_start(reload_btn, False, False, 0)
     revert_btn = Gtk.Button(label="Revert")
     revert_btn.set_tooltip_text("Restore all fields to the values from when the editor was opened (before any edits or saves).")
     revert_btn.connect("clicked", revert_config)
