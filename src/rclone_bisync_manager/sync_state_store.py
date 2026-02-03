@@ -147,14 +147,14 @@ class SyncStateStore:
             self._save_sync_errors()
 
 
-_store = None
+# Mutable ref so get_sync_state_store can assign without global keyword
+_store_ref = [None]
 
 
 def get_sync_state_store():
     """Return the singleton SyncStateStore, creating and loading it on first use."""
-    global _store
-    if _store is None:
+    if _store_ref[0] is None:
         from rclone_bisync_manager.config import config
-        _store = SyncStateStore(config.cache_dir)
-        _store.load()
-    return _store
+        _store_ref[0] = SyncStateStore(config.cache_dir)
+        _store_ref[0].load()
+    return _store_ref[0]

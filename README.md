@@ -4,7 +4,7 @@
 
 A daemon-based manager for automated, bidirectional file sync using [rclone bisync](https://rclone.org/commands/rclone_bisync/). Configure multiple jobs with cron schedules, global and per-job rclone options, and optional system-tray control.
 
-**Note:** This project is under active development and not yet recommended for production use.
+**Note:** Beta — suitable for production use with backups; please report bugs. See [Disclaimer](#rclone-bisync-manager) below.
 
 **Disclaimer:** Use at your own risk. Data loss is possible with any sync application—misconfiguration, bugs, or conflicts can affect your files. The risk is reduced because the actual sync is performed by [rclone](https://rclone.org/), which is mature and widely used; this app only schedules and invokes rclone. Still, keep backups of important data and test with non-critical paths first.
 

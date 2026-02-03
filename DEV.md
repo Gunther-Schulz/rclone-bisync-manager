@@ -1,36 +1,65 @@
+# Development
+
+Quick reference for setting up, running, and testing the app locally.
+
+---
+
+## Setup
+
+**Venv and install:**
+
 ```bash
 python -m venv .venv
-# Activate (use one):
-source .venv/bin/activate      # Bash/Zsh (Linux/macOS)
-source .venv/bin/activate.fish # Fish
-# .venv\Scripts\activate       # Windows (cmd/PowerShell)
+source .venv/bin/activate   # Bash/Zsh (Linux/macOS)
+# source .venv/bin/activate.fish  # Fish
+# .venv\Scripts\activate          # Windows
 pip install -e .
 ```
 
-## How to run
-
-**CLI** (after `pip install -e .`):
-- `rclone-bisync-manager daemon start|stop|status|reload` — daemon lifecycle
-- `rclone-bisync-manager sync [job ...]` — run sync (optionally `--resync`, `--force-bisync`)
-- `rclone-bisync-manager add-sync JOB ...` — queue job(s)
-
-**Global options (CLI):** `--console-log` (log to console), `-d`/`--dry-run`, `--config PATH`
-
-**Tray:** `rclone-bisync-manager-tray`  
-Options: `--log-level DEBUG|INFO|WARNING|ERROR|CRITICAL` (default NONE), `--enable-experimental`, `--config PATH`, `--icon-style 1|2`, `--icon-thickness N`
-
-**Debug:** Use `--console-log` for daemon/sync so logs go to stdout; use `--log-level DEBUG` (or INFO) for the tray.
-
-## Tests
-
-Run tests: `pytest tests/ -v` (from repo root; requires `pip install -e ".[dev]"` so pytest and the package are available).
-
-**Pre-commit hook (run tests before each commit):**  
-Install once so git uses the repo’s hooks:
+**With tests (pytest):**
 
 ```bash
+pip install -e ".[dev]"
+```
+
+**Fish shell (full dev setup + hook):**
+
+```fish
+python -m venv .venv
+source .venv/bin/activate.fish
+pip install -e ".[dev]"
 git config core.hooksPath githooks
 ```
 
-Then every `git commit` runs `pytest tests/ -q`; the commit is aborted if tests fail. To skip the hook once: `git commit --no-verify`.
+**Tray (system deps):** GTK3, AppIndicator, libnotify — see [ARCH_AND_AUR_DEPENDENCIES.md](ARCH_AND_AUR_DEPENDENCIES.md) for Arch packages.
 
+---
+
+## Run
+
+**CLI** (from repo root or after `pip install -e .`):
+
+- `rclone-bisync-manager daemon start|stop|status|reload` — daemon
+- `rclone-bisync-manager sync [job ...]` — one-off sync (`--resync`, `--force-bisync` optional)
+- `rclone-bisync-manager add-sync JOB ...` — queue jobs while daemon runs
+- `rclone-bisync-manager --version` — show version
+
+**Global options:** `--config PATH`, `-d`/`--dry-run`, `--console-log`
+
+**Tray:** `rclone-bisync-manager-tray`  
+Options: `--config PATH`, `--log-level DEBUG|INFO|...`, `--icon-style 1|2`, `--icon-thickness N`, `--enable-experimental`
+
+**Debug:** `--console-log` for daemon/sync (logs to stdout); `--log-level DEBUG` for tray.
+
+---
+
+## Tests
+
+- **Run:** `pytest tests/ -v` (from repo root; needs `pip install -e ".[dev]"`).
+- **Pre-commit hook:** Install once so tests run before each commit:
+
+  ```bash
+  git config core.hooksPath githooks
+  ```
+
+  Commit is aborted if tests fail. Skip once: `git commit --no-verify`.

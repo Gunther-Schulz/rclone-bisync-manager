@@ -26,7 +26,7 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 
 ## Improvements
 
-- [ ] Refactor to eliminate remaining `global` keyword (config in config.py, scheduler in scheduler.py, logger/config in logging_utils) — daemon path now uses injected _daemon_config/_daemon_scheduler.
+- [ ] Refactor to eliminate remaining `global` keyword in system_tray.py (config/scheduler/logger done: daemon uses injection; logging_utils and sync_state_store use mutable refs, no global keyword).
 
 ## Issues and hardening
 
@@ -53,7 +53,7 @@ Verified in code 2025-02-02; updated after refactor implementation.
 
 | # | Topic | Done | Left |
 |---|--------|------|------|
-| 1 | Global state | DaemonRuntimeState, SyncStateStore. Daemon path: _daemon_config, _daemon_scheduler injected by run_daemon_start (no config/scheduler import in daemon_functions). | `config` still global (config.py; main/commands/CLI). `scheduler` global (scheduler.py). `logger`/config in logging_utils. |
+| 1 | Global state | DaemonRuntimeState, SyncStateStore. Daemon path: _daemon_config, _daemon_scheduler injected. logging_utils/sync_state_store use refs (no global keyword). | `config`/scheduler still module-level (main/commands/CLI). Remaining `global` only in system_tray.py. |
 | 2 | main / orchestration | Thin main → run_command; commands.py; runtime_paths + daemon_client. Daemon phases (Bootstrap / Lock / Daemonize / Run loop). | — |
 | 3 | Paths | runtime_paths.py: sockets, lock, crash log; env_dir(RCLONE_BISYNC_MANAGER_RUNTIME_DIR, XDG_RUNTIME_DIR). | — |
 | 4 | Config class | LogStatePersistence as Config property (_log_state). SyncStateStore/DaemonRuntimeState are separate (not Config props). | Config still: config_file, load_and_validate_config, status_file_path, check_config_changed / last_config_mtime. |

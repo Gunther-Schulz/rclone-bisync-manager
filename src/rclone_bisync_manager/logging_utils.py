@@ -3,7 +3,9 @@ import logging.handlers
 import os
 import sys
 
-config = None  # We'll set this later
+# Mutable ref so set_config/setup_loggers can assign without global keyword
+_config_ref = [None]
+logger_ref = [None]
 
 # Defaults for log rotation when not set in config (max size in MB, converted to bytes for RotatingFileHandler)
 DEFAULT_LOG_MAX_MB = 5
@@ -17,7 +19,8 @@ class BasicLogger:
     """Logger that only prints to console (used when no log file is configured, e.g. tray)."""
 
     def _should_print(self, level):
-        min_level = getattr(config, "min_console_level", 0) if config else 0
+        cfg = _config_ref[0]
+        min_level = getattr(cfg, "min_console_level", 0) if cfg else 0
         return not min_level or level >= min_level
 
     def error(self, message):
@@ -39,8 +42,8 @@ class BasicLogger:
             self.info(message)
 
 
-# Fallback when no file logging is configured
-logger = BasicLogger()
+# Fallback when no file logging is configured (ref so setup_loggers can replace without global)
+logger_ref[0] = BasicLogger()
 
 
 class StdLibLogger:
@@ -57,18 +60,20 @@ class StdLibLogger:
 
 
 def ensure_log_file_path():
-    if config and getattr(config, "log_file_path", None):
-        log_dir = os.path.dirname(config.log_file_path)
+    cfg = _config_ref[0]
+    if cfg and getattr(cfg, "log_file_path", None):
+        log_dir = os.path.dirname(cfg.log_file_path)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
 
 
 def _get_rotation_params():
     """Return (maxBytes, backupCount) from config or defaults. Config uses MB for max size; invalid values fall back to defaults."""
-    if not config:
+    cfg = _config_ref[0]
+    if not cfg:
         return DEFAULT_LOG_MAX_MB * 1024 * 1024, DEFAULT_LOG_BACKUP_COUNT
-    max_mb = getattr(config, "log_rotation_max_mb", None)
-    backup_count = getattr(config, "log_rotation_backup_count", None)
+    max_mb = getattr(cfg, "log_rotation_max_mb", None)
+    backup_count = getattr(cfg, "log_rotation_backup_count", None)
     if max_mb is None or max_mb <= 0:
         max_mb = DEFAULT_LOG_MAX_MB
     if backup_count is None or backup_count < 0:
@@ -77,17 +82,17 @@ def _get_rotation_params():
 
 
 def setup_loggers(console_log=False):
-    global logger, config
-    if config:
-        config.console_log = console_log
+    cfg = _config_ref[0]
+    if cfg:
+        cfg.console_log = console_log
     # Use stdlib logger for all output; add/remove handlers based on config
     _stdlib_logger.setLevel(logging.DEBUG)
     _stdlib_logger.handlers.clear()
-    if config and getattr(config, "log_file_path", None):
+    if cfg and getattr(cfg, "log_file_path", None):
         ensure_log_file_path()
         max_bytes, backup_count = _get_rotation_params()
         file_handler = logging.handlers.RotatingFileHandler(
-            config.log_file_path,
+            cfg.log_file_path,
             maxBytes=max_bytes,
             backupCount=backup_count,
             encoding="utf-8",
@@ -97,12 +102,12 @@ def setup_loggers(console_log=False):
             logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         )
         _stdlib_logger.addHandler(file_handler)
-        logger = StdLibLogger()
+        logger_ref[0] = StdLibLogger()
     else:
-        logger = BasicLogger()
+        logger_ref[0] = BasicLogger()
     # Only add console handlers when using file logging (StdLibLogger); BasicLogger prints directly.
-    if config and getattr(config, "console_log", False) and getattr(config, "log_file_path", None):
-        min_console = getattr(config, "min_console_level", logging.INFO)
+    if cfg and getattr(cfg, "console_log", False) and getattr(cfg, "log_file_path", None):
+        min_console = getattr(cfg, "min_console_level", logging.INFO)
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setLevel(min_console)
         stream_handler.addFilter(lambda r: r.levelno < logging.ERROR)  # INFO/WARNING to stdout only
@@ -116,12 +121,12 @@ def setup_loggers(console_log=False):
 
 def log_message(message, level=logging.INFO):
     """Log to file and/or console. BasicLogger prints directly; StdLibLogger uses handlers."""
-    logger.log(level, message)
+    (logger_ref[0] or BasicLogger()).log(level, message)
 
 
 def log_error(message):
     """Log error to file and/or console."""
-    logger.error(message)
+    (logger_ref[0] or BasicLogger()).error(message)
 
 
 def log_config_file_location(config_file):
@@ -129,5 +134,4 @@ def log_config_file_location(config_file):
 
 
 def set_config(cfg):
-    global config
-    config = cfg
+    _config_ref[0] = cfg
