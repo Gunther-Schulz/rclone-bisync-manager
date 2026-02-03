@@ -418,7 +418,7 @@ RClone BiSync Manager provides comprehensive error handling and logging:
 
 You can view the full log file location in the status report or system tray application.
 
-Runtime paths (status socket, add-sync socket, lock file, crash log) default to `/tmp`. You can override the base directory with `RCLONE_BISYNC_MANAGER_RUNTIME_DIR` or `XDG_RUNTIME_DIR` (e.g. for per-user or container runs).
+Runtime paths (status socket, add-sync socket, lock file, crash log) use the first of: `RCLONE_BISYNC_MANAGER_RUNTIME_DIR`, `XDG_RUNTIME_DIR`, or `/tmp`. Empty or unset env vars are ignored, so the next option is used.
 
 ## Status Server
 

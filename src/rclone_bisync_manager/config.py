@@ -7,6 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rclone_bisync_manager.logging_utils import log_message, log_error
 
 
+def _xdg_base(key: str, fallback_path: str) -> str:
+    """Return XDG env value or expanded fallback. Treats empty/unset as use fallback (XDG spec)."""
+    v = os.environ.get(key)
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return os.path.expanduser(fallback_path)
+    return v.strip()
+
+
 class OptionsValidatorMixin(BaseModel):
     rclone_options: Dict[str, Any] = Field(default_factory=dict)
     bisync_options: Dict[str, Any] = Field(default_factory=dict)
@@ -73,7 +81,7 @@ class ConfigSchema(OptionsValidatorMixin):
 
     # Path to log file
     log_file_path: str = Field(default_factory=lambda: os.path.join(
-        os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')),
+        _xdg_base('XDG_STATE_HOME', '~/.local/state'),
         'rclone-bisync-manager',
         'logs',
         'rclone-bisync-manager.log'
@@ -163,8 +171,8 @@ class LogStatePersistence:
 
 class Config:
     def __init__(self):
-        self.default_config_file = os.path.join(os.environ.get(
-            'XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'rclone-bisync-manager', 'config.yaml')
+        self.default_config_file = os.path.join(
+            _xdg_base('XDG_CONFIG_HOME', '~/.config'), 'rclone-bisync-manager', 'config.yaml')
         self.config_file = self.default_config_file
         self._config = None
         self.args = None
@@ -192,13 +200,13 @@ class Config:
         return self._log_state.hash_warnings
 
     def _init_file_paths(self):
-        self.cache_dir = os.path.join(os.environ.get(
-            'XDG_CACHE_HOME', os.path.expanduser('~/.cache')), 'rclone-bisync-manager')
+        self.cache_dir = os.path.join(
+            _xdg_base('XDG_CACHE_HOME', '~/.cache'), 'rclone-bisync-manager')
         self.rclone_test_file_name = "RCLONE_TEST"
 
     def _init_logging_paths(self):
-        self.default_log_dir = os.path.join(os.environ.get(
-            'XDG_STATE_HOME', os.path.expanduser('~/.local/state')), 'rclone-bisync-manager', 'logs')
+        self.default_log_dir = os.path.join(
+            _xdg_base('XDG_STATE_HOME', '~/.local/state'), 'rclone-bisync-manager', 'logs')
         self.log_file_path = os.path.join(
             self.default_log_dir, 'rclone-bisync-manager.log')
         self.log_rotation_max_mb = None
