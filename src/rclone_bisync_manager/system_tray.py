@@ -77,6 +77,9 @@ def set_tray_state(state):
 # Minimum time (seconds) to show syncing icon so quick syncs still give visible feedback
 MIN_SYNC_FEEDBACK_SECONDS = 2.0
 
+# Consecutive None polls after which we clear last_status so UI shows OFFLINE (single source of truth)
+OFFLINE_CLEAR_AFTER_MISSES = 5
+
 
 class Colors:
     YELLOW = (255, 235, 59)
@@ -149,6 +152,8 @@ class DaemonManager:
             spec.extend(self._get_failed_spec(status))
         elif current_state == DaemonState.LIMBO:
             spec.extend(self._get_limbo_spec(status))
+        elif current_state == DaemonState.OFFLINE:
+            spec.extend(self._get_offline_spec(status))
         else:
             spec.extend(self._get_normal_spec(status))
 
@@ -185,6 +190,11 @@ class DaemonManager:
         err_msg = status_dict.get(sp.ERROR)
         if self.daemon_start_error or err_msg:
             items.append({"type": "item", "label": "Show Full Error", "callback": lambda *a: show_text_window("Daemon Error Log", self.daemon_start_error or err_msg or "Unknown error"), "enabled": True})
+        return items
+
+    def _get_offline_spec(self, status):
+        """Offline menu: no job data so icon and menu stay consistent (grey + offline menu)."""
+        items = [{"type": "item", "label": "Daemon is not running", "callback": None, "enabled": False}]
         return items
 
     def _get_limbo_spec(self, status):
@@ -803,7 +813,7 @@ def _write_tray_icon_to_path(path, display_state):
 
 def _update_appindicator_ui():
     """Rebuild indicator menu and icon (run on main thread via GLib.idle_add).
-    Fetches status once; derives icon state at paint time so icon cannot be stale.
+    Uses stored display status only (single source of truth); no fetch here.
     """
     state = get_tray_state()
     try:
@@ -811,7 +821,8 @@ def _update_appindicator_ui():
             return False
         if state.daemon_manager is None:
             return False
-        status = get_daemon_status()
+        with state.last_status_lock:
+            status = state.last_status
         if status is not None:
             state.daemon_manager.update_sync_feedback(status)
         display_state = state.daemon_manager.get_effective_state_for_display(status)
@@ -938,6 +949,10 @@ def check_status_and_update():
             current_status = get_daemon_status()
             if current_status is None:
                 state.offline_miss_count += 1
+                if state.offline_miss_count >= OFFLINE_CLEAR_AFTER_MISSES:
+                    with state.last_status_lock:
+                        state.last_status = None
+                    state.update_queue.put(True)
             else:
                 state.offline_miss_count = 0
                 state.daemon_manager.update_sync_feedback(current_status)

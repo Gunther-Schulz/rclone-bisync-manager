@@ -22,6 +22,7 @@ Automated tests are in place (42 tests in `tests/`); run with `pytest tests/ -v`
 ## Development
 
 - [ ] **Postponed:** Implement separate filter files per job.
+- [ ] **Tray status refactor (planned):** Single source of truth for icon/menu; paint from poll thread’s stored status only (no UI re-fetch). See **DEV.md § Tray status architecture: root cause and refactor plan** for analysis, verification vs. observed log, and full refactor plan (Option A vs B, when to show OFFLINE, implementation order).
 
 ## Improvements
 
