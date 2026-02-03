@@ -61,7 +61,9 @@ class TrayState:
         self.indicator = None
         self.icon_paths = None
         self.icon_index = 0
+        self.icon_counter = 0  # unique path per update so AppIndicator always reloads (no cache)
         self.status_window_gtk = None
+        self._logged_daemon_ready = False  # one-shot: log "Daemon is ready" once per run when we have status
 
 
 def get_tray_state():
@@ -354,9 +356,15 @@ def _apply_status_result(state, status):
             state.daemon_manager.update_sync_feedback(status)
             with state.last_status_lock:
                 changed = status != state.last_status
+                had_status = state.last_status is not None
                 state.last_status = status
             if changed:
-                log_message("Daemon status changed", level=logging.INFO)
+                # Log so the log is up to date: "Daemon is ready" once per run when we have status, then "status changed"
+                if not state._logged_daemon_ready:
+                    log_message("Daemon is ready; tray has status.", level=logging.INFO)
+                    state._logged_daemon_ready = True
+                else:
+                    log_message("Daemon status changed", level=logging.INFO)
                 try:
                     log_message(f"New status: {json.dumps(status, default=str)[:100]}...", level=logging.DEBUG)
                 except (TypeError, ValueError):
@@ -366,17 +374,19 @@ def _apply_status_result(state, status):
             state.offline_miss_count += 1
             if state.offline_miss_count >= OFFLINE_CLEAR_AFTER_MISSES:
                 with state.last_status_lock:
+                    had_status = state.last_status is not None
                     state.last_status = None
-                state.update_queue.put(True)
+                # Only refresh when we actually transition to OFFLINE (was having status before)
+                if had_status:
+                    state.update_queue.put(True)
     except Exception as e:
         log_message(f"Error applying status result: {e}", level=logging.ERROR)
 
 
 def _status_fetch_worker(state):
     """Run in a thread: blocking request_status so the poll loop never blocks on the socket.
-    The log line 'Daemon process started, waiting for it to initialize...' can sit until the first
-    status response arrives; if the poll loop blocked here, no further log lines would appear until
-    the daemon responded (e.g. after the first sync). Running the fetch in a worker avoids that."""
+    If the poll loop blocked here, no further log lines (e.g. 'Daemon status changed') would appear
+    until the daemon responded. Running the fetch in a worker avoids that."""
     try:
         status = request_status(timeout=8, retries=2, retry_delay=0.3)
     except Exception as e:
@@ -424,13 +434,24 @@ def stop_daemon(widget=None):
         update_menu_and_icon()
 
 
+def _log_daemon_start_done(state, already_up):
+    """Log after start_daemon subprocess wait. If already_up is None, check get_daemon_status() first.
+    When daemon is already responding, only log at DEBUG so we don't overwrite 'Daemon is ready' in the log."""
+    if already_up is None:
+        already_up = get_daemon_status() is not None
+    if already_up:
+        log_message("Daemon start completed; daemon is already responding.", level=logging.DEBUG)
+    else:
+        log_message("Daemon start requested.", level=logging.INFO)
+        log_message("Tray will show status when the daemon responds.", level=logging.DEBUG)
+
+
 def start_daemon(widget=None):
     state = get_tray_state()
     if state is None or state.daemon_manager is None:
         log_message("Daemon manager not available", level=logging.ERROR)
         return
     dm = state.daemon_manager
-    log_message("Starting daemon", level=logging.DEBUG)
     # First, check if the daemon is already running
     current_status = get_daemon_status()
     if current_status is not None:
@@ -467,12 +488,10 @@ def start_daemon(widget=None):
                     log_message("Daemon started successfully",
                                 level=logging.INFO)
             else:
-                log_message(
-                    "Daemon process started, waiting for it to initialize...", level=logging.INFO)
+                _log_daemon_start_done(state, already_up=None)
         except subprocess.TimeoutExpired:
-            # Process is still running, which is expected
-            log_message(
-                "Daemon process started, waiting for it to initialize...", level=logging.INFO)
+            # Process is still running (expected for a long-lived daemon)
+            _log_daemon_start_done(state, already_up=None)  # check now
         state.update_queue.put(True)
 
     except subprocess.CalledProcessError as e:
@@ -872,10 +891,11 @@ def _update_appindicator_ui():
         if status is not None:
             state.daemon_manager.update_sync_feedback(status)
         display_state = state.daemon_manager.get_effective_state_for_display(status)
-        path = state.icon_paths[state.icon_index]
+        # Unique path every time so AppIndicator cannot cache: always reloads the new icon
+        tmp = tempfile.gettempdir()
+        path = os.path.join(tmp, f"rclone-bisync-manager-tray-icon-{state.icon_counter}.png")
+        state.icon_counter += 1
         _write_tray_icon_to_path(path, display_state)
-        # Use set_icon_full (proper API; set_icon is deprecated) and status toggle to force repaint
-        # (AppIndicator caches by path; toggling ATTENTION->ACTIVE forces reload without path hack)
         if hasattr(state.indicator, "set_icon_full"):
             state.indicator.set_icon_full(path, "rclone-bisync-manager status")
         else:
@@ -883,6 +903,7 @@ def _update_appindicator_ui():
         status_enum = AppIndicator3.IndicatorStatus
         state.indicator.set_status(status_enum.ATTENTION)
         state.indicator.set_status(status_enum.ACTIVE)
+        # Keep icon_index in sync for any code that uses it; we no longer rely on it for path choice
         state.icon_index = 1 - state.icon_index
         spec = state.daemon_manager.get_menu_spec(status)
         menu = _build_gtk_menu(spec)
@@ -938,6 +959,7 @@ def run_tray_appindicator():
         os.path.join(tmp, "rclone-bisync-manager-tray-icon-1.png"),
     ]
     state.icon_index = 0
+    state.icon_counter = 2  # first update will use ...-2.png so indicator sees a new path
     _write_tray_icon_to_path(state.icon_paths[0], initial_state)
     state.indicator = AppIndicator3.Indicator.new(
         "rclone-bisync-manager",
@@ -986,8 +1008,7 @@ def update_menu_and_icon():
 def check_status_and_update():
     """Poll loop: crash log, sync feedback expiry, and start a non-blocking status fetch worker.
     The worker runs request_status() in a thread so this loop never blocks on the socket; otherwise
-    the log would stall at 'Daemon process started, waiting for it to initialize...' until the
-    daemon responded (e.g. after the first sync)."""
+    the log would stall until the daemon responded (e.g. after the first sync)."""
     while True:
         try:
             state = get_tray_state()

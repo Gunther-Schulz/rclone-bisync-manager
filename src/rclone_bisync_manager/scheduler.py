@@ -21,17 +21,21 @@ class SyncScheduler:
         self.check_missed_jobs(sync_jobs, run_missed_jobs)
         now = datetime.now()
         for key, job in sync_jobs.items():
-            if getattr(job, "active", True):
-                try:
-                    # Don't overwrite a missed run: if we already have a task due (scheduled_time <= now), keep it
-                    existing = self.task_map.get(key)
-                    if existing is not None and existing.scheduled_time <= now:
-                        continue
-                    cron_obj = croniter(job.schedule, now)
-                    next_run = cron_obj.get_next(datetime)
-                    self.schedule_task(key, next_run)
-                except (ValueError, TypeError):
-                    pass  # Skip job with invalid schedule
+            if not getattr(job, "active", True):
+                continue
+            schedule = getattr(job, "schedule", None)
+            if not schedule or not str(schedule).strip():
+                continue  # Manual-only job: no schedule
+            try:
+                # Don't overwrite a missed run: if we already have a task due (scheduled_time <= now), keep it
+                existing = self.task_map.get(key)
+                if existing is not None and existing.scheduled_time <= now:
+                    continue
+                cron_obj = croniter(schedule, now)
+                next_run = cron_obj.get_next(datetime)
+                self.schedule_task(key, next_run)
+            except (ValueError, TypeError):
+                pass  # Skip job with invalid schedule
 
     def check_missed_jobs(self, sync_jobs: Dict[str, Any], run_missed_jobs: bool):
         if not run_missed_jobs:
@@ -39,20 +43,24 @@ class SyncScheduler:
 
         now = datetime.now()
         for key, job in sync_jobs.items():
-            if getattr(job, "active", True):
-                store = get_sync_state_store()
-                last_sync = store.sync_state.last_sync_times.get(key)
-                if last_sync is None or not isinstance(last_sync, datetime):
-                    self.schedule_task(key, now)
-                else:
-                    try:
-                        cron_obj = croniter(job.schedule, last_sync)
+            if not getattr(job, "active", True):
+                continue
+            schedule = getattr(job, "schedule", None)
+            if not schedule or not str(schedule).strip():
+                continue  # Manual-only job: no schedule
+            store = get_sync_state_store()
+            last_sync = store.sync_state.last_sync_times.get(key)
+            if last_sync is None or not isinstance(last_sync, datetime):
+                self.schedule_task(key, now)
+            else:
+                try:
+                    cron_obj = croniter(schedule, last_sync)
+                    next_run = cron_obj.get_next(datetime)
+                    while next_run < now:
+                        self.schedule_task(key, next_run)
                         next_run = cron_obj.get_next(datetime)
-                        while next_run < now:
-                            self.schedule_task(key, next_run)
-                            next_run = cron_obj.get_next(datetime)
-                    except (ValueError, TypeError):
-                        self.schedule_task(key, now)
+                except (ValueError, TypeError):
+                    self.schedule_task(key, now)
 
     def schedule_task(self, path_key: str, scheduled_time: datetime):
         if path_key in self.task_map:

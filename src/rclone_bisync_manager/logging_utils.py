@@ -33,13 +33,22 @@ class BasicLogger:
             return
         print(f"INFO: {message}")
 
+    def _level_name(self, level):
+        if level >= logging.ERROR:
+            return "ERROR"
+        if level >= logging.WARNING:
+            return "WARNING"
+        if level >= logging.INFO:
+            return "INFO"
+        return "DEBUG"
+
     def log(self, level, message):
         if not self._should_print(level):
             return
         if level >= logging.ERROR:
-            self.error(message)
+            print(f"ERROR: {message}", file=sys.stderr)
         else:
-            self.info(message)
+            print(f"{self._level_name(level)}: {message}")
 
 
 # Fallback when no file logging is configured (ref so setup_loggers can replace without global)

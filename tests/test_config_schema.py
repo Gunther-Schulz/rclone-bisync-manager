@@ -32,6 +32,22 @@ def test_config_schema_valid_minimal(tmp_path: Path):
     assert schema.sync_jobs["job1"].schedule == "0 * * * *"
 
 
+def test_config_schema_sync_job_without_schedule_valid(tmp_path: Path):
+    """Sync job without schedule is valid (manual-only job)."""
+    data = {
+        "local_base_path": str(tmp_path),
+        "sync_jobs": {
+            "job1": {
+                "local": "subdir",
+                "rclone_remote": "remote",
+                "remote": "path/on/remote",
+            }
+        },
+    }
+    schema = ConfigSchema(**data)
+    assert schema.sync_jobs["job1"].schedule is None
+
+
 def test_config_schema_invalid_cron_rejected():
     """Invalid cron string raises ValidationError."""
     with tempfile.TemporaryDirectory() as d:

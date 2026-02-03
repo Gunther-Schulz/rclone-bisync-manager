@@ -36,7 +36,7 @@ class SyncJobConfig(OptionsValidatorMixin):
     local: str
     rclone_remote: str
     remote: str
-    schedule: str
+    schedule: Optional[str] = None  # optional: omit for manual-only (Sync now) jobs
     active: bool = Field(default=True)
     dry_run: bool = Field(default=False)
     force_resync: bool = Field(default=False)
@@ -45,11 +45,13 @@ class SyncJobConfig(OptionsValidatorMixin):
     @field_validator('schedule')
     @classmethod
     def validate_cron(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
         try:
             croniter(v)
         except ValueError as e:
             raise ValueError(f"Invalid cron string: {str(e)}")
-        return v
+        return v.strip() or None
 
 
 class ConfigSchema(OptionsValidatorMixin):
@@ -124,9 +126,8 @@ class ConfigSchema(OptionsValidatorMixin):
                 continue
 
             try:
-                # Check for required keys
-                required_keys = {
-                    'local', 'rclone_remote', 'remote', 'schedule'}
+                # Check for required keys (schedule is optional: omit for manual-only jobs)
+                required_keys = {'local', 'rclone_remote', 'remote'}
                 missing_keys = required_keys - set(job.keys())
                 if missing_keys:
                     errors.append(f"Missing required keys in sync job '{

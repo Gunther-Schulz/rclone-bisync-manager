@@ -226,9 +226,11 @@ def check_scheduled_tasks():
                     continue
                 add_to_sync_queue(task.path_key)
                 job_config = _daemon_config._config.sync_jobs[task.path_key]
-                cron = croniter(job_config.schedule, now)
-                next_run = cron.get_next(datetime)
-                _daemon_scheduler.schedule_task(task.path_key, next_run)
+                schedule = getattr(job_config, "schedule", None)
+                if schedule and str(schedule).strip():
+                    cron = croniter(schedule, now)
+                    next_run = cron.get_next(datetime)
+                    _daemon_scheduler.schedule_task(task.path_key, next_run)
             else:
                 break
         else:
