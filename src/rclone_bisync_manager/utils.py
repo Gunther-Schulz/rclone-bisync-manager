@@ -1,6 +1,4 @@
 import os
-import subprocess
-import shutil
 import hashlib
 
 import psutil
@@ -8,56 +6,17 @@ from rclone_bisync_manager.env_helpers import env_dir
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import get_config
 from rclone_bisync_manager.runtime_paths import get_lock_file_path
+from rclone_bisync_manager.subprocess_executor import (
+    verify_required_tools,
+)
 import fcntl
 import errno
-
-
-def is_cpulimit_installed():
-    return shutil.which('cpulimit') is not None
-
-
-def check_local_rclone_test(local_path):
-    result = subprocess.run(['rclone', 'lsf', local_path],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        log_error(f"Local rclone test failed for {local_path}")
-        return False
-    cfg = get_config()
-    if cfg.rclone_test_file_name not in (result.stdout or ""):
-        log_message(f"{cfg.rclone_test_file_name} file not found in {
-                    local_path}. To add it run 'rclone touch \"{local_path}/{cfg.rclone_test_file_name}\"'")
-        return False
-    return True
-
-
-def check_remote_rclone_test(remote_path):
-    result = subprocess.run(['rclone', 'lsf', remote_path],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        log_error(f"Remote rclone test failed for {remote_path}")
-        return False
-    cfg = get_config()
-    if cfg.rclone_test_file_name not in (result.stdout or ""):
-        log_message(f"{cfg.rclone_test_file_name} file not found in {
-                    remote_path}. To add it run 'rclone touch \"{remote_path}/{cfg.rclone_test_file_name}\"'")
-        return False
-    return True
 
 
 def ensure_local_directory(local_path):
     if not os.path.exists(local_path):
         os.makedirs(local_path, exist_ok=True)
         log_message(f"Created local directory: {local_path}")
-
-
-def check_tools():
-    """Verify required CLI tools are installed and on PATH. Raises ValueError if any are missing."""
-    required_tools = ['rclone']
-    for tool in required_tools:
-        if shutil.which(tool) is None:
-            msg = f"{tool} is not installed or not in PATH. Please install it and try again."
-            log_error(msg)
-            raise ValueError(msg)
 
 
 def ensure_rclone_dir():
@@ -103,6 +62,9 @@ def calculate_md5(file_path):
 
 
 def check_and_create_lock_file():
+    """Check if daemon is already running and create lock file if not.
+    Returns (lock_fd, error_message) where lock_fd is None if already running.
+    Implements health checks and strong file locking for safety."""
     lock_file_path = get_lock_file_path()
 
     if os.path.exists(lock_file_path):
@@ -111,20 +73,30 @@ def check_and_create_lock_file():
                 pid = int(lock_file.read().strip())
             if psutil.pid_exists(pid):
                 process = psutil.Process(pid)
-                if any('rclone-bisync-manager' in arg for arg in process.cmdline()):
+                cmdline = ' '.join(process.cmdline()) if process.cmdline() else ''
+                if 'rclone-bisync-manager' in cmdline:
+                    # Daemon is running and healthy
                     return None, f"Daemon is already running (PID: {pid})"
-            # If we reach here, the PID doesn't exist or isn't our process
+                else:
+                    # PID exists but doesn't match our process - stale lock
+                    log_message(f"Removing stale lock file (PID {pid} no longer running)")
+            # If we reach here, the PID doesn't exist or isn't our process - stale lock
             os.remove(lock_file_path)
-        except (ValueError, OSError, UnicodeDecodeError, psutil.NoSuchProcess, psutil.AccessDenied):
+        except (ValueError, OSError, UnicodeDecodeError, psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            log_message(f"Error reading lock file: {str(e)} - removing stale lock")
             try:
                 os.remove(lock_file_path)
             except OSError:
                 pass
 
     try:
+        # Create lock file with O_EXCL to prevent race conditions
         lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        # Acquire exclusive non-blocking lock
         fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Write PID atomically
         os.write(lock_fd, str(os.getpid()).encode())
+        os.fsync(lock_fd)  # Force write to disk
         return lock_fd, None
     except IOError as e:
         if e.errno == errno.EEXIST:
@@ -133,13 +105,15 @@ def check_and_create_lock_file():
 
 
 def acquire_sync_lock():
-    """Acquire exclusive lock for one-off sync (non-daemon). Returns (fd, None) or (None, error_str)."""
+    """Acquire exclusive lock for one-off sync (non-daemon). Returns (fd, None) or (None, error_str).
+    Uses flock for better compatibility across platforms."""
     lock_file_path = get_lock_file_path()
     try:
         fd = open(lock_file_path, 'w')
-        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Use flock with non-blocking lock
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd, None
-    except IOError as e:
+    except (IOError, OSError) as e:
         return None, "Another sync instance is already running."
 
 
@@ -148,7 +122,7 @@ def release_sync_lock(lock_fd):
     if lock_fd is None:
         return
     try:
-        fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
         lock_fd.close()
     except (IOError, OSError):
         pass

@@ -921,7 +921,7 @@ def _render_svg_icon(svg_template, color, thickness, size=_ICON_SIZE):
     """Render SVG template (with {color}, {thickness} placeholders) to RGBA Image."""
     color, thickness = _normalize_icon_color_and_thickness(color, thickness)
     svg_code = svg_template.format(color=color, thickness=thickness)
-    png_data = svg2png(bytestring=svg_code, output_width=size, output_height=size)
+    png_data = svg2png(bytestring=svg_code.encode('utf-8'), output_width=size, output_height=size)
     return Image.open(BytesIO(png_data)).convert('RGBA')
 
 
