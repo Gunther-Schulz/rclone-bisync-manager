@@ -1,4 +1,5 @@
 import os
+import traceback
 from datetime import datetime
 from rclone_bisync_manager.subprocess_executor import (
     check_local_rclone_test,
@@ -7,6 +8,7 @@ from rclone_bisync_manager.subprocess_executor import (
     verify_required_tools,
 )
 from rclone_bisync_manager.logging_utils import log_message, log_error
+from rclone_bisync_manager.utils import ensure_local_directory
 from rclone_bisync_manager.sync_state_store import get_sync_state_store
 
 

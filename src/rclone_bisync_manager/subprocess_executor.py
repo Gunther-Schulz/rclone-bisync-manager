@@ -34,6 +34,7 @@ def run_command(
     text: bool = True,
     check: bool = False,
     env: Optional[Dict[str, str]] = None,
+    timeout: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess command with standardized error handling.
     
@@ -57,6 +58,7 @@ def run_command(
             text=text,
             check=check,
             env=env,
+            timeout=timeout,
         )
         return result
     except subprocess.CalledProcessError as e:

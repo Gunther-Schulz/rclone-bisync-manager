@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 from rclone_bisync_manager.logging_utils import log_error, log_message
 from rclone_bisync_manager import status_protocol as sp
+from rclone_bisync_manager.runtime_paths import get_status_socket_path, get_add_sync_socket_path
 
 
 class SocketError(Exception):
@@ -112,7 +113,7 @@ def request_status(
     Returns:
         Parsed status dict or None on error
     """
-    socket_path = sp.get_status_socket_path()
+    socket_path = get_status_socket_path()
     if not socket_path or not os.path.exists(socket_path):
         return None
     
@@ -136,7 +137,7 @@ def request_reload(
     Returns:
         Response dict or None if daemon not running
     """
-    socket_path = sp.get_status_socket_path()
+    socket_path = get_status_socket_path()
     if not socket_path or not os.path.exists(socket_path):
         return None
     
@@ -208,7 +209,7 @@ def request_stop(
     Returns:
         Response dict or None if daemon not running
     """
-    socket_path = sp.get_status_socket_path()
+    socket_path = get_status_socket_path()
     if not socket_path or not os.path.exists(socket_path):
         return None
     
@@ -236,7 +237,7 @@ def request_config_schema(
     Returns:
         Response dict with config_schema or empty dict
     """
-    socket_path = sp.get_status_socket_path()
+    socket_path = get_status_socket_path()
     if not socket_path or not os.path.exists(socket_path):
         return {}
     
@@ -277,7 +278,7 @@ def request_add_sync(
     Returns:
         'OK' or error string
     """
-    socket_path = sp.get_add_sync_socket_path()
+    socket_path = get_add_sync_socket_path()
     if not socket_path or not os.path.exists(socket_path):
         return "Daemon not running"
     

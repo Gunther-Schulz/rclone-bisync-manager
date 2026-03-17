@@ -28,12 +28,12 @@ from rclone_bisync_manager.sync import perform_sync_operations
 from rclone_bisync_manager.sync_context import build_sync_context
 from rclone_bisync_manager.utils import (
     check_and_create_lock_file,
-    check_tools,
     ensure_rclone_dir,
     handle_filter_changes,
     acquire_sync_lock,
     release_sync_lock,
 )
+from rclone_bisync_manager.subprocess_executor import verify_required_tools
 
 
 def run_command(args, config_obj):
@@ -68,7 +68,7 @@ def _bootstrap_for_daemon(args, config_obj):
     else:
         print("Warning: Log file path not set or configuration not loaded properly.")
     print("Checking tools and directories...")
-    check_tools()
+    verify_required_tools(["rclone"])
     ensure_rclone_dir()
     handle_filter_changes()
     if not env_dir("HOME", ""):
