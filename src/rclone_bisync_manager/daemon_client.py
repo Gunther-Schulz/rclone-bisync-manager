@@ -9,6 +9,7 @@ from rclone_bisync_manager.runtime_paths import (
     get_status_socket_path,
     get_add_sync_socket_path,
 )
+from rclone_bisync_manager import status_protocol as sp
 
 
 def _recv_all(sock, timeout=5):

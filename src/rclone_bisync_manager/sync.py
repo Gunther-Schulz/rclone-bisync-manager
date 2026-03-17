@@ -1,57 +1,68 @@
 import os
-import subprocess
 from datetime import datetime
-from rclone_bisync_manager.utils import is_cpulimit_installed, check_local_rclone_test, check_remote_rclone_test, ensure_local_directory
+from rclone_bisync_manager.subprocess_executor import (
+    check_local_rclone_test,
+    check_remote_rclone_test,
+    execute_rclone_command,
+    verify_required_tools,
+)
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.sync_state_store import get_sync_state_store
 
 
 def perform_sync_operations(key, context=None):
     """Run resync/bisync for one job. Requires context (from build_sync_context); force flags come from context.force_bisync/context.force_resync. Caller should set config_obj._last_log_position = context.log_state.last_log_position after return."""
+    from rclone_bisync_manager.exceptions import SyncError, ValidationError
+
     if context is None:
-        raise ValueError("perform_sync_operations requires context.")
+        raise ValidationError("perform_sync_operations requires context.")
     value = context.job
     local_path = os.path.join(context.local_base_path, value.local)
     remote_path = f"{value.rclone_remote}:{value.remote}"
 
     if not check_local_rclone_test(local_path) or not check_remote_rclone_test(remote_path):
-        return  # Skip sync; caller still does _last_log_position = ctx.log_state.last_log_position
+        raise SyncError(f"Rclone test failed for {key}. Local path {local_path} or remote {remote_path} not accessible.")
 
     ensure_local_directory(local_path)
 
     log_message(f"Performing sync operation for {key}. Force bisync: {context.force_bisync}, Force resync: {context.force_resync}, Dry run: {context.dry_run}")
 
-    status = read_status(key, context=context)
-    resync_status = status.get("resync_status", "NONE")
-    log_message(f"Current resync status for {key}: {resync_status}")
+    try:
+        status = read_status(key, context=context)
+        resync_status = status.get("resync_status", "NONE")
+        log_message(f"Current resync status for {key}: {resync_status}")
 
-    resync_result = status.get("resync_status", "NONE")
-    bisync_result = status.get("sync_status", "NONE")
+        resync_result = status.get("resync_status", "NONE")
+        bisync_result = status.get("sync_status", "NONE")
 
-    if context.force_resync or resync_status in ["NONE", "IN_PROGRESS"]:
-        log_message(f"Initiating resync for {key}. Force resync: {context.force_resync}, Resync status: {resync_status}")
-        write_status(key, resync_status="IN_PROGRESS", context=context)
-        resync_result = resync(key, remote_path, local_path, context)
-        write_status(key, resync_status=resync_result, context=context)
+        if context.force_resync or resync_status in ["NONE", "IN_PROGRESS"]:
+            log_message(f"Initiating resync for {key}. Force resync: {context.force_resync}, Resync status: {resync_status}")
+            write_status(key, resync_status="IN_PROGRESS", context=context)
+            resync_result = resync(key, remote_path, local_path, context)
+            write_status(key, resync_status=resync_result, context=context)
 
-        if resync_result == "COMPLETED":
-            log_message(f"Resync completed for {key}, proceeding with bisync.")
+            if resync_result == "COMPLETED":
+                log_message(f"Resync completed for {key}, proceeding with bisync.")
+                bisync_result = bisync(key, remote_path, local_path, context)
+                write_status(key, sync_status=bisync_result, context=context)
+            else:
+                error_msg = f"Resync failed for {key}. Manual intervention or force resync required."
+                log_error(error_msg)
+                raise SyncError(error_msg)
+        else:
+            log_message(f"Proceeding with bisync for {key}. Force bisync: {context.force_bisync}")
             bisync_result = bisync(key, remote_path, local_path, context)
             write_status(key, sync_status=bisync_result, context=context)
-        else:
-            log_error(f"Resync failed for {key}. Manual intervention or force resync required.")
-            return
-    else:
-        log_message(f"Proceeding with bisync for {key}. Force bisync: {context.force_bisync}")
-        bisync_result = bisync(key, remote_path, local_path, context)
-        write_status(key, sync_status=bisync_result, context=context)
 
-    store = context.state_store or get_sync_state_store()
-    store.sync_state.update_job_state(key,
-                                       sync_status=bisync_result,
-                                       resync_status=resync_result,
-                                       last_sync=datetime.now())
-    store.save()
+        store = context.state_store or get_sync_state_store()
+        store.sync_state.update_job_state(key,
+                                           sync_status=bisync_result,
+                                           resync_status=resync_result,
+                                           last_sync=datetime.now())
+        store.save()
+    except Exception as e:
+        log_error(f"Sync failed for job '{key}': {e}\n{traceback.format_exc()}")
+        raise SyncError(f"Sync failed for job '{key}': {str(e)}")
 
 
 def bisync(key, remote_path, local_path, context):
@@ -140,15 +151,13 @@ def get_rclone_args(options, operation_type, job_key, job, context):
 
 
 def run_rclone_command(rclone_args, context):
-    if is_cpulimit_installed():
-        cpulimit_command = ['cpulimit',
-                            f'--limit={context.max_cpu_usage_percent}', '--']
-        cpulimit_command.extend(rclone_args)
-        log_message(f"Running with cpulimit: {' '.join(cpulimit_command)}")
-        return subprocess.run(cpulimit_command, capture_output=True, text=True)
-    else:
-        log_message(f"Rclone command parameters: {' '.join(rclone_args)}")
-        return subprocess.run(rclone_args, capture_output=True, text=True)
+    """Execute rclone command using subprocess executor module."""
+    return execute_rclone_command(
+        rclone_args=rclone_args,
+        cpulimit_percent=context.max_cpu_usage_percent,
+        max_cpu_usage_percent=context.max_cpu_usage_percent,
+        timeout=None,
+    )
 
 
 def handle_rclone_exit_code(result_code, local_path, sync_type, store=None):

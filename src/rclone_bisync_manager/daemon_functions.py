@@ -37,6 +37,7 @@ def _run_main_loop(state, status_thread):
     """Run the main daemon loop and graceful shutdown. Uses state_module.daemon_state, _daemon_config, _daemon_scheduler."""
     last_config_check = time.time()
     config_check_interval = 1
+    max_queue_size = 50  # Maximum number of jobs in queue
 
     while state.running:
         current_time = time.time()
@@ -70,10 +71,19 @@ def _run_main_loop(state, status_thread):
             f"Sync operation {state.currently_syncing} did not finish within timeout. Forcing shutdown."
         )
 
-    while not state.sync_queue.empty():
-        state.sync_queue.get_nowait()
-    state.queued_paths.clear()
+    # Clean up sync queue on shutdown - remove excess items
+    queue_cleanup_count = 0
+    while not state.sync_queue.empty() and state.sync_queue.qsize() > max_queue_size:
+        try:
+            state.sync_queue.get_nowait()
+            queue_cleanup_count += 1
+        except:
+            break
 
+    if queue_cleanup_count > 0:
+        log_message(f"Cleaned up {queue_cleanup_count} excess jobs from sync queue during shutdown")
+
+    state.queued_paths.clear()
     state.shutdown_complete = True
     log_message('Daemon shutdown complete.')
     status_thread.join(timeout=5)
@@ -112,7 +122,12 @@ def daemon_main():
         print("Starting status server thread")
         status_thread = threading.Thread(
             target=start_status_server,
-            kwargs={"handlers": {"RELOAD": reload_config}, "state": state, "config": _daemon_config},
+            kwargs={
+                "handlers": {"RELOAD": reload_config},
+                "state": state,
+                "config": _daemon_config,
+                "max_connections": 10
+            },
             daemon=True,
         )
         status_thread.start()
@@ -171,6 +186,7 @@ def daemon_main():
 
 
 def process_sync_queue():
+    """Process items in the sync queue with proper error handling."""
     state = state_module.daemon_state
     if state is None:
         return
@@ -203,6 +219,7 @@ def process_sync_queue():
                 _daemon_config._last_log_position = ctx.log_state.last_log_position
             except Exception as e:
                 log_error(f"Sync failed for job '{key}': {e}\n{traceback.format_exc()}")
+                # Continue processing other jobs instead of stopping
         if key is not None:
             with state.sync_lock:
                 state.currently_syncing = None
@@ -238,11 +255,17 @@ def check_scheduled_tasks():
 
 
 def add_to_sync_queue(key, force_bisync=False, resync=False):
+    """Add job to sync queue with size limit."""
     state = state_module.daemon_state
     if state is None:
         return
     if not getattr(_daemon_config, "_config", None) or key not in _daemon_config._config.sync_jobs:
         log_message(f"Skipping add_to_sync_queue: job '{key}' not in config.")
+        return
+    # Check queue size limit
+    max_queue_size = 50
+    if state.sync_queue.qsize() >= max_queue_size:
+        log_message(f"Sync queue at maximum size ({max_queue_size}), skipping job '{key}'")
         return
     if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
         state.sync_queue.put_nowait((key, force_bisync, resync))

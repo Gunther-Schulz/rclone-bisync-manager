@@ -4,6 +4,8 @@ import copy
 import logging
 import os
 import yaml
+import fcntl
+import tempfile
 
 from rclone_bisync_manager.daemon_client import request_config_schema
 from rclone_bisync_manager.logging_utils import log_message
@@ -589,52 +591,85 @@ def edit_config_gtk(config_file_path):
         dlg.run()
         dlg.destroy()
 
-    def save_config_gtk(btn):
-        # Build full config from widgets (preserves keys we don't have widgets for).
-        for path, (w, t) in widgets.items():
-            val = get_widget_value(w, t)
-            _set_by_path(config, path, val)
-        # Optional int fields: convert to int or None; clamp invalid so YAML loads (Schema: gt=0, ge=0).
-        for key in ("log_rotation_max_mb", "log_rotation_backup_count"):
-            if key in config:
-                v = _parse_optional_int(config[key])
-                if key == "log_rotation_max_mb" and v is not None and v <= 0:
-                    v = None
-                elif key == "log_rotation_backup_count" and v is not None and v < 0:
-                    v = None
-                config[key] = v
-        # Check if file was modified on disk (hand-edit, another process).
-        try:
-            current_mtime = os.path.getmtime(config_file_path)
-        except OSError:
-            current_mtime = None
-        if _file_mtime is not None and current_mtime is not None and current_mtime != _file_mtime:
-            dlg = Gtk.MessageDialog(
-                transient_for=win, flags=0,
-                message_type=Gtk.MessageType.WARNING,
-                buttons=Gtk.ButtonsType.NONE,
-                text="The config file was modified on disk.",
-            )
-            dlg.add_buttons(
-                "Reload from disk", Gtk.ResponseType.REJECT,
-                "Overwrite", Gtk.ResponseType.ACCEPT,
-                "Cancel", Gtk.ResponseType.CANCEL,
-            )
-            dlg.format_secondary_text(
-                "Reload discards your editor changes. Overwrite saves your current editor contents to the file."
-            )
-            res = dlg.run()
-            dlg.destroy()
-            if res == Gtk.ResponseType.CANCEL:
-                return
-            if res == Gtk.ResponseType.REJECT:
-                reload_from_disk()
-                return
-            # Overwrite: fall through and save
-        # Normalize for save: omit None and empty dict so file stays minimal.
-        to_write = _config_for_save(config)
-        with open(config_file_path, "w", encoding="utf-8") as f:
+def save_config_gtk(btn):
+    """Save configuration to file with atomic write and file locking."""
+    from rclone_bisync_manager.exceptions import ResourceError, ValidationError
+
+    # Build full config from widgets (preserves keys we don't have widgets for).
+    for path, (w, t) in widgets.items():
+        val = get_widget_value(w, t)
+        _set_by_path(config, path, val)
+    # Optional int fields: convert to int or None; clamp invalid so YAML loads (Schema: gt=0, ge=0).
+    for key in ("log_rotation_max_mb", "log_rotation_backup_count"):
+        if key in config:
+            v = _parse_optional_int(config[key])
+            if key == "log_rotation_max_mb" and v is not None and v <= 0:
+                v = None
+            elif key == "log_rotation_backup_count" and v is not None and v < 0:
+                v = None
+            config[key] = v
+    # Check if file was modified on disk (hand-edit, another process).
+    try:
+        current_mtime = os.path.getmtime(config_file_path)
+    except OSError:
+        current_mtime = None
+    if _file_mtime is not None and current_mtime is not None and current_mtime != _file_mtime:
+        dlg = Gtk.MessageDialog(
+            transient_for=win, flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text="The config file was modified on disk.",
+        )
+        dlg.add_buttons(
+            "Reload from disk", Gtk.ResponseType.REJECT,
+            "Overwrite", Gtk.ResponseType.ACCEPT,
+            "Cancel", Gtk.ResponseType.CANCEL,
+        )
+        dlg.format_secondary_text(
+            "Reload discards your editor changes. Overwrite saves your current editor contents to the file."
+        )
+        res = dlg.run()
+        dlg.destroy()
+        if res == Gtk.ResponseType.CANCEL:
+            return
+        if res == Gtk.ResponseType.REJECT:
+            reload_from_disk()
+            return
+        # Overwrite: fall through and save
+    # Normalize for save: omit None and empty dict so file stays minimal.
+    to_write = _config_for_save(config)
+
+    # Atomic save with file locking
+    temp_fd = None
+    temp_path = None
+    try:
+        # Create temporary file
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(config_file_path), prefix=".config_editor_", suffix=".tmp")
+        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+            # Acquire exclusive lock for the duration of write
+            fcntl.flock(f, fcntl.LOCK_EX)
             yaml.dump(to_write, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+        # Verify temp file was written correctly
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            content = f.read()
+            fcntl.flock(f, fcntl.LOCK_UN)
+            # Validate YAML
+            yaml.safe_load(content)
+
+        # Atomic rename: rename temp file to actual config file
+        try:
+            os.rename(temp_path, config_file_path)
+        except OSError as e:
+            # If rename fails, clean up temp file
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise ResourceError(f"Failed to save config file: {str(e)}")
+
         try:
             _file_mtime = os.path.getmtime(config_file_path)
         except OSError:
@@ -642,6 +677,7 @@ def edit_config_gtk(config_file_path):
         last_saved_config.clear()
         last_saved_config.update(copy.deepcopy(to_write))
         update_dirty_indicator()
+
         dlg = Gtk.MessageDialog(
             transient_for=win, flags=0,
             message_type=Gtk.MessageType.INFO,
@@ -651,6 +687,31 @@ def edit_config_gtk(config_file_path):
         dlg.run()
         dlg.destroy()
         win.destroy()
+    except (OSError, IOError) as e:
+        log_error(f"Error saving config file: {str(e)}")
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        dlg = Gtk.MessageDialog(
+            transient_for=win, flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=f"Failed to save configuration: {str(e)}",
+        )
+        dlg.run()
+        dlg.destroy()
+    except yaml.YAMLError as e:
+        log_error(f"Invalid YAML in config: {str(e)}")
+        dlg = Gtk.MessageDialog(
+            transient_for=win, flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=f"Configuration has invalid YAML syntax: {str(e)}",
+        )
+        dlg.run()
+        dlg.destroy()
 
     def check_file_changed_on_disk():
         """If file mtime changed on disk, show hint on status label (non-blocking)."""
