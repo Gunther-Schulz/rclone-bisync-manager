@@ -251,7 +251,10 @@ def execute_rclone_command(
             error_msg = f"CPU limit percentage must be between 0 and 100, got {cpulimit_percent}"
             log_error(error_msg)
             raise SubprocessError(error_msg)
-        return run_with_cpulimit(rclone_args, cpulimit_percent, timeout)
+        try:
+            return run_with_cpulimit(rclone_args, cpulimit_percent, timeout)
+        except SubprocessError:
+            pass # the error is already logged by run_with_cpulimit
     
     # No cpulimit, run directly
     return run_command(rclone_args, timeout=timeout)
