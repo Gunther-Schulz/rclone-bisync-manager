@@ -251,9 +251,16 @@ def execute_rclone_command(
             error_msg = f"CPU limit percentage must be between 0 and 100, got {cpulimit_percent}"
             log_error(error_msg)
             raise SubprocessError(error_msg)
-        return run_with_cpulimit(rclone_args, cpulimit_percent, timeout)
-    
-    # No cpulimit, run directly
+        if check_command_exists("cpulimit"):
+            return run_with_cpulimit(rclone_args, cpulimit_percent, timeout)
+        # cpulimit not installed: degrade gracefully and run without CPU limiting
+        # rather than aborting the sync. Install cpulimit to enforce the limit.
+        log_message(
+            "cpulimit is not installed or not in PATH; running without CPU limiting.",
+            logging.WARNING,
+        )
+
+    # No cpulimit (not requested, or not available), run directly
     return run_command(rclone_args, timeout=timeout)
 
 

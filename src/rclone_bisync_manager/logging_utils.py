@@ -128,6 +128,28 @@ def setup_loggers(console_log=False):
         _stdlib_logger.addHandler(err_handler)
 
 
+def log_files_to_preserve():
+    """Open file objects backing the active log handlers.
+
+    Pass these to ``daemon.DaemonContext(files_preserve=...)``. Without it,
+    daemonization closes every inherited file descriptor — including the
+    RotatingFileHandler opened by setup_loggers() — so all log_message/log_error
+    emitted after the fork is written to a closed fd and silently lost. Streams
+    without a real descriptor (e.g. captured stdio under pytest) are skipped.
+    """
+    preserved = []
+    for handler in _stdlib_logger.handlers:
+        stream = getattr(handler, "stream", None)
+        if stream is None:
+            continue
+        try:
+            stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            continue
+        preserved.append(stream)
+    return preserved
+
+
 def log_message(message, level=logging.INFO):
     """Log to file and/or console. BasicLogger prints directly; StdLibLogger uses handlers."""
     (logger_ref[0] or BasicLogger()).log(level, message)

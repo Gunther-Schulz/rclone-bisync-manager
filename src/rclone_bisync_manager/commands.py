@@ -17,6 +17,7 @@ from rclone_bisync_manager.logging_utils import (
     ensure_log_file_path,
     log_config_file_location,
     log_error,
+    log_files_to_preserve,
     log_message,
     set_config,
     setup_loggers,
@@ -103,6 +104,9 @@ def run_daemon_start(args, config_obj):
             },
             stdout=sys.stdout,
             stderr=sys.stderr,
+            # Keep the open log file fd(s) alive across daemonization; otherwise
+            # python-daemon closes them and all post-fork logging is silently lost.
+            files_preserve=log_files_to_preserve(),
         ):
             config_obj.args = args
             # --- Run loop: acquire lifecycle lock, state, threads, config load, main loop, shutdown ---
