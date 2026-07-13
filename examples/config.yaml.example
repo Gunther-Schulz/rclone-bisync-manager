@@ -1,20 +1,26 @@
 # Base path for local files to be synced
 local_base_path: /path/to/your/local/base/directory
 
-# If this file is updated then on the next sync run a resync is done. This file applies global to all sync jobs. This is because rclone requires a resync after any filter change.
+# An rclone FILTERS file: every rule starts with '-' (exclude) or '+' (include), e.g. "- *.tmp".
+# Passed to rclone as --filters-file. If it changes, affected jobs resync before syncing again --
+# rclone requires that, because newly-excluded files vanish from its listings and bisync would
+# otherwise mistake them for deletions and delete them for real on the other side.
 exclusion_rules_file: /path/to/your/filter.txt
 
 # Redirect rclone log output
 redirect_rclone_log_output: true
 
-# CPU usage limit as a percentage
+# CPU usage limit as a percentage. 100 = no limit (cpulimit is not used at all).
 max_cpu_usage_percent: 100
 
-# Run missed jobs
+# On daemon start, run jobs whose scheduled time passed while the daemon was stopped.
+# A job that has never synced hasn't "missed" anything: it just waits for its next cron time.
 run_missed_jobs: true
 
-# Run initial sync on startup
-run_initial_sync_on_startup: true
+# Sync EVERY active job once whenever the daemon starts. This is how you deliberately kick off a
+# new job's first resync -- which for a large remote is a full, hours-long transfer. Leave it off
+# unless you want that on every daemon start; `rclone-bisync-manager sync <job>` does it once.
+run_initial_sync_on_startup: false
 
 # Optional: daemon log file rotation (empty = use defaults: 5 MB max size, 5 backups)
 # log_rotation_max_mb: 5
@@ -43,14 +49,22 @@ sync_jobs:
 rclone_options:
   recover: null
   resilient: null
-  max_delete: 5
+  # PERCENTAGE of files, not a file count. Bisync aborts the run if more than this
+  # share of files would be deleted. rclone's own default is 50.
+  max_delete: 20
   log_level: INFO
   max_lock: 15m
   retries: 3
   low_level_retries: 10
   compare: "size,modtime,checksum"
   create_empty_src_dirs: null
-  check_access: null
+  # Optional, off by default: require an RCLONE_TEST marker file on BOTH sides before
+  # syncing. Enable it for removable/network mounts that could silently appear empty.
+  # If you enable it you must create the marker yourself -- see the README.
+  # check_access: null
+  # Changing this list changes which files rclone sees, so the affected jobs will resync before
+  # their next sync. That is deliberate -- without it, the files you just started excluding would
+  # look deleted and get deleted for real on the other side.
   exclude:
     - "*.tmp"
     - "*.log"

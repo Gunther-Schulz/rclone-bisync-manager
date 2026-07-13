@@ -1,11 +1,28 @@
 [Unit]
 Description=RClone BiSync Manager Daemon
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
+# Type=simple is correct because the daemon does NOT detach when systemd starts it (it detects
+# INVOCATION_ID). Previously it double-forked: under `systemctl --user` the parent is
+# `systemd --user` rather than PID 1, so systemd saw the process it tracked exit 0, declared the
+# service dead, and killed the real daemon -- and because that exit was clean, Restart=on-failure
+# did not bring it back either.
+Type=simple
 ExecStart=/usr/bin/rclone-bisync-manager daemon start
 ExecStop=/usr/bin/rclone-bisync-manager daemon stop
+ExecReload=/usr/bin/rclone-bisync-manager daemon reload
 Restart=on-failure
+
+# Signal the daemon only, not the whole cgroup. With systemd's default (control-group) rclone
+# gets SIGTERMed directly and a bisync dies mid-transfer.
+KillMode=mixed
+KillSignal=SIGTERM
+
+# A first resync of a large remote runs for hours. Give the daemon room to finish the sync in
+# flight instead of being SIGKILLed partway through. Raise it if your initial resync is bigger.
+TimeoutStopSec=2h
 
 [Install]
 WantedBy=default.target

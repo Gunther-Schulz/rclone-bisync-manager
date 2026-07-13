@@ -31,7 +31,10 @@ def parse_args():
     sync_parser.add_argument('--resync', nargs='*', metavar='JOB_KEY',
                              help='Force a resynchronization for specified job(s), ignoring previous sync status.')
     sync_parser.add_argument('--force-bisync', action='store_true',
-                             help='Force the bisync operation without confirmation.')
+                             help='Pass --force to rclone, DISABLING the --max-delete safety '
+                                  'check so an unlimited number of files may be deleted. This '
+                                  'does not recover a job that needs a resync -- use --resync '
+                                  'for that. Applies only to the job(s) named on this command.')
 
     # Add sync job command
     add_sync_parser = subparsers.add_parser('add-sync', parents=[global_parser],

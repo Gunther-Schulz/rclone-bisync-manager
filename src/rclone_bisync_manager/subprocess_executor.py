@@ -9,13 +9,76 @@ import logging
 import os
 import shlex
 import shutil
+import signal
 import subprocess
+import threading
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rclone_bisync_manager.logging_utils import log_error, log_message
 
 
 _logger = logging.getLogger(__name__)
+
+# The rclone process currently running a sync, so shutdown can actually stop it. Nothing held a
+# handle before: rclone was launched with a blocking subprocess.run, so `daemon stop` could only
+# wait for it to finish on its own -- hours, for a large resync.
+_current_child_lock = threading.Lock()
+_current_child: Optional[subprocess.Popen] = None
+
+
+def _run_tracked(command: List[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+    """Run a command as a tracked child in its own process group.
+
+    Its own session means terminate_current_child() can signal the whole group, which matters when
+    cpulimit wraps rclone: signalling cpulimit alone would leave rclone running.
+    """
+    global _current_child
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    with _current_child_lock:
+        _current_child = proc
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    finally:
+        with _current_child_lock:
+            _current_child = None
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+
+
+def terminate_current_child(grace_seconds: float = 30) -> bool:
+    """Terminate the running rclone, if any. Returns True if one was signalled.
+
+    Aborting a bisync is safe to do: rclone leaves the prior listings intact, and a job left
+    needing repair re-enters the resync branch on its next run (see sync.RESYNC_PENDING_STATES).
+    """
+    with _current_child_lock:
+        proc = _current_child
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        return False
+
+    log_message(f"Stopping rclone (pid {proc.pid}) so the daemon can shut down.", logging.WARNING)
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except OSError:
+        return False
+    try:
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        log_message(f"rclone ignored SIGTERM for {grace_seconds}s; killing it.", logging.WARNING)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+    return True
 
 
 class SubprocessError(Exception):
@@ -195,21 +258,15 @@ def run_with_cpulimit(
     
     cpulimit_command = ["cpulimit", f"--limit={cpulimit_percent}", "--"]
     cpulimit_command.extend(command)
-    
+
     try:
-        result = subprocess.run(
-            cpulimit_command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-        
-        if result.returncode != 0:
-            error_msg = f"cpulimit command failed: {' '.join(cpulimit_command)}"
-            log_error(error_msg)
-            raise SubprocessError(error_msg)
-        
+        result = _run_tracked(cpulimit_command, timeout=timeout)
+
+        # Return the CompletedProcess whatever the exit code: it is rclone's, and only the
+        # caller can classify it. Raising here skipped handle_rclone_exit_code entirely, so a
+        # failed sync kept its previous "COMPLETED" status and never reached sync_errors --
+        # and exit 9 ("nothing transferred", a SUCCESS under --error-on-no-transfer) looked
+        # like a failure, leaving resync_status IN_PROGRESS and resyncing forever.
         return result
     
     except subprocess.TimeoutExpired:
@@ -245,12 +302,14 @@ def execute_rclone_command(
         log_error(error_msg)
         raise SubprocessError(error_msg)
     
-    # Use cpulimit if specified and available
-    if cpulimit_percent is not None and cpulimit_percent > 0:
-        if cpulimit_percent > 100:
-            error_msg = f"CPU limit percentage must be between 0 and 100, got {cpulimit_percent}"
-            log_error(error_msg)
-            raise SubprocessError(error_msg)
+    if cpulimit_percent is not None and not (0 <= cpulimit_percent <= 100):
+        error_msg = f"CPU limit percentage must be between 0 and 100, got {cpulimit_percent}"
+        log_error(error_msg)
+        raise SubprocessError(error_msg)
+
+    # 100 means "no limit", so don't pay for the wrapper -- the default of 100 used to route
+    # every single run through cpulimit.
+    if cpulimit_percent is not None and 0 < cpulimit_percent < 100:
         if check_command_exists("cpulimit"):
             return run_with_cpulimit(rclone_args, cpulimit_percent, timeout)
         # cpulimit not installed: degrade gracefully and run without CPU limiting
@@ -260,72 +319,42 @@ def execute_rclone_command(
             logging.WARNING,
         )
 
-    # No cpulimit (not requested, or not available), run directly
-    return run_command(rclone_args, timeout=timeout)
+    # No cpulimit (not requested, or not available), run directly -- still tracked, so shutdown
+    # can stop it.
+    return _run_tracked(rclone_args, timeout=timeout)
 
 
-def check_rclone_local(local_path: str, test_file_name: str) -> bool:
-    """Check if rclone can access a local path and contains test file.
-    
+def check_access_marker(path: str, test_file_name: str) -> Optional[str]:
+    """Check that rclone can reach path and that it holds the access-check marker.
+
+    Only meaningful when the user enabled rclone's --check-access; we run it as a
+    pre-flight so a missing marker fails fast with a fix, rather than after rclone
+    has spun up a transfer.
+
     Args:
-        local_path: Local path to check
-        test_file_name: Name of test file to look for
-    
+        path: Local path, or remote in "remote:path" form
+        test_file_name: Marker filename rclone expects (--check-filename)
+
     Returns:
-        True if path is accessible and contains test file, False otherwise
+        None if the path is usable, otherwise a reason naming the fix.
     """
-    command = ["rclone", "lsf", local_path]
-    success, stdout, stderr = check_command_output(command)
-    
+    success, stdout, stderr = check_command_output(["rclone", "lsf", path])
+
     if not success:
-        log_error(f"Local rclone test failed for {local_path}")
-        return False
-    
-    if test_file_name not in stdout:
-        log_message(f"{test_file_name} file not found in {local_path}. "
-                   f"To add it run 'rclone touch \"{local_path}/{test_file_name}\"'")
-        return False
-    
-    return True
+        detail = stderr.strip() or "rclone lsf failed"
+        return f"{path} is not reachable by rclone ({detail})"
 
+    # lsf lists one entry per line, directories with a trailing slash. Match whole
+    # entries: a substring test would let RCLONE_TESTING.txt satisfy the check.
+    entries = {line.rstrip("/") for line in stdout.splitlines()}
+    if test_file_name not in entries:
+        return (
+            f"{path} has no {test_file_name} marker, which --check-access requires. "
+            f"Add it with: rclone touch \"{path}/{test_file_name}\" "
+            f"(or drop check_access from rclone_options to disable the check)"
+        )
 
-def check_rclone_remote(remote_path: str, test_file_name: str) -> bool:
-    """Check if rclone can access a remote path and contains test file.
-    
-    Args:
-        remote_path: Remote path to check (format: "remote:path")
-        test_file_name: Name of test file to look for
-    
-    Returns:
-        True if path is accessible and contains test file, False otherwise
-    """
-    command = ["rclone", "lsf", remote_path]
-    success, stdout, stderr = check_command_output(command)
-    
-    if not success:
-        log_error(f"Remote rclone test failed for {remote_path}")
-        return False
-    
-    if test_file_name not in stdout:
-        log_message(f"{test_file_name} file not found in {remote_path}. "
-                   f"To add it run 'rclone touch \"{remote_path}/{test_file_name}\"'")
-        return False
-    
-    return True
-
-
-def check_local_rclone_test(local_path: str) -> bool:
-    """Check if rclone can access a local path and contains the configured test file."""
-    from rclone_bisync_manager.config import get_config
-    cfg = get_config()
-    return check_rclone_local(local_path, cfg.rclone_test_file_name)
-
-
-def check_remote_rclone_test(remote_path: str) -> bool:
-    """Check if rclone can access a remote path and contains the configured test file."""
-    from rclone_bisync_manager.config import get_config
-    cfg = get_config()
-    return check_rclone_remote(remote_path, cfg.rclone_test_file_name)
+    return None
 
 
 def verify_required_tools(tools: List[str]) -> None:

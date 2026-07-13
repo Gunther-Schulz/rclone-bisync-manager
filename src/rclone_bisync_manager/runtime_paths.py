@@ -27,6 +27,12 @@ def get_lock_file_path() -> str:
     return str(_runtime_base / "rclone_bisync_manager.lock")
 
 
+def get_sync_lock_file_path() -> str:
+    """Lock for one-off `sync` runs. Deliberately NOT the daemon's lock file: the one-off sync
+    used to open that path with 'w', truncating away the PID the daemon had written there."""
+    return str(_runtime_base / "rclone_bisync_manager_sync.lock")
+
+
 def get_crash_log_path() -> str:
     return str(_runtime_base / "rclone_bisync_manager_crash.log")
 

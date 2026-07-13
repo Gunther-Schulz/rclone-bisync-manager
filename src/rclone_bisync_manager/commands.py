@@ -32,6 +32,7 @@ from rclone_bisync_manager.utils import (
     ensure_rclone_dir,
     handle_filter_changes,
     acquire_sync_lock,
+    daemon_is_running,
     release_sync_lock,
 )
 from rclone_bisync_manager.subprocess_executor import verify_required_tools
@@ -95,9 +96,17 @@ def run_daemon_start(args, config_obj):
         daemon_functions._daemon_config = config_obj
         daemon_functions._daemon_scheduler = SyncScheduler()
         set_config(config_obj)
+        # Don't detach when systemd is supervising us. python-daemon only skips the double-fork
+        # when the parent is PID 1, which is true for a SYSTEM unit but not a `systemctl --user`
+        # one (whose parent is `systemd --user`). There we would fork away, the process systemd
+        # tracks would exit 0, systemd would call the service dead and kill the real daemon -- and
+        # since the exit was clean, Restart=on-failure wouldn't even bring it back.
+        # INVOCATION_ID is set by systemd for every unit it starts.
+        under_systemd = bool(os.environ.get("INVOCATION_ID"))
         with daemon.DaemonContext(
             working_directory="/",
             umask=0o002,
+            detach_process=False if under_systemd else None,
             signal_map={
                 signal.SIGTERM: signal_handler,
                 signal.SIGINT: signal_handler,
@@ -145,7 +154,7 @@ def run_daemon_reload(args):
 
 def run_sync(args, config_obj):
     """Run sync jobs (one-off, non-daemon). Returns 0 on success, 1 on error."""
-    if os.path.exists(get_lock_file_path()):
+    if daemon_is_running():
         print("Error: Daemon is running. Use 'daemon stop' to stop it before running sync manually.")
         return 1
 
@@ -157,6 +166,9 @@ def run_sync(args, config_obj):
     if error_message:
         print(f"Error: {error_message}")
         return 1
+
+    # A one-off sync must notice a changed filter file too; only the daemon bootstrap did.
+    handle_filter_changes()
 
     try:
         specific = getattr(config_obj, "specific_sync_jobs", None)
