@@ -25,7 +25,8 @@ def test_missing_cpulimit_falls_back_to_run_command(monkeypatch):
         return "OK"
 
     monkeypatch.setattr(se, "run_with_cpulimit", _no_cpulimit)
-    monkeypatch.setattr(se, "run_command", _run)
+    # rclone runs through _run_tracked so shutdown can terminate it.
+    monkeypatch.setattr(se, "_run_tracked", _run)
 
     result = se.execute_rclone_command(["rclone", "bisync"], cpulimit_percent=50)
 

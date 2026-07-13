@@ -252,15 +252,19 @@ def run_rclone_command(rclone_args, context):
 
 def handle_rclone_exit_code(result_code, local_path, sync_type, store=None):
     """Return COMPLETED or FAILED; record/clear sync error in store. Uses get_sync_state_store() when store is None."""
+    # rclone's documented exit codes (https://rclone.org/docs/#exit-code). 1 and 2 used to be
+    # described as "non-critical, a rerun may be successful" and "critically aborted" -- neither
+    # is what rclone means, so a bad option in the config reported itself as a transient error the
+    # user was invited to retry, forever.
     messages = {
         0: "completed successfully",
-        1: "Non-critical error. A rerun may be successful.",
-        2: "Critically aborted, please check the logs for more information.",
+        1: "Syntax or usage error (check the rclone options in your config).",
+        2: "Error not otherwise categorised, please check the logs for more information.",
         3: "Directory not found, please check the logs for more information.",
         4: "File not found, please check the logs for more information.",
         5: "Temporary error. More retries might fix this issue.",
         6: "Less serious errors, please check the logs for more information.",
-        7: "Fatal error, please check the logs for more information.",
+        7: "Fatal error (a retry will not help; bisync usually needs a resync to recover).",
         8: "Transfer limit exceeded, please check the logs for more information.",
         9: "successful but no files were transferred.",
         10: "Duration limit exceeded, please check the logs for more information."

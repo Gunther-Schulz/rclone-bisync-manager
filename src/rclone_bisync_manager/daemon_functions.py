@@ -3,10 +3,15 @@ import os
 import signal
 import socket
 import sys
+import threading
 import time
 import traceback
 from rclone_bisync_manager.status_server import start_status_server
 from rclone_bisync_manager.logging_utils import log_message, log_error
+from rclone_bisync_manager.subprocess_executor import terminate_current_child
+
+# How long a sync in flight gets to finish on its own before shutdown stops rclone.
+SHUTDOWN_SYNC_GRACE_SECONDS = 20
 from rclone_bisync_manager.utils import check_and_create_lock_file, handle_filter_changes
 from rclone_bisync_manager.sync import perform_sync_operations
 from rclone_bisync_manager.sync_context import build_sync_context
@@ -33,11 +38,30 @@ _daemon_scheduler = None
 # Daemon child process uses sys.exit(1) on failure so "daemon start" fails and CLI/tray see the exit code.
 
 
+def _sync_worker(state):
+    """Run queued syncs on their own thread.
+
+    Syncs used to run inline in the main loop, so a long sync froze the daemon: while a multi-hour
+    resync ran, nothing evaluated the schedule (other jobs were not even queued, and their cron
+    times silently passed), the config-change check stopped, and shutdown could not proceed.
+    """
+    while state.running and not state.shutting_down:
+        if not state.in_limbo and not state.config_invalid:
+            try:
+                process_sync_queue()
+            except Exception as e:
+                log_error(f"Sync worker error: {e}\n{traceback.format_exc()}")
+        time.sleep(1)
+
+
 def _run_main_loop(state, status_thread):
     """Run the main daemon loop and graceful shutdown. Uses state_module.daemon_state, _daemon_config, _daemon_scheduler."""
     last_config_check = time.time()
     config_check_interval = 1
     max_queue_size = 50  # Maximum number of jobs in queue
+
+    worker = threading.Thread(target=_sync_worker, args=(state,), name="sync-worker", daemon=True)
+    worker.start()
 
     while state.running:
         current_time = time.time()
@@ -46,7 +70,7 @@ def _run_main_loop(state, status_thread):
             last_config_check = current_time
 
         if not state.in_limbo and not state.config_invalid:
-            process_sync_queue()
+            # Scheduling only; the worker thread runs the syncs.
             check_scheduled_tasks()
 
         time.sleep(1)
@@ -61,15 +85,25 @@ def _run_main_loop(state, status_thread):
     # Graceful shutdown
     log_message('Daemon shutting down...')
 
+    # Give a sync in flight a moment to finish on its own, then stop rclone outright. Waiting it
+    # out is not an option: a resync of a large remote runs for hours, and `daemon stop` used to
+    # block for exactly that long. Aborting is safe -- the job re-enters the resync branch on its
+    # next run rather than being left broken.
     shutdown_start = time.time()
-    while state.currently_syncing and time.time() - shutdown_start < 60:
+    while state.currently_syncing and time.time() - shutdown_start < SHUTDOWN_SYNC_GRACE_SECONDS:
         log_message(f"Waiting for current sync to finish: {state.currently_syncing}")
-        time.sleep(5)
+        time.sleep(2)
 
     if state.currently_syncing:
         log_message(
-            f"Sync operation {state.currently_syncing} did not finish within timeout. Forcing shutdown."
+            f"Sync '{state.currently_syncing}' still running after "
+            f"{SHUTDOWN_SYNC_GRACE_SECONDS}s; stopping rclone so the daemon can exit."
         )
+        terminate_current_child()
+
+    worker.join(timeout=30)
+    if worker.is_alive():
+        log_error("Sync worker did not exit; shutting down anyway.")
 
     # Clean up sync queue on shutdown - remove excess items
     queue_cleanup_count = 0
@@ -274,9 +308,12 @@ def add_to_sync_queue(key, force_bisync=False, resync=False):
     if state.sync_queue.qsize() >= max_queue_size:
         log_message(f"Sync queue at maximum size ({max_queue_size}), skipping job '{key}'")
         return
-    if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
-        state.sync_queue.put_nowait((key, force_bisync, resync))
-        state.queued_paths.add(key)
+    # Under the lock: the main loop queues while the worker thread consumes, so an unguarded
+    # check-then-put could queue the same job twice.
+    with state.sync_lock:
+        if not state.shutting_down and key not in state.queued_paths and key != state.currently_syncing:
+            state.sync_queue.put_nowait((key, force_bisync, resync))
+            state.queued_paths.add(key)
 
 
 def stop_daemon():

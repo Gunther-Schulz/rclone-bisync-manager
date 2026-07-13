@@ -9,13 +9,76 @@ import logging
 import os
 import shlex
 import shutil
+import signal
 import subprocess
+import threading
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rclone_bisync_manager.logging_utils import log_error, log_message
 
 
 _logger = logging.getLogger(__name__)
+
+# The rclone process currently running a sync, so shutdown can actually stop it. Nothing held a
+# handle before: rclone was launched with a blocking subprocess.run, so `daemon stop` could only
+# wait for it to finish on its own -- hours, for a large resync.
+_current_child_lock = threading.Lock()
+_current_child: Optional[subprocess.Popen] = None
+
+
+def _run_tracked(command: List[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+    """Run a command as a tracked child in its own process group.
+
+    Its own session means terminate_current_child() can signal the whole group, which matters when
+    cpulimit wraps rclone: signalling cpulimit alone would leave rclone running.
+    """
+    global _current_child
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    with _current_child_lock:
+        _current_child = proc
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    finally:
+        with _current_child_lock:
+            _current_child = None
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+
+
+def terminate_current_child(grace_seconds: float = 30) -> bool:
+    """Terminate the running rclone, if any. Returns True if one was signalled.
+
+    Aborting a bisync is safe to do: rclone leaves the prior listings intact, and a job left
+    needing repair re-enters the resync branch on its next run (see sync.RESYNC_PENDING_STATES).
+    """
+    with _current_child_lock:
+        proc = _current_child
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        return False
+
+    log_message(f"Stopping rclone (pid {proc.pid}) so the daemon can shut down.", logging.WARNING)
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except OSError:
+        return False
+    try:
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        log_message(f"rclone ignored SIGTERM for {grace_seconds}s; killing it.", logging.WARNING)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+    return True
 
 
 class SubprocessError(Exception):
@@ -195,16 +258,10 @@ def run_with_cpulimit(
     
     cpulimit_command = ["cpulimit", f"--limit={cpulimit_percent}", "--"]
     cpulimit_command.extend(command)
-    
+
     try:
-        result = subprocess.run(
-            cpulimit_command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-        
+        result = _run_tracked(cpulimit_command, timeout=timeout)
+
         # Return the CompletedProcess whatever the exit code: it is rclone's, and only the
         # caller can classify it. Raising here skipped handle_rclone_exit_code entirely, so a
         # failed sync kept its previous "COMPLETED" status and never reached sync_errors --
@@ -262,8 +319,9 @@ def execute_rclone_command(
             logging.WARNING,
         )
 
-    # No cpulimit (not requested, or not available), run directly
-    return run_command(rclone_args, timeout=timeout)
+    # No cpulimit (not requested, or not available), run directly -- still tracked, so shutdown
+    # can stop it.
+    return _run_tracked(rclone_args, timeout=timeout)
 
 
 def check_access_marker(path: str, test_file_name: str) -> Optional[str]:
