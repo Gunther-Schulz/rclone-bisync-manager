@@ -93,6 +93,26 @@ def test_live_daemon_is_detected(tmp_path, monkeypatch):
     assert daemon_is_running() is True
 
 
+# --- the daemon must not mistake its own lock for another daemon ------------------------
+
+def test_own_pid_in_lock_file_is_not_another_daemon(tmp_path, monkeypatch):
+    """check_and_create_lock_file runs twice: once to serialize `daemon start`, then again for
+    the daemon's lifecycle lock. That only worked because the double fork left the first PID
+    dead. Under systemd we don't daemonize, so the second call sees a live PID -- its own -- and
+    must recognize it rather than exiting with "Daemon is already running (PID: <self>)".
+    """
+    from rclone_bisync_manager.utils import check_and_create_lock_file
+
+    lock = tmp_path / "daemon.lock"
+    lock.write_text(str(os.getpid()))
+    monkeypatch.setattr("rclone_bisync_manager.utils.get_lock_file_path", lambda: str(lock))
+
+    lock_fd, error_message = check_and_create_lock_file()
+    assert error_message is None
+    assert lock_fd is not None
+    os.close(lock_fd)
+
+
 # --- rclone logs to its own file, so daemon log rotation can't corrupt the offset -------
 
 def test_rclone_log_is_a_separate_file_beside_the_daemon_log():

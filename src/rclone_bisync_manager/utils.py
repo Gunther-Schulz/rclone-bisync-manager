@@ -126,6 +126,14 @@ def check_and_create_lock_file():
         try:
             with open(lock_file_path, 'r', encoding='utf-8', errors='replace') as lock_file:
                 pid = int(lock_file.read().strip())
+            if pid == os.getpid():
+                # The lock is ours. This function is called twice -- once to serialize `daemon
+                # start`, then again by the daemon for its lifecycle lock -- and that only looked
+                # like two different processes because of the double fork. When systemd supervises
+                # us we don't daemonize, so the second call must not report us as a second daemon.
+                # The lock itself is already held (fcntl locks are per-process); just hand back a
+                # usable descriptor.
+                return os.open(lock_file_path, os.O_RDWR), None
             if psutil.pid_exists(pid):
                 process = psutil.Process(pid)
                 cmdline = ' '.join(process.cmdline()) if process.cmdline() else ''
