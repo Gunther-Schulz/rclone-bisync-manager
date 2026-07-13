@@ -13,6 +13,10 @@ class SyncState:
         self.resync_status = {}
         self.last_sync_times = {}
         self.next_run_times = {}
+        # job_key -> hash of everything that affects which files are filtered out. When this
+        # changes, previously-synced files drop out of rclone's listings and bisync would read
+        # them as deletions -- so the job must resync before it syncs again.
+        self.filter_fingerprints = {}
 
     def update_job_state(self, job_key, sync_status=None, resync_status=None, last_sync=None, next_run=None):
         if sync_status is not None:
@@ -61,6 +65,7 @@ class SyncStateStore:
                         return out
                     self.sync_state.last_sync_times = parse_dt(state.get("last_sync_times"))
                     self.sync_state.next_run_times = parse_dt(state.get("next_run_times"))
+                    self.sync_state.filter_fingerprints = state.get("filter_fingerprints", {})
             except (json.JSONDecodeError, UnicodeDecodeError):
                 log_error("Error decoding sync_state.json. Initializing with empty state.")
                 self._initialize_empty_sync_state()
@@ -88,7 +93,8 @@ class SyncStateStore:
                     "sync_status": self.sync_state.sync_status,
                     "resync_status": self.sync_state.resync_status,
                     "last_sync_times": self._serialize_datetime_dict(self.sync_state.last_sync_times),
-                    "next_run_times": self._serialize_datetime_dict(self.sync_state.next_run_times)
+                    "next_run_times": self._serialize_datetime_dict(self.sync_state.next_run_times),
+                    "filter_fingerprints": self.sync_state.filter_fingerprints,
                 }, f)
             os.replace(tmp_file, state_file)
         except OSError:
@@ -105,6 +111,7 @@ class SyncStateStore:
         self.sync_state.resync_status = {}
         self.sync_state.last_sync_times = {}
         self.sync_state.next_run_times = {}
+        self.sync_state.filter_fingerprints = {}
 
     def _save_sync_errors(self):
         """Save sync_errors atomically (write to temp file then rename)."""

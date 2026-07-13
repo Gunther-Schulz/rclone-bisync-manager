@@ -1,10 +1,21 @@
 """Sync run context: job + global options + log state. Callers build from config and pass into perform_sync_operations."""
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from rclone_bisync_manager.config import SyncJobConfig
 from rclone_bisync_manager.sync_state_store import SyncStateStore, get_sync_state_store
+
+
+def rclone_log_path(daemon_log_file_path: str) -> str:
+    """rclone gets its own log file, next to the daemon's.
+
+    They used to share one file: rclone held it open while the daemon's RotatingFileHandler
+    renamed it away underneath, so rclone kept writing into the rotated-out file, and the byte
+    offset used to scan for hash warnings pointed into a file that no longer existed.
+    """
+    return os.path.join(os.path.dirname(daemon_log_file_path) or ".", "rclone.log")
 
 
 @dataclass
@@ -29,6 +40,7 @@ class SyncContext:
     exclusion_rules_file: Any
     redirect_rclone_log_output: bool
     log_file_path: str
+    rclone_log_file_path: str
     max_cpu_usage_percent: int
     log_state: LogState
     state_store: Optional[SyncStateStore] = None
@@ -50,7 +62,9 @@ def build_sync_context(
         raise ValueError(f"Config not loaded or job '{key}' not in sync_jobs.")
     job = c.sync_jobs[key]
     _store = state_store if state_store is not None else get_sync_state_store()
-    dry_run = dry_run_override if dry_run_override is not None else c.dry_run
+    # A job's own dry_run must be honored: it was defined, documented and offered in the
+    # config editor, but never read, so `dry_run: true` on a job ran a real bisync.
+    dry_run = dry_run_override if dry_run_override is not None else (c.dry_run or job.dry_run)
     force_bisync = force_bisync_override if force_bisync_override is not None else job.force_operation
     force_resync = force_resync_override if force_resync_override is not None else job.force_resync
     return SyncContext(
@@ -66,6 +80,7 @@ def build_sync_context(
         exclusion_rules_file=getattr(c, "exclusion_rules_file", None),
         redirect_rclone_log_output=getattr(c, "redirect_rclone_log_output", False),
         log_file_path=c.log_file_path,
+        rclone_log_file_path=rclone_log_path(c.log_file_path),
         max_cpu_usage_percent=getattr(c, "max_cpu_usage_percent", 100),
         log_state=LogState(
             last_log_position=getattr(config_obj, "_last_log_position", 0),

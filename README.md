@@ -38,13 +38,45 @@ A daemon-based manager for automated, bidirectional file sync using [rclone bisy
 - **Daemon** – Runs in the background; schedules and runs sync jobs with cron-style timing.
 - **Multiple jobs** – Each job has its own local path, remote, schedule, and optional overrides.
 - **Cron schedules** – Use standard cron expressions (e.g. `*/30 * * * *` for every 30 minutes).
-- **Global and per-job options** – Shared `rclone_options`, `bisync_options`, `resync_options`; override per job.
+- **Global and per-job options** – Shared `rclone_options`, `bisync_options`, `resync_options`; override per job (most specific wins).
 - **Missed jobs** – Optional run of missed jobs on daemon start; optional initial sync on startup.
 - **CPU limit** – Optional cap on CPU usage for sync processes.
-- **Exclusion rules** – Optional global filter file; changes trigger a resync.
-- **Marker file** – Sync only runs when `RCLONE_TEST` exists in both local and remote paths (safety check).
+- **Filter rules** – Optional filter file (rclone `--filters-file` format). Any change to your filtering — the file *or* the `exclude`/`include` options — forces a resync of the affected jobs first, so newly-excluded files are never mistaken for deletions.
+- **Access check** – Opt-in: set `check_access` and sync only runs when the `RCLONE_TEST` marker exists on both sides.
 - **System tray** – Optional tray app: status, start/stop daemon, reload config, trigger syncs, open config/logs; starts daemon if not running.
 - **Status server** – Unix socket used by tray and `daemon status` for live daemon and job status.
+
+---
+
+## Upgrading — behavior changes
+
+If you ran an earlier version, four things changed on purpose:
+
+- **Your filter file must be rewritten as an rclone filters file.** It is now passed as
+  `--filters-file` instead of `--exclude-from`, so every rule needs a `-` (exclude) or `+`
+  (include) prefix. The daemon refuses to start otherwise and tells you which lines to fix.
+
+  ```diff
+  - *.tmp          # old: bare pattern (--exclude-from)
+  + - *.tmp        # new: an exclude rule (--filters-file)
+  ```
+
+  This buys a real guard: rclone hashes the filters file and **aborts** rather than sync if it
+  changed without a resync. Under `--exclude-from` it tracked nothing, so editing your filters
+  silently deleted the newly-excluded files on the other side. (rclone writes a `.md5` file next
+  to your filters file — that's expected.)
+
+- **The `RCLONE_TEST` marker file is no longer required by default.** It is now opt-in via
+  `check_access` (matching rclone's own default). If you relied on the marker as a guard against
+  syncing an unmounted drive, **add `check_access: null` to `rclone_options`** to keep it; your
+  existing marker files are still valid. Deletions remain guarded by `max_delete` either way.
+- **Adding a job no longer starts syncing it immediately.** A never-synced job is scheduled at its
+  next cron time instead of being treated as a "missed" run. To start a new job's first (full,
+  expensive) resync on purpose, set `run_initial_sync_on_startup: true`, or run
+  `rclone-bisync-manager sync <job>`.
+- **`dry_run` now actually works.** It was silently ignored — both globally and per job. If you
+  have `dry_run: true` sitting in a config somewhere, that job will now genuinely dry-run rather
+  than sync for real.
 
 ---
 
@@ -122,8 +154,9 @@ Once at least one remote exists, continue with [Quick start](#quick-start) and [
 1. **Config file** – Create `~/.config/rclone-bisync-manager/config.yaml` (or set `XDG_CONFIG_HOME` / use `--config PATH`).
 2. **Minimal config** – Set `local_base_path`, define at least one job in `sync_jobs` with `local`, `rclone_remote`, `remote`, and `schedule`. See [Configuration](#configuration) and `examples/config.yaml.example`.
 3. **Rclone remote** – Ensure the remote exists (`rclone listremotes`) and the remote path is writable.
-4. **Marker file** – Create `RCLONE_TEST` in both the local sync folder and the remote path (see [Setting up a sync target](#setting-up-a-sync-target)).
-5. **Run** – Start the daemon: `rclone-bisync-manager daemon start`, or run the tray: `rclone-bisync-manager-tray` (it will start the daemon if needed).
+4. **Run** – Start the daemon: `rclone-bisync-manager daemon start`, or run the tray: `rclone-bisync-manager-tray` (it will start the daemon if needed).
+
+That's all you need. Deletions are guarded out of the box by bisync's `--max-delete` (50% by default). If you want the stricter marker-file check on top, see [Setting up a sync target](#setting-up-a-sync-target).
 
 ---
 
@@ -150,11 +183,11 @@ Once at least one remote exists, continue with [Quick start](#quick-start) and [
 | Option | Description |
 |--------|-------------|
 | `local_base_path` | Base directory for all local sync paths (required). |
-| `exclusion_rules_file` | Optional path to filter/exclusion file. If the file changes, a resync is triggered for all jobs. |
-| `max_cpu_usage_percent` | CPU limit for sync (0–100). Requires cpulimit; ignored if not installed. Default: 100. |
-| `redirect_rclone_log_output` | Redirect rclone log output into the manager log file. Default: false. |
-| `run_missed_jobs` | Run jobs that were missed while daemon was stopped. Default: false. |
-| `run_initial_sync_on_startup` | Run an initial sync when the daemon starts. Default: true. |
+| `exclusion_rules_file` | Optional path to an rclone **filters file**. Every rule must start with `-` (exclude) or `+` (include) — e.g. `- *.tmp`. Passed to rclone as `--filters-file`. If it changes, the affected jobs resync before syncing again. |
+| `max_cpu_usage_percent` | CPU limit for sync (0–100). Requires cpulimit; ignored if not installed. 100 means no limit (cpulimit is not used at all). Default: 100. |
+| `redirect_rclone_log_output` | Write rclone's output to `rclone.log`, next to the daemon log. It is deliberately a separate file: rclone holds its log open for the whole run, so sharing the daemon's rotating log meant rotation renamed the file out from under it. Rotated at 50 MB between runs. Default: false. |
+| `run_missed_jobs` | On daemon start, run jobs whose scheduled time passed while the daemon was stopped. A job that has never synced has not "missed" anything and is not included — it is simply scheduled at its next cron time. Default: false. |
+| `run_initial_sync_on_startup` | Sync every active job once when the daemon starts. This is how you deliberately kick off a new job's first (full, expensive) resync. Default: false. |
 | `dry_run` | Global dry run (no actual changes). Default: false. |
 | `log_file_path` | Daemon log file path. Default: under `$XDG_STATE_HOME/rclone-bisync-manager/logs/` (e.g. `~/.local/state/...` if unset). |
 | `log_rotation_max_mb` | Max log size in MB before rotation. Omit or leave empty for default (5). |
@@ -173,10 +206,33 @@ Each job is a key (e.g. `documents`) with:
 | `active` | If true, job is scheduled. Default: true. |
 | `dry_run` | Job-level dry run. Default: false. |
 | `force_resync` | Next run does a full resync before bisync. |
-| `force_operation` | Next run uses `--force` for bisync. |
+| `force_operation` | Every run of this job passes `--force` to bisync, which **disables rclone's `--max-delete` safety check** — deletions become unlimited. This is persistent: it stays in effect until you remove it from the config. It does **not** repair a job that needs a resync; use `force_resync` for that. |
 | `rclone_options` | Job-specific rclone options (override global). |
 | `bisync_options` | Job-specific bisync options. |
 | `resync_options` | Job-specific resync options. |
+
+**Option precedence** — most specific wins:
+
+```
+rclone_options (global)  <  bisync_options/resync_options (global)
+                         <  rclone_options (job)
+                         <  bisync_options/resync_options (job)
+```
+
+---
+
+## Safety: what stops a bad sync from deleting your files
+
+Bisync propagates deletions in *both* directions, so it is worth knowing exactly what guards you.
+
+| Guard | Default | What it does |
+|-------|---------|--------------|
+| `max_delete` | **50** (rclone's default) | **A PERCENTAGE, not a file count.** If more than this share of files on either side would be deleted, rclone aborts the run without changing anything. This is what saves you when a drive fails to mount and a folder suddenly looks empty. Setting `max_delete: 5` means 5%, not 5 files. |
+| `check_access` | off | Requires an `RCLONE_TEST` marker on both sides before syncing. A second, stricter layer — see [Setting up a sync target](#setting-up-a-sync-target). |
+| Filter-change resync | always on | Changing what you filter (the filters file, or any `exclude`/`include`/`min-size`/`max-age` option) makes previously-synced files drop out of rclone's listings — which bisync would read as deletions and propagate. Affected jobs are forced to resync first. |
+| `force_operation` / `--force-bisync` | off | **Turns `max_delete` OFF.** Deletions become unlimited. Only use it when you have decided that a large deletion is correct. |
+
+If a job needs repairing, `force_resync` is almost always the thing you want — **not** `--force`.
 
 ### rclone_options / bisync_options / resync_options
 
@@ -219,10 +275,26 @@ Before a job can run, the following must be in place.
 - Full local path = **`local_base_path`** + **`local`**.
 - Example: `local_base_path: /mnt/data` and `local: MySync` → create `/mnt/data/MySync`.
 
-### 3. Marker file (required)
+### 3. Marker file (optional, opt-in)
 
-- A file named **`RCLONE_TEST`** must exist in both the local sync folder and the remote path.
-- If it’s missing on either side, the manager skips the sync and logs it.
+**You can skip this.** Nothing here is needed for a normal setup — bisync already refuses to
+run if more than `--max-delete` percent of files would be deleted (50% by default), which is
+what protects you if a drive fails to mount or a folder is wiped.
+
+The marker file is a second, stricter layer: rclone's `--check-access` refuses to sync unless
+a matching **`RCLONE_TEST`** file is found on *both* sides. It's worth enabling when the local
+path is a removable or network mount that could silently appear empty. It is **off by default**,
+matching rclone's own default.
+
+To enable it, add `check_access` to `rclone_options` in your config:
+
+```yaml
+rclone_options:
+  check_access: null # null means "pass the bare --check-access flag"
+```
+
+Then create the marker on both sides, or every sync for that job will fail (with a message
+telling you exactly this).
 
 **Local:**
 
@@ -241,6 +313,9 @@ If the backend doesn’t support empty files:
 ```bash
 echo -n "" | rclone rcat "myremote:backup/MySync/RCLONE_TEST"
 ```
+
+To use a different filename, set `check_filename` alongside `check_access`; the manager will
+look for that name instead.
 
 ### 4. Remote path writable
 
@@ -373,16 +448,33 @@ Run the daemon as a **user** service (recommended; no root).
 ```ini
 [Unit]
 Description=RClone BiSync Manager Daemon
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
+Type=simple
 ExecStart=/usr/bin/rclone-bisync-manager daemon start
 ExecStop=/usr/bin/rclone-bisync-manager daemon stop
+ExecReload=/usr/bin/rclone-bisync-manager daemon reload
 Restart=on-failure
+
+# Signal only the daemon, not the whole cgroup — otherwise systemd SIGTERMs rclone directly and
+# aborts a bisync mid-transfer.
+KillMode=mixed
+KillSignal=SIGTERM
+
+# A first resync of a large remote can run for hours; let it finish instead of being killed.
+TimeoutStopSec=2h
 
 [Install]
 WantedBy=default.target
 ```
+
+> The `Type=simple` / `KillMode=mixed` combination matters. The daemon detects that systemd
+> started it and does not daemonize; without `Type=simple` the older unit double-forked, systemd
+> saw the process it tracked exit 0, declared the service dead, and killed the real daemon —
+> and because the exit looked clean, `Restart=on-failure` did not bring it back. A copy of this
+> unit ships in `systemd/rclone-bisync-manager.service`.
 
 2. Enable and start:
 
@@ -407,7 +499,7 @@ journalctl --user -u rclone-bisync-manager.service
 
 - **Daemon log** – Location from config (`log_file_path`) or status/tray; supports rotation (`log_rotation_max_mb`, `log_rotation_backup_count`).
 - **Crash log** – Written on daemon crash; path is under the runtime base (see [Paths and environment](#paths-and-environment)), e.g. `.../rclone_bisync_manager_crash.log`.
-- **Limbo** – If config becomes invalid, the daemon can enter a “limbo” state and keep running until config is fixed and reloaded.
+- **Limbo** – If the config becomes invalid while the daemon is running, a failed `daemon reload` puts it into a “limbo” state: it keeps running (with the last good config) until the config is fixed and reloaded. `daemon status` and `daemon stop` keep working even when the config on disk is invalid. (A config that is already invalid at `daemon start` is a hard failure — the daemon does not start.)
 - **Hash warnings** – Special file types (e.g. some Live Photo formats) may be reported in status; they don’t stop the sync.
 - **Runtime paths** – Sockets, lock file, and crash log use the runtime base; empty env vars are ignored so the next option in the list is used.
 

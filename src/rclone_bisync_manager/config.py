@@ -3,7 +3,7 @@ import os
 import hashlib
 from croniter import croniter
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, DirectoryPath
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator, DirectoryPath
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.env_helpers import env_dir
 
@@ -29,7 +29,10 @@ class OptionsValidatorMixin(BaseModel):
     def validate_options(cls, v, info):
         disallowed_keys = {'resync', 'bisync', 'log-file'}
 
-        invalid_keys = set(v.keys()) & disallowed_keys
+        # Keys are emitted as --{key.replace('_','-')}, so compare in that form. Matching the
+        # raw key let `log_file` -- the spelling everyone actually writes -- past the guard
+        # and on to rclone, where it collided with the manager's own --log-file.
+        invalid_keys = {k for k in v if str(k).replace('_', '-') in disallowed_keys}
         if invalid_keys:
             field_name = getattr(info, 'field_name', 'options')
             raise ValueError(
@@ -67,6 +70,39 @@ class ConfigSchema(OptionsValidatorMixin):
     # Path to exclusion rules file (optional)
     exclusion_rules_file: Optional[str] = None
 
+    @field_validator('exclusion_rules_file')
+    @classmethod
+    def validate_filter_rules(cls, v):
+        """Every rule must be an rclone filter rule: '- pattern' to exclude, '+ pattern' to include.
+
+        The file is passed to rclone as --filters-file (which bisync hashes, so it can abort when
+        the filters change instead of deleting the newly-excluded files). Earlier versions passed
+        it as --exclude-from, where a bare pattern like `*.tmp` was valid. rclone would reject
+        such a line at sync time; catching it here instead says exactly what to change.
+        """
+        if not v or not os.path.exists(v):
+            return v
+        try:
+            with open(v, 'r', encoding='utf-8', errors='replace') as f:
+                lines = f.readlines()
+        except OSError:
+            return v
+
+        bad = [
+            (n, line.strip())
+            for n, line in enumerate(lines, 1)
+            if line.strip() and not line.lstrip().startswith(('#', ';', '+', '-', '!'))
+        ]
+        if bad:
+            listing = "; ".join(f"line {n}: {text!r}" for n, text in bad[:5])
+            example = bad[0][1]
+            raise ValueError(
+                f"{v} is not a valid rclone filters file. Every rule must start with '-' (exclude) "
+                f"or '+' (include). Offending {listing}. Prefix each pattern with '- ', e.g. "
+                f"'- {example}' instead of '{example}'."
+            )
+        return v
+
     # CPU usage limit as a percentage
     max_cpu_usage_percent: int = Field(default=100, ge=0, le=100)
 
@@ -76,8 +112,10 @@ class ConfigSchema(OptionsValidatorMixin):
     # Whether to run missed jobs
     run_missed_jobs: bool = False
 
-    # Whether to run initial sync on startup
-    run_initial_sync_on_startup: bool = True
+    # Sync every active job once when the daemon starts. This is how you deliberately kick
+    # off a brand-new job's first (full, expensive) resync. Defaults off: it was previously
+    # declared but never read, so no existing config relies on the old True.
+    run_initial_sync_on_startup: bool = False
 
     # Sync job configurations
     sync_jobs: Dict[str, SyncJobConfig]
@@ -98,6 +136,30 @@ class ConfigSchema(OptionsValidatorMixin):
     log_rotation_backup_count: Optional[int] = Field(None, ge=0)
 
     model_config = ConfigDict(extra='forbid')
+
+    @model_validator(mode='after')
+    def validate_local_paths_stay_inside_base(self):
+        """A job's `local` must resolve to somewhere inside local_base_path.
+
+        The full path is os.path.join(local_base_path, local), and os.path.join DISCARDS the base
+        when the second part is absolute -- so `local: /etc` silently resolved to /etc, which the
+        daemon would then create if missing and bisync two-way against. `..` traversal escaped the
+        same way. Both were accepted without a word.
+        """
+        base = os.path.realpath(str(self.local_base_path))
+        for job_key, job in self.sync_jobs.items():
+            if os.path.isabs(job.local):
+                raise ValueError(
+                    f"sync_jobs.{job_key}.local must be relative to local_base_path, "
+                    f"but is the absolute path '{job.local}'."
+                )
+            resolved = os.path.realpath(os.path.join(base, job.local))
+            if resolved != base and not resolved.startswith(base + os.sep):
+                raise ValueError(
+                    f"sync_jobs.{job_key}.local ('{job.local}') resolves to '{resolved}', which is "
+                    f"outside local_base_path ('{base}')."
+                )
+        return self
 
     @field_validator('log_rotation_max_mb', 'log_rotation_backup_count', mode='before')
     @classmethod
@@ -267,8 +329,11 @@ class Config:
         self._update_internal_fields(args)
 
     def _merge_cli_args(self, config_data, args):
-        # Override global options
-        config_data['dry_run'] = getattr(args, 'dry_run', False)
+        # -d can only turn dry-run ON. Assigning it unconditionally overwrote `dry_run: true`
+        # from the config with False on every invocation without -d, so a user who asked for a
+        # dry run in config.yaml silently got a real, deleting bisync.
+        if getattr(args, 'dry_run', False):
+            config_data['dry_run'] = True
 
         config_data.setdefault('sync_jobs', {})
         sync_jobs = config_data['sync_jobs']
@@ -286,7 +351,10 @@ class Config:
 
         force_bisync_or_op = getattr(args, 'force_operation', False) or getattr(args, 'force_bisync', False)
         if force_bisync_or_op:
-            for job_key in sync_jobs:
+            # Scope to the jobs named on the command line. This used to force EVERY job in the
+            # config, so `sync one-job --force-bisync` disabled the delete guard on all of them.
+            named = [k for k in (getattr(args, 'sync_jobs', None) or []) if k in sync_jobs]
+            for job_key in (named or sync_jobs):
                 sync_jobs[job_key]['force_operation'] = True
 
     def _update_internal_fields(self, args):

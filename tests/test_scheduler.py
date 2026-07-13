@@ -37,8 +37,12 @@ def test_schedule_tasks_run_missed_jobs_false_no_missed_scheduled(tmp_path, monk
     assert next_task.scheduled_time > datetime.now()
 
 
-def test_schedule_tasks_run_missed_jobs_true_last_sync_none_schedules_for_now(tmp_path, monkeypatch):
-    """With run_missed_jobs=True and no last_sync, job is scheduled for now (due immediately)."""
+def test_never_synced_job_is_not_treated_as_a_missed_run(tmp_path, monkeypatch):
+    """A job that has never synced has missed nothing: schedule it at its next cron time, not now.
+
+    Scheduling it for "now" meant adding a job to the config and reloading immediately started a
+    full resync of it -- on a large remote, an unannounced multi-hour transfer.
+    """
     store = SyncStateStore(str(tmp_path))
     store.load()
 
@@ -51,8 +55,8 @@ def test_schedule_tasks_run_missed_jobs_true_last_sync_none_schedules_for_now(tm
     next_task = sched.get_next_task()
     assert next_task is not None
     assert next_task.path_key == "j1"
-    # Should be scheduled for "now" (due)
-    assert next_task.scheduled_time <= now_before + timedelta(seconds=2)
+    # Due in the future (next cron occurrence), NOT immediately.
+    assert next_task.scheduled_time > now_before + timedelta(seconds=2)
 
 
 def test_schedule_tasks_missed_run_not_overwritten(tmp_path, monkeypatch):

@@ -31,12 +31,22 @@ def main():
 
     print(f"Using config file: {config.config_file}")
 
+    # `daemon status|stop|reload` only talk to the running daemon over its socket. Requiring a
+    # valid config first meant a broken config -- or a local_base_path on an unmounted drive --
+    # locked you out of inspecting or stopping the daemon at exactly the moment you needed to.
+    talks_to_daemon_only = (
+        getattr(args, "command", None) == "daemon"
+        and getattr(args, "action", None) in ("status", "stop", "reload")
+    )
+
     try:
         config.load_and_validate_config(args)
         print(f"Configuration loaded successfully from: {config.config_file}")
     except Exception as e:
         print(f"Error loading configuration: {str(e)}")
-        sys.exit(1)
+        if not talks_to_daemon_only:
+            sys.exit(1)
+        print(f"Continuing anyway: '{args.action}' does not need a valid config.")
 
     result = run_command(args, config)
     sys.exit(result if result is not None else 0)

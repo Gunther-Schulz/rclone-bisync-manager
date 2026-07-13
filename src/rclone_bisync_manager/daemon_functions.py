@@ -7,7 +7,7 @@ import time
 import traceback
 from rclone_bisync_manager.status_server import start_status_server
 from rclone_bisync_manager.logging_utils import log_message, log_error
-from rclone_bisync_manager.utils import check_and_create_lock_file
+from rclone_bisync_manager.utils import check_and_create_lock_file, handle_filter_changes
 from rclone_bisync_manager.sync import perform_sync_operations
 from rclone_bisync_manager.sync_context import build_sync_context
 from rclone_bisync_manager.config import signal_handler
@@ -150,6 +150,11 @@ def daemon_main():
             clear_crash_log()
             print("Scheduling tasks")
             _daemon_scheduler.schedule_tasks(_daemon_config._config.sync_jobs, _daemon_config._config.run_missed_jobs)
+            if _daemon_config._config.run_initial_sync_on_startup:
+                for key, job in _daemon_config._config.sync_jobs.items():
+                    if getattr(job, "active", True):
+                        log_message(f"run_initial_sync_on_startup: queueing {key}.")
+                        add_to_sync_queue(key)
         except Exception as e:
             error_trace = traceback.format_exc()
             error_message = f"Configuration error: {str(e)}\n{error_trace}"
@@ -238,6 +243,8 @@ def check_scheduled_tasks():
             now = datetime.now()
             if now >= next_task.scheduled_time:
                 task = _daemon_scheduler.pop_next_task()
+                if task is None:
+                    continue  # A concurrent reload cleared the heap between peek and pop.
                 if task.path_key not in _daemon_config._config.sync_jobs:
                     log_message(f"Skipping scheduled task: job '{task.path_key}' no longer in config.")
                     continue
@@ -376,8 +383,13 @@ def reload_config():
         _daemon_config.load_and_validate_config(args)
         _daemon_config.reset_config_changed_flag()  # Only clear after successful load so status never briefly reports False before apply
         log_message("Config reloaded successfully.")
+        # A reload is the usual moment a changed filter file first gets noticed.
+        handle_filter_changes()
         _daemon_scheduler.clear_tasks()
-        _daemon_scheduler.schedule_tasks(_daemon_config._config.sync_jobs, _daemon_config._config.run_missed_jobs)
+        # run_missed_jobs=False: a reload is not a restart. Re-running the missed-job scan here
+        # makes editing the config start transfers -- tightening a schedule replays every
+        # occurrence since the last sync. Missed jobs are caught on daemon start.
+        _daemon_scheduler.schedule_tasks(_daemon_config._config.sync_jobs, False)
         state.config_invalid = False
         state.in_limbo = False
         state.config_error_message = None

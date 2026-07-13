@@ -5,7 +5,7 @@ import psutil
 from rclone_bisync_manager.env_helpers import env_dir
 from rclone_bisync_manager.logging_utils import log_message, log_error
 from rclone_bisync_manager.config import get_config
-from rclone_bisync_manager.runtime_paths import get_lock_file_path
+from rclone_bisync_manager.runtime_paths import get_lock_file_path, get_sync_lock_file_path
 from rclone_bisync_manager.subprocess_executor import (
     verify_required_tools,
 )
@@ -27,30 +27,85 @@ def ensure_rclone_dir():
         os.chmod(rclone_dir, 0o777)
 
 
+# Option names (normalized to hyphens) that change WHICH FILES rclone sees. Changing any of
+# them drops files out of the listings, and bisync reads a file missing from the listing as a
+# deletion -- and then deletes it for real on the other side. rclone only guards --filters-file;
+# everything else here is invisible to it, so we fingerprint them ourselves.
+FILTER_AFFECTING_OPTIONS = (
+    'exclude', 'include', 'filter', 'files-from',
+    'min-size', 'max-size', 'min-age', 'max-age',
+)
+
+
+def _is_filter_option(key):
+    normalized = str(key).replace('_', '-')
+    return any(normalized.startswith(name) for name in FILTER_AFFECTING_OPTIONS)
+
+
+def compute_filter_fingerprint(job, cfg):
+    """Hash everything that decides which files this job filters out.
+
+    Covers the filters file AND the exclude/include/filter options, from both global and job
+    config. Hashing only the file (as this used to) left every --exclude in rclone_options
+    unguarded: add one, and the newly-excluded files get deleted on the other side.
+    """
+    parts = []
+
+    rules_file = getattr(cfg, 'exclusion_rules_file', None)
+    if rules_file and os.path.exists(rules_file):
+        parts.append(f"file:{calculate_md5(rules_file)}")
+
+    merged = {}
+    for source in (cfg.rclone_options, cfg.bisync_options, cfg.resync_options,
+                   job.rclone_options, job.bisync_options, job.resync_options):
+        merged.update(source or {})
+    for key in sorted(merged):
+        if _is_filter_option(key):
+            parts.append(f"opt:{str(key).replace('_', '-')}={merged[key]!r}")
+
+    return hashlib.md5("\n".join(parts).encode('utf-8')).hexdigest()
+
+
 def handle_filter_changes():
+    """Force a resync of any job whose filtering changed since its last run.
+
+    The pending resync is recorded in the sync state, which survives a config reload. It used to
+    be set on the in-memory job objects, which load_and_validate_config immediately rebuilt from
+    YAML -- and because the new hash had ALREADY been written, the resync was then lost forever.
+
+    Per job, not global: a filter change used to resync EVERY job, so one tweak could trigger a
+    full resync of an unrelated multi-hundred-gigabyte remote.
+    """
+    from rclone_bisync_manager.sync_state_store import get_sync_state_store
+
     cfg = get_config()
-    if not cfg._config or not cfg._config.exclusion_rules_file:
+    if not cfg._config:
         return
-    stored_md5_file = os.path.join(cfg.cache_dir, '.filter_md5')
-    os.makedirs(cfg.cache_dir, exist_ok=True)
-    if os.path.exists(cfg._config.exclusion_rules_file):
-        current_md5 = calculate_md5(cfg._config.exclusion_rules_file)
-        if os.path.exists(stored_md5_file):
-            try:
-                with open(stored_md5_file, 'r', encoding='utf-8', errors='replace') as f:
-                    stored_md5 = f.read().strip()
-            except OSError:
-                stored_md5 = ""
-        else:
-            stored_md5 = ""
-        if current_md5 != stored_md5:
-            with open(stored_md5_file, 'w', encoding='utf-8') as f:
-                f.write(current_md5)
-            log_message("Filter file has changed. A resync is required.")
-            for job_key in cfg._config.sync_jobs:
-                cfg._config.sync_jobs[job_key].force_resync = True
-    else:
-        log_message(f"Exclusion rules file not found: {cfg._config.exclusion_rules_file}")
+    rules_file = cfg._config.exclusion_rules_file
+    if rules_file and not os.path.exists(rules_file):
+        log_message(f"Exclusion rules file not found: {rules_file}")
+
+    store = get_sync_state_store()
+    changed = []
+    for job_key, job in cfg._config.sync_jobs.items():
+        fingerprint = compute_filter_fingerprint(job, cfg._config)
+        previous = store.sync_state.filter_fingerprints.get(job_key)
+        # No previous fingerprint means we have never recorded one (fresh install, or an upgrade
+        # from a version without them). Record it, but don't force a resync off the back of it --
+        # that would make upgrading kick off a full resync of every job.
+        if previous is not None and previous != fingerprint:
+            changed.append(job_key)
+            store.sync_state.resync_status[job_key] = "NONE"  # back into the resync branch
+        store.sync_state.filter_fingerprints[job_key] = fingerprint
+
+    if changed:
+        log_message(
+            f"Filters changed for {', '.join(changed)}: each will resync before its next sync, "
+            f"so newly-excluded files are not mistaken for deletions."
+        )
+    # Pending resync and new fingerprint are written together, so a crash can't leave the
+    # fingerprint updated with the resync forgotten.
+    store.save()
 
 
 def calculate_md5(file_path):
@@ -104,29 +159,66 @@ def check_and_create_lock_file():
         return None, f"Unexpected error creating lock file: {str(e)}"
 
 
-def acquire_sync_lock():
-    """Acquire exclusive lock for one-off sync (non-daemon). Returns (fd, None) or (None, error_str).
-    Uses flock for better compatibility across platforms."""
+def daemon_is_running():
+    """Is a live daemon holding the lock file? Read-only: never removes anything.
+
+    The one-off `sync` command used to test os.path.exists() on the lock file, so a lock left
+    behind by a SIGKILLed daemon blocked every future manual sync, permanently.
+    """
     lock_file_path = get_lock_file_path()
+    if not os.path.exists(lock_file_path):
+        return False
     try:
-        fd = open(lock_file_path, 'w')
-        # Use flock with non-blocking lock
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with open(lock_file_path, 'r', encoding='utf-8', errors='replace') as lock_file:
+            pid = int(lock_file.read().strip())
+    except (ValueError, OSError, UnicodeDecodeError):
+        return False  # Unreadable or truncated: treat as stale, not as a running daemon.
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        cmdline = ' '.join(psutil.Process(pid).cmdline() or [])
+        return 'rclone-bisync-manager' in cmdline
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+
+def acquire_sync_lock():
+    """Acquire the exclusive lock for a one-off sync. Returns (fd, None) or (None, error_str).
+
+    Uses its own lock file, opened without truncation, and lockf -- the same lock family the
+    daemon uses. Previously this opened the DAEMON's lock file with 'w' (wiping its PID) and took
+    an flock, which on Linux does not interact with the daemon's lockf at all, so the two could
+    run concurrently against the same paths.
+    """
+    lock_file_path = get_sync_lock_file_path()
+    try:
+        fd = os.open(lock_file_path, os.O_CREAT | os.O_RDWR)
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
         return fd, None
-    except (IOError, OSError) as e:
+    except (IOError, OSError):
+        try:
+            os.close(fd)
+        except (OSError, UnboundLocalError, NameError):
+            pass
         return None, "Another sync instance is already running."
 
 
 def release_sync_lock(lock_fd):
-    """Release lock and remove lock file after one-off sync."""
+    """Release the one-off sync lock.
+
+    The file is left in place on purpose. Unlinking a lock file while another process holds a
+    lock on it is the classic unlink race: the next process creates a fresh inode, locks that,
+    and runs concurrently with the holder of the old one.
+    """
     if lock_fd is None:
         return
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        lock_fd.close()
+        fcntl.lockf(lock_fd, fcntl.LOCK_UN)
     except (IOError, OSError):
         pass
     try:
-        os.unlink(get_lock_file_path())
-    except OSError:
+        os.close(lock_fd)
+    except (OSError, TypeError):
         pass
