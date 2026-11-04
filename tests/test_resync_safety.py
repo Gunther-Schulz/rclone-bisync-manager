@@ -149,3 +149,85 @@ def test_no_backup_dir_when_the_job_is_the_base_path(tmp_path):
     args = resync_safety_args("j1", str(tmp_path), ctx, stamp="x")
     assert "--backup-dir2" not in args
     assert args[args.index("--resync-mode") + 1] == "newer"
+
+
+# --- review round on 8b02c0c ------------------------------------------------------------------
+
+MISSING_LISTINGS_RESILIENT = (
+    "ERROR : Bisync critical error: cannot find prior Path1 or Path2 listings, likely due to "
+    "critical error on prior run\n"
+    "ERROR : Bisync aborted. Error is retryable without --resync due to --resilient mode.\n"
+)
+
+
+def test_missing_listings_need_a_resync_even_under_resilient():
+    """rclone 1.75.1 calls missing listings 'retryable' under --resilient, but a bisync cannot
+    create listings: the retry can never succeed, and the job would loop forever."""
+    assert resync_verdict(MISSING_LISTINGS_RESILIENT) == "required"
+
+
+def test_missing_listings_schedule_a_resync(run_after_exit_7):
+    store, _ = run_after_exit_7(MISSING_LISTINGS_RESILIENT)
+    assert store.sync_state.resync_status["j1"] == "FAILED"
+
+
+def test_repeated_retryable_aborts_reach_the_user(tmp_path, monkeypatch):
+    """A retryable abort heals itself and stays quiet; one that keeps recurring does not heal,
+    and must not stay quiet."""
+    sync.RETRYABLE_STREAK.clear()
+    notes = []
+    monkeypatch.setattr(sync, "bisync", lambda *a, **k: ("FAILED", 7, RETRYABLE_OUTPUT))
+    monkeypatch.setattr(sync, "notify_user", lambda title, body: notes.append(title))
+    store = FakeStore()
+    for _ in range(sync.RETRYABLE_NOTIFY_AFTER - 1):
+        perform_sync_operations("j1", context=make_context(tmp_path, store))
+    assert notes == []
+    perform_sync_operations("j1", context=make_context(tmp_path, store))
+    assert len(notes) == 1
+
+
+def test_a_successful_bisync_resets_the_retryable_streak(tmp_path, monkeypatch):
+    sync.RETRYABLE_STREAK.clear()
+    sync.RETRYABLE_STREAK["j1"] = sync.RETRYABLE_NOTIFY_AFTER - 1
+    monkeypatch.setattr(sync, "bisync", lambda *a, **k: ("COMPLETED", 0, ""))
+    perform_sync_operations("j1", context=make_context(tmp_path, FakeStore()))
+    assert sync.RETRYABLE_STREAK.get("j1", 0) == 0
+
+
+def test_hyphenated_option_keys_count_as_configured(tmp_path):
+    ctx = make_context(tmp_path, FakeStore())
+    ctx.job.resync_options = {"resync-mode": "path1", "backup-dir2": "/elsewhere"}
+    args = resync_safety_args("j1", os.path.join(str(tmp_path), "job1"), ctx, stamp="x")
+    assert "--resync-mode" not in args
+    assert "--backup-dir2" not in args
+
+
+def test_no_backup_dir_inside_another_jobs_tree(tmp_path):
+    """A job at the base path (`local: "."`) would sync every other job's backups up as data."""
+    ctx = make_context(tmp_path, FakeStore())
+    args = resync_safety_args("j1", os.path.join(str(tmp_path), "job1"), ctx, stamp="x",
+                              job_paths=[os.path.join(str(tmp_path), "job1"), str(tmp_path)])
+    assert "--backup-dir2" not in args
+
+
+def test_configured_backup_dir_is_reported_not_denied(tmp_path, monkeypatch):
+    notes = []
+    monkeypatch.setattr(sync, "notify_user", lambda title, body: notes.append(body))
+    monkeypatch.setattr(sync, "run_rclone_command", lambda args, ctx: SimpleNamespace(returncode=0, stderr=""))
+    ctx = make_context(tmp_path, FakeStore())
+    ctx.job.resync_options = {"backup_dir2": "/elsewhere"}
+    for attr in ("exclusion_rules_file", "rclone_log_file_path"):
+        setattr(ctx, attr, None)
+    ctx.redirect_rclone_log_output = False
+    sync.resync("j1", "r:job1", os.path.join(str(tmp_path), "job1"), ctx)
+    assert notes and "/elsewhere" in notes[0]
+    assert "not backed up" not in notes[0]
+
+
+def test_failed_notification_is_logged(monkeypatch):
+    errors = []
+    monkeypatch.setattr(sync, "log_error", lambda msg: errors.append(msg))
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/notify-send")
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: SimpleNamespace(returncode=1))
+    sync.notify_user("t", "b")
+    assert any("exit 1" in e for e in errors)
