@@ -1,4 +1,5 @@
 """Tests for status_server: standardize_status, generate_status_report."""
+import os
 
 import json
 from pathlib import Path
@@ -101,3 +102,87 @@ def test_generate_status_report_config_valid_includes_sync_jobs(tmp_path: Path, 
     assert sp.HASH_WARNINGS in job1
     assert job1[sp.SYNC_STATUS] == "NONE"
     assert job1[sp.RESYNC_STATUS] == "NONE"
+
+
+def test_shutdown_during_a_request_logs_no_error(tmp_path, monkeypatch):
+    """Stopping the server while a client request is in flight (the tray polls STATUS every few
+    seconds) must not log 'Error handling client request: Bad file descriptor': the daemon is
+    exiting, nothing failed, and an ERROR line on a non-defect trains people to ignore the log."""
+    import socket
+    import threading
+    import time
+    from types import SimpleNamespace
+    from rclone_bisync_manager import status_server, config as config_mod
+
+    sock_path = str(tmp_path / "s.sock")
+    monkeypatch.setattr(status_server, "get_status_socket_path", lambda: sock_path)
+    monkeypatch.setattr(config_mod, "get_config", lambda: SimpleNamespace())
+    in_handler = threading.Event()
+
+    def slow_report(s, c):
+        in_handler.set()
+        time.sleep(1.5)          # the server loop ends (1 s accept timeout) while we are here
+        return json.dumps({"status": "ok"})
+
+    monkeypatch.setattr(status_server, "generate_status_report", slow_report)
+    errors = []
+    monkeypatch.setattr(status_server, "log_error", lambda msg: errors.append(msg))
+
+    state = SimpleNamespace(running=True, shutdown_complete=False, shutting_down=False)
+    server = threading.Thread(target=status_server.start_status_server, kwargs={"state": state})
+    server.start()
+    for _ in range(100):
+        if os.path.exists(sock_path):
+            break
+        time.sleep(0.02)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(sock_path)
+    client.sendall(b"STATUS")
+    assert in_handler.wait(2)
+    state.running, state.shutting_down, state.shutdown_complete = False, True, True
+    server.join(5)
+    time.sleep(1.0)              # let the handler thread finish its sendall
+    client.close()
+    assert not server.is_alive()
+    assert errors == [], errors
+
+
+def test_request_outliving_the_shutdown_drain_logs_no_error(tmp_path, monkeypatch):
+    """A handler still running after HANDLER_DRAIN_SECONDS finds its connection shut down; that
+    is the shutdown working, not a failure."""
+    import socket
+    import threading
+    import time
+    from types import SimpleNamespace
+    from rclone_bisync_manager import status_server, config as config_mod
+
+    sock_path = str(tmp_path / "s.sock")
+    monkeypatch.setattr(status_server, "get_status_socket_path", lambda: sock_path)
+    monkeypatch.setattr(config_mod, "get_config", lambda: SimpleNamespace())
+    monkeypatch.setattr(status_server, "HANDLER_DRAIN_SECONDS", 0.1)
+    in_handler = threading.Event()
+
+    def slow_report(s, c):
+        in_handler.set()
+        time.sleep(1.5)
+        return json.dumps({"status": "ok"})
+
+    monkeypatch.setattr(status_server, "generate_status_report", slow_report)
+    errors = []
+    monkeypatch.setattr(status_server, "log_error", lambda msg: errors.append(msg))
+    state = SimpleNamespace(running=True, shutdown_complete=False, shutting_down=False)
+    server = threading.Thread(target=status_server.start_status_server, kwargs={"state": state})
+    server.start()
+    for _ in range(100):
+        if os.path.exists(sock_path):
+            break
+        time.sleep(0.02)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(sock_path)
+    client.sendall(b"STATUS")
+    assert in_handler.wait(2)
+    state.running, state.shutting_down, state.shutdown_complete = False, True, True
+    server.join(5)
+    time.sleep(1.5)
+    client.close()
+    assert errors == [], errors

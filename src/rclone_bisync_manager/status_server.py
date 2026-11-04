@@ -2,6 +2,7 @@ import os
 import socket
 import json
 import threading
+import time
 from pathlib import Path
 
 from rclone_bisync_manager.runtime_paths import get_status_socket_path
@@ -15,6 +16,9 @@ from datetime import datetime, date
 from rclone_bisync_manager.logging_utils import log_error, log_message
 from rclone_bisync_manager import status_protocol as sp
 from rclone_bisync_manager.status_protocol import StatusResponse
+
+# How long shutdown waits for in-flight client requests before ending their connections.
+HANDLER_DRAIN_SECONDS = 2.0
 
 
 def start_status_server(handlers=None, state=None, config=None, max_connections=10):
@@ -46,6 +50,7 @@ def start_status_server(handlers=None, state=None, config=None, max_connections=
     # Track active connections for connection limiting
     active_connections = set()
     connections_lock = threading.Lock()
+    handler_threads = []
 
     while getattr(s, "running", True) or not getattr(s, "shutdown_complete", False):
         try:
@@ -64,23 +69,32 @@ def start_status_server(handlers=None, state=None, config=None, max_connections=
                     conn.close()
                     continue
                 active_connections.add(conn)
-                threading.Thread(
+                handler = threading.Thread(
                     target=handle_client,
                     args=(conn, handlers, s, c, connections_lock, active_connections),
                     daemon=True
-                ).start()
+                )
+                handler.start()
+                handler_threads.append(handler)
+                handler_threads[:] = [t for t in handler_threads if t.is_alive()]
         except socket.timeout:
             # Timeout allows us to check running flag and cleanup
             continue
 
-    # Cleanup remaining connections
+    # A handler owns its connection and closes it itself. Closing it from here while the handler
+    # is between recv and sendall (the tray polls STATUS every few seconds, so one is often in
+    # flight at shutdown) made the handler log a spurious "Bad file descriptor" ERROR. Give the
+    # handlers a moment to finish, then only shut down -- not close -- what is still open, so a
+    # lingering handler sees an orderly end of stream.
+    deadline = time.monotonic() + HANDLER_DRAIN_SECONDS
+    for t in handler_threads:
+        t.join(max(0.0, deadline - time.monotonic()))
     with connections_lock:
         for conn in active_connections:
             try:
-                conn.close()
+                conn.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-        active_connections.clear()
 
     server.close()
     try:
@@ -138,6 +152,12 @@ def handle_client(conn, handlers=None, state=None, config=None, connections_lock
             conn.sendall(response.encode())
         except OSError:
             pass
+    except OSError as e:
+        if getattr(s, "shutting_down", False):
+            # A request still open after the shutdown drain: its connection was ended on purpose.
+            log_message(f"Status server: client request ended by shutdown ({e})")
+        else:
+            log_error(f"Error handling client request: {str(e)}")
     except Exception as e:
         log_error(f"Error handling client request: {str(e)}")
         try:

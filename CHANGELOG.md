@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0b5] - Beta (2026-11-04)
+
+### Fixed
+
+- **False ERROR on every daemon stop:** `Error handling client request: [Errno 9] Bad file descriptor`. Shutdown closed client connections while a request (typically the tray's STATUS poll) was still being answered. Shutdown now waits up to 2 s for in-flight requests and then shuts connections down instead of closing them under their handler; a request ended that way is logged as INFO.
+
 ## [0.4.0b4] - Beta (2026-11-04)
 
 ### Fixed
