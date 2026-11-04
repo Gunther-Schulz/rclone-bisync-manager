@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0b4] - Beta (2026-11-04)
+
+### Fixed
+
+- **Data loss on automatic resync.** A bisync aborted with exit 7 was always followed by a resync, although with `--resilient` rclone exits 7 on transient errors too and says the run is retryable without `--resync`. The resync ran as plain `--resync` (= `--resync-mode path1`, the remote), so local edits not yet uploaded were replaced by older remote copies without any notice. Now a resync is scheduled only when rclone says `Must run --resync to recover`; an exit 7 with neither verdict is not resynced and raises a desktop notification.
+
+### Changed
+
+- **Resync defaults:** unless a job configures them, a resync runs with `--resync-mode newer` and `--backup-dir2 <local_base_path>/.rclone-bisync-backups/<job>/<timestamp>`; every replaced local file is logged and the resync ends with a desktop notification (`notify-send`).
+
 ## [0.4.0b1] - Beta (2025-02-03)
 
 ### Changed

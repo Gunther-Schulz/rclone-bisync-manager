@@ -53,8 +53,9 @@ def test_completed_resync_is_not_redone():
     assert "COMPLETED" not in RESYNC_PENDING_STATES
 
 
-def test_exit_7_is_treated_as_needing_resync():
-    """rclone exits 7 on 'Bisync aborted. Must run --resync to recover'."""
+def test_exit_7_is_the_only_code_that_can_lead_to_a_resync():
+    """rclone exits 7 on 'Bisync aborted. Must run --resync to recover' -- and also on aborts it
+    calls retryable; which one it was is decided from its output (test_resync_safety.py)."""
     assert 7 in RESYNC_REQUIRED_EXIT_CODES
     assert 0 not in RESYNC_REQUIRED_EXIT_CODES
     assert 9 not in RESYNC_REQUIRED_EXIT_CODES  # 9 = nothing transferred = success

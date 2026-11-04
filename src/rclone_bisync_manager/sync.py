@@ -20,9 +20,49 @@ from rclone_bisync_manager.sync_state_store import get_sync_state_store
 # forever and run a bisync that could never succeed without a baseline.
 RESYNC_PENDING_STATES = ("NONE", "IN_PROGRESS", "FAILED")
 
-# rclone's "fatal error" exit. A bisync that aborts critically ("Bisync aborted. Must run
-# --resync to recover") returns this; it cannot be repaired by retrying the bisync.
+# rclone's "fatal error" exit. A bisync that aborts critically returns this -- but exit 7 alone
+# does not say whether a resync is needed. With --resilient, rclone also exits 7 on a transient
+# error (a dropped listing call) and says the next run may retry WITHOUT --resync. Which of the
+# two it was is read from rclone's own output (resync_verdict), never assumed from the code.
 RESYNC_REQUIRED_EXIT_CODES = (7,)
+RESYNC_REQUIRED_MARKER = "Must run --resync to recover"
+RESYNC_NOT_REQUIRED_MARKER = "retryable without --resync"
+
+# A resync is not a neutral repair: for every file that differs it keeps one side's version and
+# overwrites the other. Plain --resync means --resync-mode path1, and path1 is the remote, so a
+# local edit not yet uploaded is replaced by the remote's older copy. Unless the job configures
+# otherwise, the newer file wins, and the local file it replaces is moved to a backup directory
+# beside the job (inside local_base_path, outside every job's own path) instead of vanishing.
+RESYNC_DEFAULT_MODE = "newer"
+RESYNC_BACKUP_DIRNAME = ".rclone-bisync-backups"
+
+
+def resync_verdict(output):
+    """What rclone said about recovering from an aborted bisync: 'required', 'retryable' or
+    'unknown'. 'required' wins if both appear -- it is rclone's stronger statement."""
+    text = output or ""
+    if RESYNC_REQUIRED_MARKER in text:
+        return "required"
+    if RESYNC_NOT_REQUIRED_MARKER in text:
+        return "retryable"
+    return "unknown"
+
+
+def notify_user(title, body):
+    """Desktop notification from the daemon. Scheduled runs have no tray action behind them, so
+    without this a resync or an unexplained abort is visible only to someone reading the log."""
+    import shutil
+    import subprocess
+
+    log_message(f"NOTIFY: {title} -- {body}", logging.WARNING)
+    if not shutil.which("notify-send"):
+        log_error("notify-send not found; the notification above reached the log only.")
+        return
+    try:
+        subprocess.run(["notify-send", "--app-name=rclone-bisync-manager", "--urgency=critical",
+                        title, body], timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        log_error(f"Could not deliver desktop notification: {e}")
 
 
 def resolve_access_check(context):
@@ -99,7 +139,7 @@ def perform_sync_operations(key, context=None):
 
             if resync_result == "COMPLETED":
                 log_message(f"Resync completed for {key}, proceeding with bisync.")
-                bisync_result, _ = bisync(key, remote_path, local_path, context)
+                bisync_result, _, _ = bisync(key, remote_path, local_path, context)
                 write_status(key, sync_status=bisync_result, context=context)
             else:
                 error_msg = f"Resync failed for {key}. It will be retried on the next run."
@@ -107,19 +147,35 @@ def perform_sync_operations(key, context=None):
                 raise SyncError(error_msg)
         else:
             log_message(f"Proceeding with bisync for {key}. Force bisync: {context.force_bisync}")
-            bisync_result, bisync_code = bisync(key, remote_path, local_path, context)
+            bisync_result, bisync_code, bisync_output = bisync(key, remote_path, local_path, context)
             write_status(key, sync_status=bisync_result, context=context)
 
             if bisync_result != "COMPLETED" and bisync_code in RESYNC_REQUIRED_EXIT_CODES:
-                # rclone aborted with "Must run --resync to recover" (its listings are gone or
-                # unusable). Without this the job would run the same doomed bisync on every
-                # future tick forever, since nothing else ever moves resync_status off COMPLETED.
-                log_error(
-                    f"Bisync for {key} aborted with exit {bisync_code}; rclone requires a resync "
-                    f"to recover. Scheduling a resync for the next run."
-                )
-                resync_result = "FAILED"
-                write_status(key, resync_status=resync_result, context=context)
+                verdict = resync_verdict(bisync_output)
+                if verdict == "required":
+                    # rclone's listings are gone or unusable. Without this the job would run the
+                    # same doomed bisync on every future tick forever, since nothing else ever
+                    # moves resync_status off COMPLETED.
+                    log_error(
+                        f"Bisync for {key} aborted with exit {bisync_code}; rclone says "
+                        f"'{RESYNC_REQUIRED_MARKER}'. Scheduling a resync for the next run."
+                    )
+                    resync_result = "FAILED"
+                    write_status(key, resync_status=resync_result, context=context)
+                elif verdict == "retryable":
+                    log_error(
+                        f"Bisync for {key} aborted with exit {bisync_code}; rclone says the error "
+                        f"is {RESYNC_NOT_REQUIRED_MARKER}. The next run retries the bisync."
+                    )
+                else:
+                    msg = (
+                        f"Bisync for {key} aborted with exit {bisync_code} and rclone's output "
+                        f"says neither '{RESYNC_REQUIRED_MARKER}' nor "
+                        f"'{RESYNC_NOT_REQUIRED_MARKER}'. Not resyncing automatically: check the "
+                        f"rclone log, then run `rclone-bisync-manager sync {key} --resync` if needed."
+                    )
+                    log_error(msg)
+                    notify_user(f"Bisync {key}: aborted, needs a look", msg)
 
         if context.dry_run:
             log_message(f"Dry run for {key}: results are not written to the sync state.")
@@ -144,11 +200,13 @@ def bisync(key, remote_path, local_path, context):
     rotate_rclone_log_if_large(context)
     # Record where rclone's log ends BEFORE the run, so afterwards we scan only this run's lines.
     context.log_state.last_log_position = get_log_file_position(context)
+    run_start = context.log_state.last_log_position
 
     rclone_args = ['rclone', 'bisync', remote_path, local_path]
     rclone_args.extend(get_rclone_args('bisync', context))
 
     result = run_rclone_command(rclone_args, context)
+    output = run_output(result, context, run_start)
 
     check_for_hash_warnings(key, context)
 
@@ -156,7 +214,57 @@ def bisync(key, remote_path, local_path, context):
         result.returncode, local_path, "Bisync", store=context.state_store or get_sync_state_store()
     )
     log_message(f"Bisync status for {local_path}: {sync_result}")
-    return sync_result, result.returncode
+    return sync_result, result.returncode, output
+
+
+def run_output(result, context, start):
+    """Everything rclone said during this run: its stderr (where it logs without --log-file) plus
+    the lines it appended to its log file since `start`."""
+    parts = [getattr(result, "stderr", None) or ""]
+    path = getattr(context, "rclone_log_file_path", None)
+    if path and os.path.exists(path) and os.path.getsize(path) > start:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            f.seek(start)
+            parts.append(f.read())
+    return "\n".join(parts)
+
+
+def resync_safety_args(key, local_path, context, stamp):
+    """--resync-mode and --backup-dir2 for a resync, unless the job's options already set them.
+
+    The backup directory is per job and per run, under local_base_path but outside the job's own
+    path: rclone refuses an overlapping backup dir, and one inside the job would be synced up as
+    data. A job whose path contains the base gets no backup dir rather than an aborted resync."""
+    merged = {
+        **context.rclone_options,
+        **context.resync_options,
+        **context.job.rclone_options,
+        **context.job.resync_options,
+    }
+    args = []
+    if "resync_mode" not in merged:
+        args.extend(["--resync-mode", RESYNC_DEFAULT_MODE])
+    if "backup_dir2" not in merged:
+        backup = os.path.join(str(context.local_base_path), RESYNC_BACKUP_DIRNAME, key, stamp)
+        local = os.path.abspath(local_path)
+        if os.path.commonpath([os.path.abspath(backup), local]) == local:
+            log_error(f"Resync of {key}: job path {local} contains {backup}; "
+                      f"no backup dir for replaced local files on this run.")
+        else:
+            args.extend(["--backup-dir2", backup])
+    return args
+
+
+def list_backed_up_files(args):
+    """Files rclone moved into this run's --backup-dir2, as paths relative to it."""
+    if "--backup-dir2" not in args:
+        return None, []
+    backup = args[args.index("--backup-dir2") + 1]
+    found = []
+    for root, _dirs, files in os.walk(backup):
+        for name in files:
+            found.append(os.path.relpath(os.path.join(root, name), backup))
+    return backup, sorted(found)
 
 
 def resync(key, remote_path, local_path, context):
@@ -165,14 +273,31 @@ def resync(key, remote_path, local_path, context):
     log_message(f"Resync started for {local_path} at {datetime.now()}" +
                 (" - Performing a dry run" if context.dry_run else ""))
 
+    safety = resync_safety_args(key, local_path, context, datetime.now().strftime("%Y%m%d_%H%M%S"))
     rclone_args = ['rclone', 'bisync', remote_path, local_path, '--resync']
     rclone_args.extend(get_rclone_args('resync', context))
+    rclone_args.extend(safety)
+    log_message(f"Resync safety options for {key}: {' '.join(safety) or '(configured by the job)'}")
 
     result = run_rclone_command(rclone_args, context)
     sync_result = handle_rclone_exit_code(
         result.returncode, local_path, "Resync", store=context.state_store or get_sync_state_store()
     )
     log_message(f"Resync status for {local_path}: {sync_result}")
+
+    if not context.dry_run:
+        backup, replaced = list_backed_up_files(safety)
+        for rel in replaced:
+            log_message(f"Resync of {key} replaced local file {rel}; previous version in {backup}",
+                        logging.WARNING)
+        if replaced:
+            body = (f"{len(replaced)} local file(s) replaced; previous versions kept in {backup}: "
+                    + ", ".join(replaced[:5]) + (" ..." if len(replaced) > 5 else ""))
+        elif backup:
+            body = "No local file was replaced."
+        else:
+            body = "Replaced local files were not backed up (see the daemon log)."
+        notify_user(f"Resync of {key}: {sync_result}", body)
 
     return sync_result, result.returncode
 
