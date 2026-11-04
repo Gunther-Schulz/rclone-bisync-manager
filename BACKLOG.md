@@ -3,6 +3,7 @@
 ## Development
 
 - [ ] **Postponed:** Implement separate filter files per job.
+- [ ] **False ERROR on every shutdown:** `Error handling client request: [Errno 9] Bad file descriptor` follows "Daemon shutdown complete" in all 9 occurrences in the logs since 2026-08-04 (`grep -B1` over rclone-bisync-manager.log*). Likely cause (from code, not reproduced): the server loop's cleanup (`status_server.py:77-83`) closes `active_connections` while a `handle_client` thread, e.g. the tray's STATUS poll, is still between `recv` and `sendall` (`:105`/`:133`), and `:141-142` logs the EBADF as ERROR. Harmless (the daemon is exiting), but an ERROR line on a non-defect trains people to ignore the log. Fix: during shutdown, call `conn.shutdown(SHUT_RDWR)` instead of closing a connection a handler still owns, or treat OSError while `shutting_down` as INFO. Verifier: a test that stops the server while a handler is mid-request produces no ERROR line. Ships with the next release; not worth a release on its own.
 - [x] **Tray status refactor:** Single source of truth for icon/menu; paint from poll thread’s stored status only (no UI re-fetch). `_get_status_path`, status window on open, and `start_daemon` “already running” now use `state.last_status` under lock. `get_daemon_status()` only used at startup to populate `last_status`.
 
 ---
